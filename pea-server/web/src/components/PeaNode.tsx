@@ -19,6 +19,12 @@ export default function PeaNode({ id, data, selected }: NodeProps<PeaNodeData>) 
         />
         <span className="text-sm font-medium">{data.label}</span>
       </div>
+      {data.kind === 'text' && data.html && (
+        <div
+          className="max-h-24 overflow-hidden px-3 pb-2 text-xs opacity-80"
+          dangerouslySetInnerHTML={{ __html: data.html }}
+        />
+      )}
       {data.kind === 'generate' && (
         <div className="px-3 pb-2">
           <textarea

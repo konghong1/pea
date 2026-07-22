@@ -8,6 +8,8 @@ import { BillingModule } from './modules/billing/billing.module';
 import { GenerationModule } from './modules/generation/generation.module';
 import { FilesModule } from './modules/files/files.module';
 import { CanvasesModule } from './modules/canvases/canvases.module';
+import { ProvidersModule } from './modules/providers/providers.module';
+import { CommunityModule } from './modules/community/community.module';
 import { GatewayModule } from './modules/gateway/gateway.module';
 import { RateLimitMiddleware } from './common/rate-limit.middleware';
 
@@ -22,6 +24,8 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
     GenerationModule,
     FilesModule,
     CanvasesModule,
+    ProvidersModule,
+    CommunityModule,
     GatewayModule,
   ],
 })

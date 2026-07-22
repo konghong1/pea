@@ -8,10 +8,24 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# 允许从任意工作目录启动: 将仓库根加入 sys.path, 使 services.shared 跨包导入可用。
-_ROOT = Path(__file__).resolve().parents[3]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+# 允许从任意工作目录启动: 将仓库根(含 services/shared)与 app 包所在目录加入 sys.path。
+# 容器布局: /app/app/main.py + /app/services/shared -> 解析到 /app
+# 开发布局: pea-server/services/generation-orchestrator/app/main.py + pea-server/services/shared -> 解析到 pea-server
+_HERE = Path(__file__).resolve()
+
+
+def _repo_root(p: Path) -> Path | None:
+    for cand in (_HERE, *_HERE.parents):
+        if (cand / "services" / "shared").exists():
+            return cand
+    return None
+
+
+_ROOT = _repo_root(_HERE) or _HERE.parents[1]
+_APP_PARENT = _HERE.parents[1]
+for _p in (_ROOT, _APP_PARENT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from fastapi import FastAPI
 

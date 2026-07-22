@@ -53,6 +53,15 @@ export class CanvasesService {
     return { id: canvasId, version: after[0].version };
   }
 
+  async list(userId: number) {
+    const rows = await this.db.query<any[]>(
+      `SELECT id, title, version, node_count, updated_at
+       FROM canvases WHERE owner_id = ? ORDER BY updated_at DESC LIMIT 20`,
+      [userId],
+    );
+    return rows;
+  }
+
   async get(userId: number, canvasId: number) {
     const rows = await this.db.query<any[]>(
       'SELECT id, title, graph_json, version, updated_at FROM canvases WHERE id = ? AND owner_id = ?',

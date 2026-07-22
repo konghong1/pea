@@ -172,13 +172,63 @@ CREATE TABLE IF NOT EXISTS product_images (
 -- E9 社区 / TapTV
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS works (
-    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    user_id     BIGINT UNSIGNED NOT NULL,
-    media_urls  JSON NULL,
-    caption     VARCHAR(2000) NOT NULL DEFAULT '',
-    created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id         BIGINT UNSIGNED NOT NULL,
+    media_urls      JSON NULL,
+    caption         VARCHAR(2000) NOT NULL DEFAULT '',
+    likes_count     INT NOT NULL DEFAULT 0,
+    comments_count  INT NOT NULL DEFAULT 0,
+    favorites_count INT NOT NULL DEFAULT 0,
+    created_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (id),
     KEY idx_works_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS work_likes (
+    work_id    BIGINT UNSIGNED NOT NULL,
+    user_id    BIGINT UNSIGNED NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (work_id, user_id),
+    CONSTRAINT fk_wl_work FOREIGN KEY (work_id) REFERENCES works (id) ON DELETE CASCADE,
+    CONSTRAINT fk_wl_user FOREIGN KEY (user_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS work_favorites (
+    work_id    BIGINT UNSIGNED NOT NULL,
+    user_id    BIGINT UNSIGNED NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (work_id, user_id),
+    CONSTRAINT fk_wf_work FOREIGN KEY (work_id) REFERENCES works (id) ON DELETE CASCADE,
+    CONSTRAINT fk_wf_user FOREIGN KEY (user_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS work_comments (
+    id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    work_id    BIGINT UNSIGNED NOT NULL,
+    user_id    BIGINT UNSIGNED NOT NULL,
+    content    VARCHAR(1000) NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_wc_work (work_id),
+    CONSTRAINT fk_wc_work FOREIGN KEY (work_id) REFERENCES works (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ---------------------------------------------------------------------------
+-- E7 全局系统: AI Provider 配置 (T-G-06 / FR-G7, 按用户隔离)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_providers (
+    id          VARCHAR(64)  NOT NULL,
+    owner_id    BIGINT UNSIGNED NOT NULL,
+    name        VARCHAR(120) NOT NULL,
+    kind        ENUM('image','video','text','audio') NOT NULL DEFAULT 'image',
+    enabled     TINYINT NOT NULL DEFAULT 1,
+    is_default  TINYINT NOT NULL DEFAULT 0,
+    config_json JSON NULL,
+    created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id, owner_id),
+    KEY idx_providers_owner (owner_id),
+    CONSTRAINT fk_providers_owner FOREIGN KEY (owner_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ---------------------------------------------------------------------------

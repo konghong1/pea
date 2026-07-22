@@ -115,7 +115,7 @@ services:
       context: .
       dockerfile: infra/docker/web.Dockerfile
     ports:
-      - "8080:80"
+      - "8088:80"   # 临时: 宿主机 8080 被其他进程(PID 6992)占用, 改用 8088; 释放 8080 后改回 8080
     depends_on:
       - bff
 

@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { App, Button, Input, Progress, Tag, Typography } from 'antd';
 import { ThunderboltOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
 import { useCanvas } from '../store/canvas';
+import RichTextToolbar from './RichTextToolbar';
 
 export default function Inspector() {
   const { nodes, selectedId, updateNodeData } = useCanvas();
   const node = nodes.find((n) => n.id === selectedId);
   const [job, setJob] = useState<{ id: string; status: string; progress: number } | null>(null);
   const { message } = App.useApp();
+  const editorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onEvent = (e: Event) => {
@@ -55,6 +57,21 @@ export default function Inspector() {
         onChange={(e) => updateNodeData(node.id, { label: e.target.value })}
         className="mb-3"
       />
+      {node.data.kind === 'text' && (
+        <>
+          <label className="mb-1 text-xs text-gray-500">富文本</label>
+          <RichTextToolbar editorRef={editorRef} />
+          <div
+            key={node.id}
+            ref={editorRef}
+            contentEditable
+            suppressContentEditableWarning
+            onInput={(e) => updateNodeData(node.id, { html: e.currentTarget.innerHTML })}
+            className="min-h-[120px] flex-1 overflow-auto rounded-lg border border-black/10 bg-black/5 p-2 text-sm dark:border-white/10 dark:bg-white/5"
+            dangerouslySetInnerHTML={{ __html: node.data.html ?? '<p>在此输入文本…</p>' }}
+          />
+        </>
+      )}
       {node.data.kind === 'generate' && (
         <>
           <label className="mb-1 text-xs text-gray-500">提示词</label>

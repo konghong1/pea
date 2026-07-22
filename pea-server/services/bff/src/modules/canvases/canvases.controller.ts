@@ -22,6 +22,11 @@ export class CanvasesController {
     return this.canvases.create(u.sub, dto.title);
   }
 
+  @Get()
+  list(@CurrentUser() u: { sub: number }) {
+    return this.canvases.list(u.sub);
+  }
+
   @Put(':id')
   save(
     @CurrentUser() u: { sub: number },
