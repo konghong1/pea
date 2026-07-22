@@ -1,0 +1,38 @@
+# ===== Secrets (NEVER commit) =====
+.env
+.env.local
+.env.*.local
+
+# ===== Dependencies =====
+node_modules/
+.pnp/
+.pnp.js
+.yarn/
+
+# ===== Build output =====
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ===== Test / runtime artifacts =====
+scripts/shots/
+*.log
+coverage/
+
+# ===== OS / Editor =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,124 @@
+# pea Creative OS — 本地一键环境 (E0 / T-INFRA-01)
+# 启动: docker compose up --build   (首次会自动建表 + 初始化 bucket)
+# 访问: http://localhost:8080  (Web), BFF :4000, Orchestrator :8000
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4
+    environment:
+      MYSQL_DATABASE: pea
+      MYSQL_USER: pea
+      MYSQL_PASSWORD: pea_dev
+      MYSQL_ROOT_PASSWORD: pea_root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infra/mysql/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-upaea", "-ppea_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  bff:
+    build:
+      context: .
+      dockerfile: infra/docker/bff.Dockerfile
+    environment:
+      PEA_PORT: "4000"
+      PEA_JWT_SECRET: "dev-secret-change-me"
+      PEA_DB_HOST: mysql
+      PEA_DB_PORT: "3306"
+      PEA_DB_USER: pea
+      PEA_DB_PASSWORD: pea_dev
+      PEA_DB_NAME: pea
+      PEA_REDIS_URL: "redis://redis:6379/0"
+      PEA_MINIO_ENDPOINT: "minio:9000"
+      PEA_MINIO_ACCESS_KEY: minioadmin
+      PEA_MINIO_SECRET_KEY: minioadmin
+      PEA_MINIO_USE_SSL: "false"
+      PEA_MINIO_BUCKET: pea-media
+      PEA_CDN_BASE_URL: "http://localhost:9000/pea-media"
+      PEA_ORCHESTRATOR_URL: "http://generation-orchestrator:8000"
+      PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
+      PEA_FREE_TAPIES: "1000"
+    ports:
+      - "4000:4000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  generation-orchestrator:
+    build:
+      context: .
+      dockerfile: infra/docker/orchestrator.Dockerfile
+    environment:
+      PEA_DB_HOST: mysql
+      PEA_DB_PORT: "3306"
+      PEA_DB_USER: pea
+      PEA_DB_PASSWORD: pea_dev
+      PEA_DB_NAME: pea
+      PEA_REDIS_URL: "redis://redis:6379/0"
+      PEA_MINIO_ENDPOINT: "minio:9000"
+      PEA_MINIO_ACCESS_KEY: minioadmin
+      PEA_MINIO_SECRET_KEY: minioadmin
+      PEA_MINIO_BUCKET: pea-media
+      PEA_CDN_BASE_URL: "http://localhost:9000/pea-media"
+      PEA_BFF_INTERNAL_BASE_URL: "http://bff:4000"
+      PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
+      PEA_WORKER_ENABLED: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - bff
+
+volumes:
+  mysql_data:
+  minio_data:
