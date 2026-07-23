@@ -41,10 +41,12 @@ def main():
         snap(page, "02_register_form")
         step("注册表单切换", True)
 
-        # 3) 注册测试账号
-        page.get_by_placeholder("you@pea.ai").fill("verify@pea.ai")
+        # 3) 注册测试账号 (用时间戳邮箱，避免与持久化 DB 里的 verify@pea.ai 冲突)
+        ts = int(time.time())
+        EMAIL_E7 = f"e7_{ts}@pea.ai"
+        page.get_by_placeholder("you@pea.ai").fill(EMAIL_E7)
         page.get_by_placeholder("至少 8 位").fill("password123")
-        page.get_by_placeholder("可选").fill("VerifyBot")
+        page.get_by_placeholder("可选").fill("E7Verify")
         page.locator('form.ant-form button[type="submit"]').click()
         # 等待跳转到工作空间 (画布容器出现)
         page.wait_for_selector(".react-flow", timeout=20000)

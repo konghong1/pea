@@ -10,12 +10,15 @@ import {
   addEdge,
 } from 'reactflow';
 import { api } from '../api/client';
+import { PeaNodeKind } from '../constants/nodeTypes';
 
 export type PeaNodeData = {
   label: string;
-  kind: 'prompt' | 'image' | 'generate' | 'text';
+  kind: PeaNodeKind;
   prompt?: string;
   html?: string;
+  url?: string;
+  meta?: Record<string, unknown>;
 };
 
 interface CanvasState {
@@ -25,7 +28,9 @@ interface CanvasState {
   nodes: Node<PeaNodeData>[];
   edges: Edge[];
   selectedId: string | null;
+  selectedIds: string[];
   dirty: boolean;
+  lastSavedAt: number | null;
   saveCount: number;
   clipboard: Node<PeaNodeData> | null;
 
@@ -36,11 +41,15 @@ interface CanvasState {
   addNode: (data: PeaNodeData, position: { x: number; y: number }) => void;
   updateNodeData: (id: string, patch: Partial<PeaNodeData>) => void;
   select: (id: string | null) => void;
+  toggleSelect: (id: string) => void;
+  setSelection: (ids: string[]) => void;
+  clearSelection: () => void;
   markSaved: (version: number) => void;
   loadGraph: (nodes: Node<PeaNodeData>[], edges: Edge[], version: number) => void;
   openCanvas: (id: number) => Promise<void>;
   removeNode: (id: string) => void;
   duplicateNode: (id: string) => void;
+  addConnected: (fromId: string) => void;
   copySelected: () => void;
   pasteNode: () => void;
   bumpSave: () => void;
@@ -56,7 +65,9 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   nodes: [],
   edges: [],
   selectedId: null,
+  selectedIds: [],
   dirty: false,
+  lastSavedAt: null,
   saveCount: 0,
   clipboard: null,
 
@@ -79,8 +90,16 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       ),
       dirty: true,
     }),
-  select: (id) => set({ selectedId: id }),
-  markSaved: (version) => set({ version, dirty: false, saveCount: get().saveCount + 1 }),
+  select: (id) => set({ selectedId: id, selectedIds: id ? [id] : [] }),
+  toggleSelect: (id) =>
+    set((s) => {
+      const has = s.selectedIds.includes(id);
+      const next = has ? s.selectedIds.filter((x) => x !== id) : [...s.selectedIds, id];
+      return { selectedIds: next, selectedId: id };
+    }),
+  setSelection: (ids) => set({ selectedIds: ids, selectedId: ids.length ? ids[ids.length - 1] : null }),
+  clearSelection: () => set({ selectedIds: [], selectedId: null }),
+  markSaved: (version) => set({ version, dirty: false, lastSavedAt: Date.now(), saveCount: get().saveCount + 1 }),
   loadGraph: (nodes, edges, version) => set({ nodes, edges, version, dirty: false }),
   openCanvas: async (id) => {
     const g = await api.get(`/canvases/${id}`);
@@ -95,12 +114,13 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     set({ nodes: graph.nodes ?? [], edges: graph.edges ?? [], version: g.data.version, dirty: false });
   },
   removeNode: (id) =>
-    set({
-      nodes: get().nodes.filter((n) => n.id !== id),
-      edges: get().edges.filter((e) => e.source !== id && e.target !== id),
-      selectedId: get().selectedId === id ? null : get().selectedId,
+    set((s) => ({
+      nodes: s.nodes.filter((n) => n.id !== id),
+      edges: s.edges.filter((e) => e.source !== id && e.target !== id),
+      selectedId: s.selectedId === id ? null : s.selectedId,
+      selectedIds: s.selectedIds.filter((x) => x !== id),
       dirty: true,
-    }),
+    })),
   duplicateNode: (id) => {
     const src = get().nodes.find((n) => n.id === id);
     if (!src) return;
@@ -111,7 +131,20 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       position: { x: src.position.x + 40, y: src.position.y + 40 },
       data: { ...src.data },
     };
-    set({ nodes: [...get().nodes, copy], selectedId: nid, dirty: true });
+    set({ nodes: [...get().nodes, copy], selectedId: nid, selectedIds: [nid], dirty: true });
+  },
+  addConnected: (fromId) => {
+    const src = get().nodes.find((n) => n.id === fromId);
+    if (!src) return;
+    const nid = nextId();
+    const node: Node<PeaNodeData> = {
+      id: nid,
+      type: 'pea',
+      position: { x: src.position.x + 260, y: src.position.y + 30 },
+      data: { label: '生成', kind: 'generate', prompt: '', meta: { error: false } },
+    };
+    const edge: Edge = { id: `e${nid}`, source: fromId, target: nid };
+    set({ nodes: [...get().nodes, node], edges: [...get().edges, edge], selectedId: nid, selectedIds: [nid], dirty: true });
   },
   copySelected: () => {
     const sel = get().nodes.find((n) => n.id === get().selectedId);

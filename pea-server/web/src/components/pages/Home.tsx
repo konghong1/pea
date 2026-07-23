@@ -104,7 +104,7 @@ export default function Home() {
                 onClick={() => openProject(p.id)}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <FileTextOutlined style={{ color: '#6c5ce7' }} />
+                  <FileTextOutlined style={{ color: '#1fa2dc' }} />
                   <span style={{ fontWeight: 600 }}>{p.title}</span>
                 </div>
                 <div className="pea-muted" style={{ marginTop: 8, fontSize: 12 }}>

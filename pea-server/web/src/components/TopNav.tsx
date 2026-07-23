@@ -13,11 +13,20 @@ import UserMenu from './UserMenu';
 const NAV: { key: PageKey; label: string }[] = [
   { key: 'home', label: '主页' },
   { key: 'canvas', label: '工作空间' },
-  { key: 'account', label: '账户' },
-  { key: 'settings', label: '设置' },
+  { key: 'ecom', label: '电商套图' },
   { key: 'tvtv', label: 'TapTV' },
   { key: 'arena', label: '竞技场' },
 ];
+
+function relTime(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return '刚刚';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
+}
 
 /** 顶部全局导航 (FR-G1)：Logo + 画布标题 + 导航项 + 积分/分享/通知/主题/用户。 */
 export default function TopNav() {
@@ -25,6 +34,8 @@ export default function TopNav() {
   const { mode, setMode } = useTheme();
   const { active, setActive } = useUi();
   const title = useCanvas((s) => s.title);
+  const dirty = useCanvas((s) => s.dirty);
+  const lastSavedAt = useCanvas((s) => s.lastSavedAt);
   const { message } = App.useApp();
 
   useEffect(() => {
@@ -61,13 +72,15 @@ export default function TopNav() {
     <header className="pea-topnav">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
-          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-pea-brand to-pea-accent" />
+          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-pea-purple via-pea-brand to-pea-lime shadow-sm" />
           <span className="font-semibold">pea</span>
         </div>
         {active === 'canvas' && title && (
           <div className="hidden items-center gap-2 border-l border-black/10 pl-3 dark:border-white/10 md:flex">
             <span className="text-sm font-medium">{title}</span>
-            <span className="text-xs text-gray-400">工作空间</span>
+            <span className="text-xs text-gray-400">
+              {dirty ? '编辑中…' : lastSavedAt ? `上次修改于 ${relTime(lastSavedAt)}` : '工作空间'}
+            </span>
           </div>
         )}
       </div>
@@ -93,6 +106,9 @@ export default function TopNav() {
             {balance} Tapies
           </Button>
         </Tooltip>
+        <Button type="text" size="small" onClick={() => toast.info('社区功能即将开放')}>
+          ✦ 社区
+        </Button>
         <Tooltip title="复制分享链接">
           <Button type="text" shape="circle" aria-label="复制分享链接" icon={<ShareAltOutlined />} onClick={onShare} />
         </Tooltip>
@@ -107,6 +123,9 @@ export default function TopNav() {
           ]}
         />
         <UserMenu />
+        <button className="pea-trial-btn" aria-label="免费体验" onClick={() => toast.success('已为你开放 7 天 Pro 体验 ✦')}>
+          免费体验
+        </button>
       </div>
     </header>
   );

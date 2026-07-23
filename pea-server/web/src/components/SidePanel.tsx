@@ -158,7 +158,7 @@ export default function SidePanel({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <div className="absolute left-0 top-0 z-20 flex h-full w-72 flex-col border-r border-black/10 bg-white/95 shadow-xl backdrop-blur dark:border-white/10 dark:bg-[#14141a]/95">
+    <div className="absolute left-[60px] top-0 z-20 flex h-full w-72 flex-col border-r border-black/10 bg-white/95 shadow-xl backdrop-blur dark:border-white/10 dark:bg-[#14141a]/95">
       <div className="flex items-center justify-between border-b border-black/5 px-3 py-2 dark:border-white/10">
         <span className="text-sm font-semibold">面板</span>
         <Tooltip title="收起">

@@ -1,11 +1,11 @@
 import { useWs } from '../hooks/useWs';
 import TopNav from './TopNav';
 import CanvasEditor from './CanvasEditor';
+import AgentPanel from './AgentPanel';
 import Home from './pages/Home';
 import Ecom from './pages/Ecom';
 import TapTV from './pages/TapTV';
 import Arena from './pages/Arena';
-import Settings from './pages/Settings';
 import Account from './pages/Account';
 import { useUi } from '../store/ui';
 
@@ -25,11 +25,12 @@ export default function Workspace() {
         <div className={active === 'canvas' ? 'absolute inset-0' : 'absolute inset-0 invisible'}>
           <CanvasEditor />
         </div>
+        {/* 副驾驶聊天侧边栏：固定在最右 380px，跨画布/页面常驻 */}
+        <AgentPanel />
         {active !== 'canvas' && (
           <div className="absolute inset-0 z-20 bg-white dark:bg-[#0a0a0a]">
             {active === 'home' && <Home />}
-            {active === 'account' && <Account />}
-            {active === 'settings' && <Settings />}
+            {(active === 'account' || active === 'settings') && <Account />}
             {active === 'ecom' && <Ecom />}
             {active === 'tvtv' && <TapTV />}
             {active === 'arena' && <Arena />}

@@ -44,7 +44,7 @@ docker compose up --build
 # 等待 healthy: mysql / redis / minio 就绪后 BFF 与 Orchestrator 自动启动
 ```
 
-- Web:        http://localhost:8080
+- Web:        http://localhost:8088
 - BFF:        http://localhost:4000
 - Orchestrator: http://localhost:8000/api/health
 

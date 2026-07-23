@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Dropdown, Empty, Tag, Tooltip } from 'antd';
 import {
+  BellOutlined,
   ClearOutlined,
-  RobotOutlined,
+  CloseOutlined,
+  ExpandOutlined,
+  MessageOutlined,
   SendOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { api } from '../api/client';
 import { useAgent, AgentModel } from '../store/agent';
+import { useAuth } from '../store/auth';
 import { useCanvas } from '../store/canvas';
 
 const SKILLS = [
@@ -18,35 +22,57 @@ const SKILLS = [
   { key: 'help', label: '❓ 能做什么', prompt: '帮助' },
 ];
 
+const SUGGESTIONS = [
+  {
+    key: 'skill',
+    icon: '⚡',
+    title: '把这个项目的风格做成 Skill',
+    desc: '请把这个项目的风格沉淀成可复用的 Skill 方案。请先给我若干个可选方...',
+    tag: null,
+  },
+  {
+    key: 'brainstorm',
+    icon: '🧠',
+    title: '体验 Brainstorm 模式设计人物关系',
+    desc: '头脑风暴 请用 Brainstorm 模式帮我设计人物关系。请提出几组...',
+    tag: '头脑风暴',
+  },
+];
+
 const MODEL_LABEL: Record<AgentModel, string> = {
   fast: '极速',
   standard: '标准',
   pro: '专业',
 };
 
-/**
- * Agent 对话面板 (T-M1-08, FR-M1-50~53)：
- * 输入 / 技能芯片 / 模型切换 / 打字动画 / 规则引擎兜底。
- * 规则引擎可真正创建节点、触发生成，让面板"活"起来。
+/** 副驾驶 AI 聊天侧边栏（对齐参考图）：
+ *  - 收起：右下角圆形 pea logo 按钮
+ *  - 展开：右侧固定侧边栏，含新建对话头部、问候语、技能建议卡片、聊天消息、底部输入区
  */
 export default function AgentPanel() {
   const { open, model, messages, typing, toggle, setModel, push, setTyping, reset } = useAgent();
   const addNode = useCanvas((s) => s.addNode);
+  const user = useAuth((s) => s.user);
   const [input, setInput] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, typing]);
 
   if (!open) {
     return (
       <button
         onClick={toggle}
-        className="absolute bottom-4 right-4 z-30 flex h-11 w-11 items-center justify-center rounded-full bg-pea-brand text-white shadow-lg transition hover:scale-105"
+        className="pea-agent-bubble"
         aria-label="打开副驾驶"
+        title="打开副驾驶"
       >
-        <RobotOutlined />
+        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" className="pea-agent-bubble-icon">
+          <path d="M7 10c4-3 14-3 18 0" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+          <path d="M5 16c6-4 16-4 22 0" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+          <path d="M7 22c4-3 14-3 18 0" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+        </svg>
       </button>
     );
   }
@@ -93,12 +119,10 @@ export default function AgentPanel() {
     push('user', content);
     setInput('');
     setTyping(true);
-    // 模拟思考延迟 + 打字动画
     window.setTimeout(() => {
       const reply = runRule(content);
       setTyping(false);
       push('assistant', reply);
-      // 若是生成类指令，顺手触发一次生成受理演示
       if (content.includes('生成') && content.includes('图片')) {
         const gen = useCanvas.getState().nodes.find((n) => n.data.kind === 'generate');
         if (gen?.data.prompt) {
@@ -111,90 +135,154 @@ export default function AgentPanel() {
     }, 650);
   };
 
+  const displayName = user?.displayName || user?.email?.split('@')[0] || '创作者';
+  const hasMessages = messages.length > 0;
+
   return (
-    <div className="absolute bottom-0 right-0 z-30 flex h-[60%] w-[360px] flex-col rounded-tl-2xl border border-black/10 bg-white/95 shadow-2xl backdrop-blur dark:border-white/10 dark:bg-[#14141a]/95">
+    <aside className="pea-agent-panel" aria-label="副驾驶聊天">
       {/* header */}
-      <div className="flex items-center justify-between border-b border-black/5 px-3 py-2 dark:border-white/10">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <RobotOutlined className="text-pea-brand" /> 副驾驶
-        </div>
-        <div className="flex items-center gap-1">
-          <Dropdown
-            menu={{
-              items: (['fast', 'standard', 'pro'] as AgentModel[]).map((m) => ({
-                key: m,
-                label: MODEL_LABEL[m],
-              })),
-              onClick: ({ key }) => setModel(key as AgentModel),
-            }}
-          >
-            <Tag color="blue" className="cursor-pointer" aria-label="模型切换">
-              {MODEL_LABEL[model]}
-            </Tag>
-          </Dropdown>
-          <Tooltip title="清空对话">
-            <Button type="text" size="small" icon={<ClearOutlined />} onClick={reset} />
+      <div className="pea-agent-header">
+        <Dropdown
+          menu={{
+            items: [
+              { key: 'new', label: '新建对话', icon: <MessageOutlined /> },
+              { key: 'history', label: '历史对话' },
+            ],
+            onClick: ({ key }) => {
+              if (key === 'new') reset();
+            },
+          }}
+        >
+          <button className="pea-agent-title" aria-label="新建对话">
+            <MessageOutlined />
+            <span>新建对话</span>
+            <span className="pea-agent-title-arrow">⌄</span>
+          </button>
+        </Dropdown>
+        <div className="pea-agent-actions">
+          <Tooltip title="通知">
+            <Button type="text" size="small" icon={<BellOutlined />} aria-label="通知" />
+          </Tooltip>
+          <Tooltip title="展开">
+            <Button type="text" size="small" icon={<ExpandOutlined />} aria-label="展开" />
+          </Tooltip>
+          <Tooltip title="清空">
+            <Button type="text" size="small" icon={<ClearOutlined />} onClick={reset} aria-label="清空对话" />
           </Tooltip>
           <Tooltip title="收起">
-            <Button type="text" size="small" onClick={toggle} aria-label="收起副驾驶">
-              ✕
-            </Button>
+            <Button type="text" size="small" icon={<CloseOutlined />} onClick={toggle} aria-label="收起副驾驶" />
           </Tooltip>
         </div>
       </div>
 
-      {/* messages */}
-      <div ref={listRef} className="flex-1 space-y-2 overflow-y-auto p-3 text-sm">
-        {messages.length === 0 && <Empty description="开始对话" />}
-        {messages.map((m) => (
-          <div key={m.id} className={m.role === 'user' ? 'text-right' : 'text-left'}>
-            <div
-              className={
-                'inline-block max-w-[85%] rounded-2xl px-3 py-2 ' +
-                (m.role === 'user'
-                  ? 'bg-pea-brand text-white'
-                  : 'bg-black/5 text-gray-800 dark:bg-white/10 dark:text-gray-100')
-              }
-            >
-              {m.content}
+      {/* main scroll area */}
+      <div ref={listRef} className="pea-agent-body">
+        {!hasMessages ? (
+          <div className="pea-agent-welcome">
+            <div className="pea-agent-welcome-logo">
+              <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M7 10c4-3 14-3 18 0" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+                <path d="M5 16c6-4 16-4 22 0" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+                <path d="M7 22c4-3 14-3 18 0" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+              </svg>
+            </div>
+            <div className="pea-agent-welcome-title">Hi {displayName}!</div>
+            <div className="pea-agent-welcome-subtitle">今天一起创作点什么？</div>
+            <div className="pea-agent-suggestions">
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s.key}
+                  className="pea-agent-suggestion"
+                  onClick={() => send(s.desc)}
+                >
+                  <div className="pea-agent-suggestion-top">
+                    <span className="pea-agent-suggestion-icon">{s.icon}</span>
+                    <span className="pea-agent-suggestion-title">{s.title}</span>
+                  </div>
+                  <div className="pea-agent-suggestion-desc">{s.desc}</div>
+                  {s.tag && <span className="pea-agent-suggestion-tag">{s.tag}</span>}
+                </button>
+              ))}
             </div>
           </div>
-        ))}
-        {typing && (
-          <div className="text-left">
-            <div className="inline-flex gap-1 rounded-2xl bg-black/5 px-3 py-2 dark:bg-white/10">
-              <span className="animate-bounce">●</span>
-              <span className="animate-bounce" style={{ animationDelay: '0.15s' }}>●</span>
-              <span className="animate-bounce" style={{ animationDelay: '0.3s' }}>●</span>
-            </div>
+        ) : (
+          <div className="pea-agent-messages">
+            {messages.map((m) => (
+              <div key={m.id} className={m.role === 'user' ? 'pea-agent-msg user' : 'pea-agent-msg assistant'}>
+                <div className="pea-agent-msg-bubble">{m.content}</div>
+              </div>
+            ))}
+            {typing && (
+              <div className="pea-agent-msg assistant">
+                <div className="pea-agent-msg-bubble pea-agent-typing">
+                  <span className="animate-bounce">●</span>
+                  <span className="animate-bounce" style={{ animationDelay: '0.15s' }}>●</span>
+                  <span className="animate-bounce" style={{ animationDelay: '0.3s' }}>●</span>
+                </div>
+              </div>
+            )}
+            {!typing && messages.length === 0 && <Empty description="开始对话" />}
           </div>
         )}
       </div>
 
-      {/* skill chips */}
-      <div className="flex flex-wrap gap-1 px-3 pb-2">
-        {SKILLS.map((s) => (
-          <button
-            key={s.key}
-            onClick={() => send(s.prompt)}
-            className="rounded-full border border-pea-brand/40 px-2 py-0.5 text-xs text-pea-brand transition hover:bg-pea-brand hover:text-white"
-          >
-            {s.label}
-          </button>
-        ))}
-      </div>
+      {/* skill chips (shown when there are messages) */}
+      {hasMessages && (
+        <div className="pea-agent-chips">
+          {SKILLS.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => send(s.prompt)}
+              className="pea-agent-chip"
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* input */}
-      <div className="flex items-center gap-2 border-t border-black/5 p-2 dark:border-white/10">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && send()}
-          placeholder="输入指令，回车发送…"
-          className="flex-1 rounded-lg border border-black/10 bg-transparent px-3 py-1.5 text-sm outline-none focus:border-pea-brand dark:border-white/10"
-        />
-        <Button type="primary" shape="circle" icon={<SendOutlined />} onClick={() => send()} aria-label="发送" />
+      <div className="pea-agent-input-wrap">
+        <div className="pea-agent-input-top">
+          <button className="pea-agent-input-plus" aria-label="添加附件" title="添加附件">+</button>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && send()}
+            placeholder="描述创意或需求，/ 使用技能，@ 添加画布内容，@ 引用参考或使用插件"
+            className="pea-agent-input"
+          />
+        </div>
+        <div className="pea-agent-input-bar">
+          <button className="pea-agent-input-confirm" onClick={() => send('手动确认')}>
+            <ThunderboltOutlined /> 手动确认
+          </button>
+          <div className="pea-agent-input-right">
+            <Dropdown
+              menu={{
+                items: (['fast', 'standard', 'pro'] as AgentModel[]).map((m) => ({
+                  key: m,
+                  label: MODEL_LABEL[m],
+                })),
+                onClick: ({ key }) => setModel(key as AgentModel),
+              }}
+            >
+              <Tag color="blue" className="cursor-pointer" aria-label="模型切换">
+                Kimi 2.6
+              </Tag>
+            </Dropdown>
+            <button className="pea-agent-input-mic" aria-label="语音输入" title="语音输入">🎤</button>
+            <button
+              className="pea-agent-input-send"
+              aria-label="发送"
+              disabled={!input.trim() || typing}
+              onClick={() => send()}
+            >
+              <SendOutlined />
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
+    </aside>
   );
 }

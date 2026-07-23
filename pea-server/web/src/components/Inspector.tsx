@@ -3,6 +3,7 @@ import { App, Button, Input, Progress, Tag, Typography } from 'antd';
 import { ThunderboltOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
 import { useCanvas } from '../store/canvas';
+import { NODE_DEF_OF } from '../constants/nodeTypes';
 import RichTextToolbar from './RichTextToolbar';
 
 export default function Inspector() {
@@ -27,9 +28,7 @@ export default function Inspector() {
 
   if (!node) {
     return (
-      <div className="p-4 text-sm text-gray-400">
-        选中一个节点以查看 / 编辑属性
-      </div>
+      <div className="p-4 text-sm text-gray-400">选中一个节点以查看 / 编辑属性</div>
     );
   }
 
@@ -51,6 +50,11 @@ export default function Inspector() {
   return (
     <div className="flex h-full w-72 flex-col border-l border-black/5 p-4 dark:border-white/10">
       <Typography.Title level={5}>属性</Typography.Title>
+      <label className="mb-1 text-xs text-gray-500">类型</label>
+      <div className="mb-3 flex items-center gap-2 text-sm">
+        <span>{NODE_DEF_OF(node.data.kind).icon}</span>
+        <span className="font-medium">{NODE_DEF_OF(node.data.kind).label}</span>
+      </div>
       <label className="mb-1 text-xs text-gray-500">标签</label>
       <Input
         value={node.data.label}
@@ -97,6 +101,11 @@ export default function Inspector() {
             </div>
           )}
         </>
+      )}
+      {node.data.kind !== 'text' && node.data.kind !== 'generate' && (
+        <div className="mt-2 rounded-lg border border-black/5 p-2 text-xs text-gray-400 dark:border-white/10">
+          该节点类型的参数编辑将随后续迭代接入。
+        </div>
       )}
     </div>
   );

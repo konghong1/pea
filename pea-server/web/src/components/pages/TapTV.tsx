@@ -49,11 +49,11 @@ interface Comment {
 
 /** 根据 id 生成稳定的渐变色（媒体缺失时作占位，避免外链依赖）。 */
 const GRADIENTS = [
-  'linear-gradient(135deg,#6c5ce7,#00cec9)',
+  'linear-gradient(135deg,#8b5cf6,#1fa2dc)',
   'linear-gradient(135deg,#fd79a8,#a29bfe)',
   'linear-gradient(135deg,#fdcb6e,#e17055)',
-  'linear-gradient(135deg,#0984e3,#6c5ce7)',
-  'linear-gradient(135deg,#00b894,#00cec9)',
+  'linear-gradient(135deg,#1fa2dc,#8b5cf6)',
+  'linear-gradient(135deg,#34d399,#1fa2dc)',
 ];
 const gradFor = (id: number) => GRADIENTS[id % GRADIENTS.length];
 

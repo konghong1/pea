@@ -2,7 +2,7 @@ import { CheckCircleFilled, InfoCircleFilled, ExclamationCircleFilled, CloseCirc
 import { useToast, ToastLevel } from '../store/toast';
 
 const ICONS: Record<ToastLevel, React.ReactNode> = {
-  info: <InfoCircleFilled style={{ color: '#00CEC9' }} />,
+  info: <InfoCircleFilled style={{ color: '#1fa2dc' }} />,
   success: <CheckCircleFilled style={{ color: '#52c41a' }} />,
   warning: <ExclamationCircleFilled style={{ color: '#faad14' }} />,
   error: <CloseCircleFilled style={{ color: '#ff4d4f' }} />,

@@ -21,21 +21,23 @@ function UserCard({ name }: { name: string }) {
 export default function UserMenu() {
   const { user, logout } = useAuth();
   const setActive = useUi((s) => s.setActive);
+  const setAccountPane = useUi((s) => s.setAccountPane);
   const [open, setOpen] = useState(false);
   const soon = (name: string) => () => {
     setOpen(false);
     toast.info(`${name} 即将开放`);
   };
-  const go = (key: 'account' | 'settings') => () => {
+  const goAccount = (pane: 'profile' | 'aiprov') => () => {
     setOpen(false);
-    setActive(key);
+    setAccountPane(pane);
+    setActive('account');
   };
 
   const items = [
     { key: 'card', label: <UserCard name={user?.displayName ?? '用户'} />, disabled: true },
     { type: 'divider' as const },
-    { key: 'account', label: '账户中心', onClick: go('account') },
-    { key: 'settings', label: 'AI Provider 设置', onClick: go('settings') },
+    { key: 'account', label: '账户中心', onClick: goAccount('profile') },
+    { key: 'settings', label: 'AI Provider 设置', onClick: goAccount('aiprov') },
     { key: 'profile', label: '个人主页', onClick: soon('个人主页') },
     { key: 'notif', label: '通知', onClick: () => setOpen(false) },
     { type: 'divider' as const },

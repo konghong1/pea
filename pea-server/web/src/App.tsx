@@ -20,7 +20,13 @@ export default function App() {
     <ConfigProvider
       theme={{
         algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-        token: { colorPrimary: '#6C5CE7' },
+        token: {
+          colorPrimary: '#1fa2dc',
+          colorInfo: '#1fa2dc',
+          borderRadius: 10,
+          fontFamily:
+            "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif",
+        },
       }}
     >
       <AntApp>
