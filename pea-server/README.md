@@ -94,7 +94,8 @@ cd web && npm i && npm run dev   # http://localhost:5173 (vite 已代理 /api �
 
 ## 4. 代码质量与团队规范（资深开发把关要点）
 
-1. **强一致记账**：`accounts.version` 乐观锁 + 事务 + `ledger_entries.txn_id` 唯一幂等，重复预扣/退还不双扣（ARCH R4）。
+1. **强一致记账**：余额变更走事务 + `accounts` 行级排他锁（`SELECT ... FOR UPDATE`），`ledger_entries.txn_id` 在**行锁内**二次校验保证幂等，重复预扣/退还不双扣（ARCH R4）。
+   说明：采用悲观行锁而非 `version` 乐观锁——余额是热点单行，悲观锁在强一致扣费场景下比乐观锁重试更稳、且跨实例由 MySQL 行锁串行化。`accounts.version` 仅作审计序号。注册时写 `grant` 贷方流水，使 `balance == Σcredit − Σdebit` 恒成立（对账基准）。
 2. **生成不出图**：编排器只调外部模型，成功/失败均回写并发布事件；失败经 BFF 退款。
 3. **护栏优先**：限流中间件（生产换 Redis）、每用户并发软上限、Provider 主备回退（ARCH R1/R2）。
 4. **契约单一源**：跨服务事件在 `services/shared/` 同时维护 TS 与 Python 两份，**改一侧必同步另一侧**。
@@ -108,8 +109,8 @@ cd web && npm i && npm run dev   # http://localhost:5173 (vite 已代理 /api �
 | Epic | 范围 | 本仓库状态 |
 |---|---|---|
 | E0 基础工程 | 仓库/compose/DDL/CI | ✅ 仓库+compose+DDL 完成；CI(⏳ 待补) |
-| E1 账户与积分 | 注册/余额/双记账本/对账 | ✅ 注册登录/余额/双记账本/流水 已实现；每日对账脚本(⏳) |
-| E2 生成管道 ★ | 受理/队列/Worker/LiteLLM/补偿/历史 | ✅ 全链路打通（mock provider 本地可跑，LiteLLM 接入口预留） |
+| E1 账户与积分 | 注册/余额/双记账本/对账 | ✅ 注册登录/余额/双记账本/流水 已实现；**2026-07-23 资深开发复核修复钱路并发/对账缺陷**（幂等锁内校验、注册赠金流水、预扣 await），每日对账脚本已补 `scripts/reconcile_ledger.py` |
+| E2 生成管道 ★ | 受理/队列/Worker/LiteLLM/补偿/历史 | ✅ 全链路打通（mock provider 本地可跑，LiteLLM 接入口预留）；**2026-07-23 修复**：状态机已强制 `can_transition`、退款失败加重试+翻 `refunded` 终态 |
 | E3 画布自动保存 | 表/debounce/乐观锁 | ✅ 实现 |
 | E4 文件存储 | 预签名/Worker写/签名访问 | ✅ 预签名+签名访问；Worker 写产出(⏳ 接真实模型后启用) |
 | E5 画布编辑器 M1 | 节点/连线/Inspector/Agent/生成 | ✅ ReactFlow+自动保存+生成接入 + Agent对话面板(规则引擎) + 富文本工具条 + 侧边面板(搜索/评论/历史/文件) + 右键菜单+快捷键 |

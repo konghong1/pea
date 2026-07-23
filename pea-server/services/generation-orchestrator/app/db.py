@@ -11,6 +11,7 @@ import pymysql
 from pymysql.cursors import DictCursor
 
 from app.config import settings
+from app import models
 
 _POOL_SIZE = 10
 
@@ -83,8 +84,23 @@ def get_conn() -> _Conn:
 
 
 def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies=None) -> None:
+    """更新任务状态, 并强制校验状态机合法性 (T-GEN-01).
+
+    非法跳转 (如 done -> refunded, queued -> done) 直接抛错, 杜绝状态错乱。
+    幂等: 目标状态与当前一致时不报错。
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("SELECT status FROM generation_jobs WHERE id=%s FOR UPDATE", [job_id])
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"job not found: {job_id}")
+            current = row["status"]
+            if current == status:
+                return  # 幂等
+            if not models.can_transition(current, status):
+                raise ValueError(f"illegal transition: {current} -> {status}")
+
             if result_json is not None or cost_tapies is not None:
                 fields, vals = [], []
                 if result_json is not None:

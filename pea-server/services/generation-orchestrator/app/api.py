@@ -91,15 +91,20 @@ def get_job(job_id: str):
 def list_jobs(
     user_id: int = Query(...),
     limit: int = Query(20, le=100),
-    cursor: int = Query(0),
+    cursor: str = Query(None),  # ISO 时间戳游标; None/'0'/'' 表示从头
 ):
+    # 真实游标分页 (keyset): created_at < cursor 向后翻, 避免 OFFSET 深翻 + 漏页 (资深开发复核 T-GEN-08)
+    sql = "SELECT * FROM generation_jobs WHERE user_id=%s"
+    params: list = [user_id]
+    if cursor and cursor not in ("0", "0.0"):
+        sql += " AND created_at < %s"
+        params.append(cursor)
+    sql += " ORDER BY created_at DESC LIMIT %s"
+    params.append(limit + 1)
     with db.get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM generation_jobs WHERE user_id=%s "
-                "ORDER BY created_at DESC LIMIT %s", [user_id, limit + 1],
-            )
+            cur.execute(sql, params)
             rows = cur.fetchall()
     items = [_row_to_dto(r) for r in rows[:limit]]
-    nxt = cursor + limit if len(rows) > limit else None
+    nxt = str(rows[limit]["created_at"]) if len(rows) > limit else None
     return ListJobsResponse(items=items, next=nxt)

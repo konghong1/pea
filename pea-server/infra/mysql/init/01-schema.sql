@@ -35,13 +35,14 @@ CREATE TABLE IF NOT EXISTS accounts (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- 双记账本: 每一笔变动都落一行(借贷双方配对)。txn_id 唯一保证幂等(防重复扣费/退还)。
+-- type 取值: grant(开户赠金, 对账基准) / preauth(预扣借方) / confirm(确认占位) / refund(退还贷方)。
 -- 按月 RANGE 分区(成本/对账友好)；初始化覆盖 2026-01 ~ 2027-12，运维侧按需 ADD PARTITION。
 CREATE TABLE IF NOT EXISTS ledger_entries (
     id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id      BIGINT UNSIGNED NOT NULL,
     txn_id       VARCHAR(64) NOT NULL,               -- 幂等键 (jobId + ':' + action)
     job_id       VARCHAR(36) NULL,
-    type         ENUM('preauth','confirm','refund') NOT NULL,
+    type         ENUM('grant','preauth','confirm','refund') NOT NULL,
     debit        BIGINT NOT NULL DEFAULT 0,          -- 扣减额
     credit       BIGINT NOT NULL DEFAULT 0,          -- 增加额
     balance_after BIGINT NOT NULL DEFAULT 0,         -- 该笔后余额(用于核对)

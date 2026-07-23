@@ -86,7 +86,13 @@ def _process(job_id: str, payload: dict) -> None:
         publish_event(notification(
             user_id=user_id, title="生成失败", body=str(e)[:200], level="error",
         ))
-        refund_on_failure(job_id, user_id, int(payload.get("cost_tapies", 0)))
+        refunded = refund_on_failure(job_id, user_id, int(payload.get("cost_tapies", 0)))
+        if refunded:
+            # 退款成功 -> 状态机 FAILED -> REFUNDED 合法跳转 (原实现永远停在 FAILED, refunded 状态形同虚设)
+            try:
+                db.update_job_status(job_id, models.JobStatus.REFUNDED.value)
+            except Exception as e:  # noqa: BLE001
+                print(f"[worker] mark refunded failed {job_id}: {e}")
     finally:
         _leave(user_id)
 

@@ -27,13 +27,14 @@ export class FilesController {
   constructor(private readonly files: FilesService) {}
 
   @Post('presign')
-  async presign(@Body() dto: PresignDto) {
-    const url = await this.files.presignPut(dto.key, dto.expiresSec ?? 600);
+  async presign(@Body() dto: PresignDto, @CurrentUser() u: { sub: number }) {
+    const url = await this.files.presignPut(dto.key, u.sub, dto.expiresSec ?? 600);
     return { key: dto.key, uploadUrl: url };
   }
 
   @Get('url')
-  async url(@Query('key') key: string) {
-    return { key, downloadUrl: await this.files.presignGet(key) };
+  async url(@Query('key') key: string, @CurrentUser() u: { sub: number }) {
+    if (!key) throw new BadRequestException('key required');
+    return { key, downloadUrl: await this.files.presignGet(key, u.sub) };
   }
 }

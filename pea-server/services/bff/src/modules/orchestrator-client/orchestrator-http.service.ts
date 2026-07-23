@@ -27,7 +27,7 @@ export class OrchestratorHttpClient {
     return data;
   }
 
-  async listJobs(userId: number, limit: number, cursor: number) {
+  async listJobs(userId: number, limit: number, cursor: string | number = 0) {
     const { data } = await this.http.get('/api/jobs', {
       params: { user_id: userId, limit, cursor },
     });

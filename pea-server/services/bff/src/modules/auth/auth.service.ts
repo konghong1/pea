@@ -43,6 +43,14 @@ export class AuthService {
         'INSERT INTO accounts (user_id, balance, version) VALUES (?, ?, 0)',
         [userId, free],
       );
+      // 写开户赠金流水 (贷方), 作为余额对账基准: balance == SUM(credit) - SUM(debit)
+      // 缺此行则余额与流水永远对不上 (资深开发复核 T-ACC-03)。
+      // 注意: ledger_entries.type 枚举需含 'grant' (见 infra/mysql/init/01-schema.sql)。
+      await conn.query(
+        `INSERT INTO ledger_entries (user_id, txn_id, job_id, type, debit, credit, balance_after)
+         VALUES (?, ?, NULL, 'grant', 0, ?, ?)`,
+        [userId, `grant:${userId}`, free, free],
+      );
       return userId;
     });
 

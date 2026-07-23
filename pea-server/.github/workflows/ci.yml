@@ -1,0 +1,41 @@
+name: pea CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+jobs:
+  bff:
+    name: BFF (NestJS) 构建 + 单测
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/bff
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 安装依赖
+        run: npm install
+      - name: 类型检查 / 构建 (nest build)
+        run: npm run build
+      - name: 单元测试 (jest)
+        run: npm test
+
+  orchestrator:
+    name: Generation Orchestrator (FastAPI) 单测
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/generation-orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: 单元测试 (pytest)
+        run: python -m pytest

@@ -31,8 +31,10 @@ export class GenerationController {
   list(
     @CurrentUser() u: { sub: number },
     @Query('limit') limit = 20,
-    @Query('cursor') cursor = 0,
+    @Query('cursor') cursor = '0',
   ) {
-    return this.gen.listJobs(u.sub, Number(limit), Number(cursor));
+    // cursor 为 ISO 时间戳字符串 (真实游标分页); '0'/空 表示从头. 不再强转 Number, 以免破坏时间戳游标.
+    const c = cursor === '0' || cursor === '' ? 0 : cursor;
+    return this.gen.listJobs(u.sub, Number(limit), c);
   }
 }
