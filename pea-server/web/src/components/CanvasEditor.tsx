@@ -550,8 +550,7 @@ function Flow() {
   const addConnectedAt = (kind: PeaNodeKind, sourceId: string, screenPos: { x: number; y: number }) => {
     const pos = screenToFlowPosition({ x: screenPos.x, y: screenPos.y });
     const label = kind === 'text' ? '文本生成' : kind === 'image' ? '图片生成' : kind === 'video' ? '视频生成' : kind === 'audio' ? '音频' : '3D 世界';
-    addNode({ kind, label, meta: { error: false } } as PeaNodeData, pos);
-    const newId = useCanvas.getState().selectedId;
+    const newId = addNode({ kind, label, meta: { error: false } } as PeaNodeData, pos);
     if (newId) {
       onConnect({ source: sourceId, target: newId, sourceHandle: null, targetHandle: null });
     }
@@ -651,6 +650,7 @@ function Flow() {
   return (
     <div
       className="relative h-full"
+      onContextMenu={(e) => e.preventDefault()}
       onDoubleClick={(e) => {
         const t = e.target as HTMLElement;
         const onPane =

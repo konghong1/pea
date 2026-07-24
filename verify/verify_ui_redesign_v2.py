@@ -88,7 +88,7 @@ def main():
             "button", name="添加节点（双击画布也可打开）", exact=True
         ).first.click()
         page.wait_for_timeout(500)
-        page.get_by_role("button", name="生成", exact=True).first.click()
+        page.locator(".pea-add-menu").get_by_text("图片", exact=True).first.click()
         page.wait_for_timeout(800)
 
         # 此时节点被默认选中 — node-chat-prompt 应出现
@@ -131,7 +131,7 @@ def main():
             "button", name="添加节点（双击画布也可打开）", exact=True
         ).first.click()
         page.wait_for_timeout(500)
-        page.get_by_role("button", name="文本", exact=True).first.click()
+        page.locator(".pea-add-menu").get_by_text("文本", exact=True).first.click()
         page.wait_for_timeout(800)
         shot(page, "07_text_node_selected")
 

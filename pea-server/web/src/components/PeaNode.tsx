@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Handle, Position, NodeProps } from 'reactflow';
 import { useCanvas, PeaNodeData } from '../store/canvas';
+import { NODE_DEF_OF, PeaNodeKind } from '../constants/nodeTypes';
 
 /**
- * 画布节点 4 大类型（对齐参考图截图3/4/5/6）：
- *  - text：节点上方"≡ Text"标签 + contentEditable 方框（占位"双击开始编辑..."）
- *  - image：节点上方圆形"上传"按钮 + 左上"Image"标签 + 图片占位图标
- *  - video：节点上方圆形"上传"按钮 + 左上"Video"标签 + 视频占位图标
- *  - audio：节点上方圆形"上传"按钮 + 左上"Audio"标签 + 音乐占位图标
- * 全部用左右两侧的连接手柄（截图2），默认透明，hover/选中时显示。
+ * 画布节点渲染：
+ *  - text：顶部标签（图标+Text） + contentEditable 方框
+ *  - image/video/audio：顶部上传按钮 + 媒体标签（图标+label） + 预览/占位
+ *  - generate/其他：顶部标签 + 通用卡片占位，避免未知 kind 渲染崩坏
+ * 全部用左右两侧的连接手柄，默认透明，hover/选中时显示。
  */
 export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const update = useCanvas((s) => s.updateNodeData);
@@ -20,6 +20,8 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const kind = data.kind;
   const isText = kind === 'text';
   const isMedia = kind === 'image' || kind === 'video' || kind === 'audio';
+  const def = NODE_DEF_OF(kind);
+  const tagLabel = tagLabelOf(kind);
 
   // text 节点：仅在挂载/切换节点时把 store 的 html 同步进可编辑区（避免输入时光标跳变）
   useEffect(() => {
@@ -74,13 +76,13 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
         <Handle type="source" position={Position.Right} className="pea-handle" />
       </span>
 
-      {/* 顶部：text=标签，image/video/audio=上传按钮（截图4/5/6） */}
-      {isText ? (
+      {/* 顶部：text=标签，image/video/audio=上传按钮，其他=标签 */}
+      {isText || !isMedia ? (
         <div className="pea-node-tag-pill">
           <span className="pea-node-tag-icon" aria-hidden>
-            ≡
+            {def.icon}
           </span>
-          <span>Text</span>
+          <span>{tagLabel}</span>
         </div>
       ) : (
         <>
@@ -119,10 +121,10 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
             onInput={() => update(id, { html: editRef.current?.innerHTML })}
             onBlur={() => update(id, { html: editRef.current?.innerHTML })}
           />
-        ) : (
+        ) : isMedia ? (
           <div className="pea-node-media-card">
             <span className="pea-node-media-label">
-              {kind === 'image' ? '🖼' : kind === 'video' ? '▷' : '♫'} {labelOf(kind)}
+              {def.icon} {tagLabel}
             </span>
             {data.url ? (
               kind === 'image' ? (
@@ -155,15 +157,39 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
               </div>
             )}
           </div>
+        ) : (
+          <div className="pea-node-generic-card">
+            <div className="pea-node-generic-icon" aria-hidden>
+              {def.icon}
+            </div>
+            <div className="pea-node-generic-label">{tagLabel}</div>
+            {data.prompt ? (
+              <div className="pea-node-generic-prompt">{data.prompt}</div>
+            ) : (
+              <div className="pea-node-generic-hint">选中后在下方输入栏描述生成内容</div>
+            )}
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function labelOf(k: string): string {
-  if (k === 'image') return 'Image';
-  if (k === 'video') return 'Video';
-  if (k === 'audio') return 'Audio';
-  return '';
+function tagLabelOf(k: string): string {
+  const map: Record<string, string> = {
+    text: 'Text',
+    image: 'Image',
+    video: 'Video',
+    audio: 'Audio',
+    generate: 'Generate',
+    agent: 'Agent',
+    story: 'Story',
+    world3d: '3D World',
+    camera: 'Camera',
+    light: 'Light',
+    playlist: 'Playlist',
+    replace: 'Replace',
+    ref: 'Ref',
+  };
+  return map[k] ?? NODE_DEF_OF(k).label;
 }

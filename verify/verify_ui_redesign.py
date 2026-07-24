@@ -54,7 +54,7 @@ with sync_playwright() as p:
     # 3) 添加生成节点后按 Escape 取消选中，验证无默认白色手柄
     toolbar_btn(page, "添加节点（双击画布也可打开）").click()
     page.wait_for_timeout(500)
-    page.get_by_role("button", name="生成", exact=True).first.click()
+    page.locator(".pea-add-menu").get_by_text("图片", exact=True).first.click()
     page.wait_for_timeout(800)
     # 按 Escape 取消选中，并把鼠标移出节点避免 hover 态残留
     page.keyboard.press("Escape")
@@ -72,7 +72,7 @@ with sync_playwright() as p:
     # 5) 添加文本节点并选中，验证浮动文本工具条
     toolbar_btn(page, "添加节点（双击画布也可打开）").click()
     page.wait_for_timeout(400)
-    page.get_by_role("button", name="文本", exact=True).first.click()
+    page.locator(".pea-add-menu").get_by_text("文本", exact=True).first.click()
     page.wait_for_timeout(600)
     page.locator(".react-flow__node").last.click(force=True)
     page.wait_for_timeout(500)

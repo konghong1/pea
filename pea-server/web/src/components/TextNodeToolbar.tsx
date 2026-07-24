@@ -105,7 +105,6 @@ export default function TextNodeToolbar() {
           1.
         </button>
       </div>
-      <span className="tnt-label">Text</span>
     </div>
   );
 }

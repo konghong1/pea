@@ -38,7 +38,7 @@ interface CanvasState {
   onNodesChange: (c: NodeChange[]) => void;
   onEdgesChange: (c: EdgeChange[]) => void;
   onConnect: (c: Connection) => void;
-  addNode: (data: PeaNodeData, position: { x: number; y: number }) => void;
+  addNode: (data: PeaNodeData, position: { x: number; y: number }) => string;
   updateNodeData: (id: string, patch: Partial<PeaNodeData>) => void;
   select: (id: string | null) => void;
   toggleSelect: (id: string) => void;
@@ -55,8 +55,15 @@ interface CanvasState {
   bumpSave: () => void;
 }
 
-let seq = 1;
-const nextId = () => `n${seq++}`;
+/** 基于当前 nodes 生成唯一 ID，防止模块级 seq 在热更新/加载画布后重复导致节点被覆盖。 */
+const nextId = (nodes: Node<PeaNodeData>[]) => {
+  let max = 0;
+  nodes.forEach((n) => {
+    const m = /^n(\d+)$/.exec(n.id);
+    if (m) max = Math.max(max, Number(m[1]));
+  });
+  return `n${max + 1}`;
+};
 
 export const useCanvas = create<CanvasState>((set, get) => ({
   canvasId: null,
@@ -79,9 +86,11 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     set({ edges: applyEdgeChanges(changes, get().edges), dirty: true }),
   onConnect: (conn) => set({ edges: addEdge(conn, get().edges), dirty: true }),
   addNode: (data, position) => {
-    const id = nextId();
+    const nodes = get().nodes;
+    const id = nextId(nodes);
     const node: Node<PeaNodeData> = { id, type: 'pea', position, data };
-    set({ nodes: [...get().nodes, node], dirty: true, selectedId: id });
+    set({ nodes: [...nodes, node], dirty: true, selectedId: id });
+    return id;
   },
   updateNodeData: (id, patch) =>
     set({
@@ -124,7 +133,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   duplicateNode: (id) => {
     const src = get().nodes.find((n) => n.id === id);
     if (!src) return;
-    const nid = nextId();
+    const nid = nextId(get().nodes);
     const copy: Node<PeaNodeData> = {
       id: nid,
       type: 'pea',
@@ -136,7 +145,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   addConnected: (fromId) => {
     const src = get().nodes.find((n) => n.id === fromId);
     if (!src) return;
-    const nid = nextId();
+    const nid = nextId(get().nodes);
     const node: Node<PeaNodeData> = {
       id: nid,
       type: 'pea',
@@ -153,7 +162,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   pasteNode: () => {
     const clip = get().clipboard;
     if (!clip) return;
-    const nid = nextId();
+    const nid = nextId(get().nodes);
     const copy: Node<PeaNodeData> = {
       id: nid,
       type: 'pea',

@@ -52,6 +52,23 @@ services:
       timeout: 5s
       retries: 10
 
+  # 启动期 DDL 漂移自检 (T-OBS-04): 在 bff/orchestrator 之前幂等修正 schema,
+  # 防止 named volume 不重跑 initdb.d 导致的注册 500 等隐性故障。
+  dbmigrate:
+    image: mysql:8.0
+    command: ["bash", "/migrate/assert-migrated.sh"]
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_ROOT_PASSWORD: pea_root
+      DB_NAME: pea
+    volumes:
+      - ./infra/mysql/assert-migrated.sh:/migrate/assert-migrated.sh:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+
   bff:
     build:
       context: .
@@ -77,6 +94,8 @@ services:
     ports:
       - "4100:4000"   # 宿主机 4000 被 WorkBuddy 自带 node 占用, 改用 4100 映射到容器内 4000; web 走内网 bff:4000 不受影响
     depends_on:
+      dbmigrate:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       redis:
@@ -106,6 +125,8 @@ services:
     ports:
       - "8000:8000"
     depends_on:
+      dbmigrate:
+        condition: service_completed_successfully
       mysql:
         condition: service_healthy
       redis:

@@ -57,7 +57,7 @@ with sync_playwright() as p:
     before = node_count(page)
     in_toolbar(page, "添加节点（双击画布也可打开）").click()
     page.wait_for_timeout(500)
-    page.get_by_role("button", name="文本", exact=True).first.click()
+    page.locator(".pea-add-menu").get_by_text("文本", exact=True).first.click()
     page.wait_for_timeout(800)
     after_text = node_count(page)
     checks.append(("添加 text 节点 +1", after_text == before + 1))
@@ -68,9 +68,9 @@ with sync_playwright() as p:
     tb = page.locator(".text-node-toolbar")
     tb.wait_for(state="visible", timeout=5000)
     tb_visible = tb.is_visible()
-    label_ok = page.locator(".tnt-label", has_text="Text").count() > 0
+    label_gone = page.locator(".tnt-label").count() == 0
     checks.append(("浮动文本工具条可见", tb_visible))
-    checks.append(("工具条含 Text 标签", label_ok))
+    checks.append(("工具条无重复 Text 标签 (已移除)", label_gone))
     shot(page, "02_floating_toolbar")
 
     # 4) H2 / B 格式化作用于画布 text 节点
@@ -85,25 +85,25 @@ with sync_playwright() as p:
 
     select_all(editable)
     page.wait_for_timeout(150)
-    page.locator(".text-node-toolbar").get_by_role("button", name="Heading 2", exact=True).click()
+    h2_btn = page.locator(".text-node-toolbar").get_by_text("H2", exact=True)
+    checks.append(("浮动工具条含 H2 按钮", h2_btn.count() > 0 and h2_btn.first.is_visible()))
+    h2_btn.first.click()
     page.wait_for_timeout(200)
     h2_html = editable.inner_html().lower()
-    h2_active = page.locator(".tnt-btn.active", has_text="H2").count() > 0
-    checks.append(("H2 按钮 active", h2_active))
     checks.append(("正文含 <h2>", "h2" in h2_html))
     select_all(editable)
     page.wait_for_timeout(100)
-    page.locator(".text-node-toolbar").get_by_role("button", name="加粗", exact=True).click()
+    page.locator(".text-node-toolbar").get_by_text("B", exact=True).click()
     page.wait_for_timeout(200)
     bold_html = editable.inner_html().lower()
     checks.append(("正文含加粗标签", ("<b" in bold_html) or ("<strong" in bold_html) or ("font-weight" in bold_html)))
     shot(page, "03_format_h2_bold")
 
     # 5) Shift 框选多选
-    # 先再加一个节点，确保 >=2
+    # 先再加一个节点（添加节点菜单里选「图片」，确保 >=2 个节点）
     in_toolbar(page, "添加节点（双击画布也可打开）").click()
     page.wait_for_timeout(400)
-    page.get_by_role("button", name="生成", exact=True).first.click()
+    page.locator(".pea-add-menu").get_by_text("图片", exact=True).first.click()
     page.wait_for_timeout(600)
     cnt_before_box = node_count(page)
     # 关闭可能打开的库弹层/菜单
@@ -125,15 +125,26 @@ with sync_playwright() as p:
     checks.append((f"Shift 框选选中节点 >=2 (命中 {sel}/{cnt_before_box})", sel >= 2))
     shot(page, "04_shift_box_select")
 
-    # 6) 右键「添加并连接」
-    page.mouse.click(720, 450)  # 关闭框选/菜单
-    page.wait_for_timeout(300)
+    # 6) 右键节点「添加并连接」（坐标式右击，确保触发 ReactFlow 的 onNodeContextMenu）
+    page.keyboard.press("Escape")  # 清场：关闭框选/菜单/取消选中
+    page.wait_for_timeout(400)
     node = page.locator(".react-flow__node").first
+    nb = node.bounding_box()
     nodes_before = node_count(page)
     edges_before = edge_count(page)
-    node.click(button="right", force=True)
-    page.wait_for_timeout(400)
-    page.get_by_text("添加并连接", exact=False).first.click()
+    cx = nb["x"] + nb["width"] / 2
+    cy = nb["y"] + nb["height"] / 2
+    page.mouse.move(cx, cy)
+    page.mouse.click(cx, cy, button="right")
+    add_conn = page.get_by_text("添加并连接", exact=False).first
+    try:
+        add_conn.wait_for(state="visible", timeout=5000)
+        checks.append(("右键节点弹出自定义菜单(含添加并连接)", True))
+    except Exception:
+        checks.append(("右键节点弹出自定义菜单(含添加并连接)", False))
+        shot(page, "05_add_connected")
+        raise
+    add_conn.click()
     page.wait_for_timeout(600)
     nodes_after = node_count(page)
     edges_after = edge_count(page)

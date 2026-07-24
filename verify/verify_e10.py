@@ -1,13 +1,52 @@
-import os, time, sys
+"""E10 · 节点库（添加节点菜单）回归（对齐当前 UI，2026-07-24 重写）
+
+覆盖：
+- 注册唯一账号并进入工作空间
+- 左侧工具栏「添加节点」打开节点库（.pea-add-menu + 遮罩 fixed inset-0 z-40）
+- 选「图片」节点 → 画布 +1，且菜单自动关闭
+- 双击画布空白 → 节点库再次打开
+- 选「文本」节点 → 画布再 +1
+- 0 console error（硬标准）
+
+修正要点：
+- 原脚本用固定账号 verify@pea.ai 登录（很可能不存在 → 卡在登录页），改为注册唯一账号。
+- 原脚本用 div.fixed.inset-0.z-50 判定弹窗，实际遮罩为 z-40；改用 .pea-add-menu。
+- 原脚本选「生成」项，节点库无此项（仅 文本/图片/视频/音频/3D世界/播放列表/上传），改为「图片」。
+"""
+import os
+import sys
+import uuid
 from playwright.sync_api import sync_playwright
 
 BASE = "http://localhost:8088"
 SHOTS = os.path.join(os.path.dirname(__file__), "shots")
 os.makedirs(SHOTS, exist_ok=True)
+EMAIL = f"e10_{uuid.uuid4().hex[:8]}@pea.dev"
+PW = "Password123"
 errors = []
+checks = []
+
 
 def node_count(page):
     return page.locator(".react-flow__node").count()
+
+
+def in_toolbar(page, label):
+    return page.locator(".pea-toolbar").get_by_role("button", name=label, exact=True).first
+
+
+def ensure_canvas(page):
+    try:
+        page.wait_for_selector(".react-flow__viewport", timeout=8000)
+        return
+    except Exception:
+        pass
+    btn = page.get_by_role("button", name="工作空间", exact=True)
+    if btn.count() > 0:
+        btn.first.click()
+        page.wait_for_timeout(1200)
+    page.wait_for_selector(".react-flow__viewport", timeout=20000)
+
 
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
@@ -18,57 +57,65 @@ with sync_playwright() as p:
 
     pg.goto(BASE, wait_until="networkidle")
     pg.wait_for_timeout(800)
-    pg.fill('input[placeholder="you@pea.ai"]', 'verify@pea.ai')
-    pg.fill('input[placeholder="至少 8 位"]', 'password123')
+    pg.get_by_role("button", name="没有账号？去注册").first.click()
+    pg.wait_for_timeout(300)
+    pg.fill('input[placeholder="you@pea.ai"]', EMAIL)
+    pg.fill('input[placeholder="至少 8 位"]', PW)
+    pg.fill('input[placeholder="可选"]', "E10Bot")
     pg.locator("form button[type=submit]").click()
-    pg.wait_for_timeout(2500)
-    pg.wait_for_selector(".react-flow__viewport", timeout=15000)
+    pg.wait_for_timeout(4000)
+    ensure_canvas(pg)
 
-    # 1) 打开节点库（顶栏按钮）
-    pg.get_by_role("button", name="节点库").click()
+    # 1) 打开节点库（左侧工具栏「添加节点」）
+    in_toolbar(pg, "添加节点（双击画布也可打开）").click()
     pg.wait_for_timeout(500)
-    lib = pg.locator("div.fixed.inset-0.z-50")
-    lib_shown = lib.count() > 0
-    print(f"[check] node-library modal shown: {lib_shown}")
+    lib_shown = pg.locator(".pea-add-menu").count() > 0
+    checks.append(("节点库(.pea-add-menu) 打开", lib_shown))
 
     before = node_count(pg)
-    # 2) 点击节点库内「生成」按钮（用 aria-label 精准匹配，避开顶栏「⚡ 生成」）
-    lib.get_by_role("button", name="生成", exact=True).click()
+    # 2) 选「图片」
+    pg.locator(".pea-add-menu").get_by_text("图片", exact=True).first.click()
     pg.wait_for_timeout(700)
     after_add = node_count(pg)
-    print(f"[check] add 'generate' from library: {before} -> {after_add} (expect +1)")
-    pg.keyboard.press("Escape")
+    checks.append((f"从库添加图片节点: {before}->{after_add} (+1)", after_add == before + 1))
+    # 菜单应自动关闭（onPick 内调用 onClose）
     try:
-        pg.wait_for_selector("div.fixed.inset-0.z-50", state="detached", timeout=4000)
+        pg.wait_for_selector(".pea-add-menu", state="detached", timeout=4000)
         auto_closed = True
-    except Exception as ex:
-        auto_closed = False
-        print("[WARN] library did not auto-close:", ex)
-    print(f"[check] library auto-closed after pick: {auto_closed}")
+    except Exception:
+        auto_closed = pg.locator(".pea-add-menu").count() == 0
+    checks.append(("选完节点后菜单自动关闭", auto_closed))
 
-    # 3) 双击画布打开库
-    pg.locator(".react-flow__pane").first.dblclick()
+    # 3) 双击画布空白打开库（用坐标式双击避免落在节点上）
+    pg.keyboard.press("Escape")
+    pg.wait_for_timeout(300)
+    pg.mouse.dblclick(1000, 520)
     pg.wait_for_timeout(500)
-    lib2 = pg.locator("div.fixed.inset-0.z-50")
-    dbl_open = lib2.count() > 0
-    print(f"[check] double-click opens library: {dbl_open}")
+    dbl_open = pg.locator(".pea-add-menu").count() > 0
+    checks.append(("双击画布打开节点库", dbl_open))
 
-    # 4) 点击节点库内「文本」按钮
+    # 4) 选「文本」
     if dbl_open:
-        lib2.get_by_role("button", name="文本", exact=True).click()
-        pg.wait_for_timeout(600)
-        pg.keyboard.press("Escape")
+        pg.locator(".pea-add-menu").get_by_text("文本", exact=True).first.click()
+        pg.wait_for_timeout(700)
     after2 = node_count(pg)
-    print(f"[check] add 'text' via dblclick library: {after_add} -> {after2} (expect +1)")
+    checks.append((f"从库添加文本节点: {after_add}->{after2} (+1)", after2 == after_add + 1))
 
     pg.wait_for_timeout(300)
     pg.screenshot(path=os.path.join(SHOTS, "e10_node_library.png"))
 
-    b.close()
+    print("\n=== CHECKS ===")
+    for name, ok in checks:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+    print("\n=== CONSOLE ERRORS ===")
+    if errors:
+        for e in errors[:30]:
+            print("  ", e)
+    else:
+        print("  (none)")
+    print(f"\nTOTAL console errors: {len(errors)}")
 
-print("CONSOLE_ERRORS:", len(errors))
-if errors:
-    print("\n".join(errors[:10]))
-ok = lib_shown and (not errors) and after_add == before + 1 and after2 == after_add + 1 and dbl_open
-print("RESULT:", "PASS" if ok else "FAIL")
-sys.exit(0 if ok else 1)
+    b.close()
+    ok = all(ok for _, ok in checks) and len(errors) == 0
+    print(f"\nRESULT: {'PASS' if ok else 'FAIL'}")
+    sys.exit(0 if ok else 1)
