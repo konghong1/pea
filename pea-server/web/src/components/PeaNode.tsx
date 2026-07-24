@@ -12,10 +12,13 @@ import { NODE_DEF_OF, PeaNodeKind } from '../constants/nodeTypes';
  */
 export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const update = useCanvas((s) => s.updateNodeData);
+  const select = useCanvas((s) => s.select);
   const selected = useCanvas((s) => s.selectedIds.includes(id));
   const [hovered, setHovered] = useState(false);
   const editRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 拖动判定：mousedown 记录起点，click 时若位移>4px 视为拖动（不选中）
+  const downXY = useRef<{ x: number; y: number } | null>(null);
 
   const kind = data.kind;
   const isText = kind === 'text';
@@ -55,26 +58,38 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       className={`pea-node ${selected ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind}`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onMouseDown={(e) => {
+        // 落在连接手柄上：交给 ReactFlow 发起连线，根节点不要拦截/选中
+        if ((e.target as HTMLElement).closest('.react-flow__handle')) return;
+        // 记录按下坐标，用于区分“单击选中”与“拖动节点”
+        downXY.current = { x: e.clientX, y: e.clientY };
+      }}
+      onClick={(e) => {
+        // 兜底：ReactFlow 会忽略落在 contentEditable 上的 click（文本正文），
+        // 导致点文本节点正文无法选中。这里确保点击节点任意位置都能选中。
+        // 真实拖动（位移>4px）不触发选中，避免拖动后误弹输入框。
+        const d = downXY.current;
+        if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) return;
+        if (!selected) select(id);
+      }}
       data-kind={kind}
     >
-      {/* 左右连接手柄（截图2 ⊕ 位置）。handle 自己的 onPointerDown 触发连接，外层 wrapper 阻止 mousedown 冒泡到 node，
-          避免 ReactFlow useDrag 把 handle 拖动当成节点拖动启动。 */}
-      <span
-        style={{ position: 'absolute', left: -10, top: '50%', transform: 'translateY(-50%)', width: 24, height: 24, zIndex: 10 }}
-        onMouseDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Handle type="target" position={Position.Left} className="pea-handle" />
-      </span>
-      <span
-        style={{ position: 'absolute', right: -10, top: '50%', transform: 'translateY(-50%)', width: 24, height: 24, zIndex: 10 }}
-        onMouseDown={(e) => e.stopPropagation()}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Handle type="source" position={Position.Right} className="pea-handle" />
-      </span>
+      {/* 左右连接手柄（截图2 ⊕ 位置）。
+          注意：手柄必须能让 ReactFlow 捕获 pointerdown 以发起连线，
+          因此不能在外层 wrapper 上 stopPropagation（那会掐断连线起点）。
+          直接把 Handle 定位到节点边缘外侧即可，ReactFlow 原生区分“抓手柄连线”与“拖节点本体”。 */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="pea-handle"
+        style={{ left: -10, top: '50%', transform: 'translateY(-50%)' }}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="pea-handle"
+        style={{ right: -10, top: '50%', transform: 'translateY(-50%)' }}
+      />
 
       {/* 顶部：text=标签，image/video/audio=上传按钮，其他=标签 */}
       {isText || !isMedia ? (
@@ -93,6 +108,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
               e.stopPropagation();
               fileRef.current?.click();
             }}
+            onMouseDown={(e) => e.stopPropagation()}
             aria-label="上传"
             title="上传"
           >
@@ -126,7 +142,20 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
             <span className="pea-node-media-label">
               {def.icon} {tagLabel}
             </span>
-            {data.url ? (
+            {data.generating ? (
+              <div className="pea-node-generating" aria-label="生成中">
+                <div className="pea-node-generate-spinner" />
+                <span className="pea-node-generate-text">生成中…</span>
+              </div>
+            ) : data.resultUrl ? (
+              kind === 'image' ? (
+                <img src={data.resultUrl} alt={data.prompt || tagLabel} className="pea-node-media-preview pea-node-result-preview" />
+              ) : kind === 'video' ? (
+                <video src={data.resultUrl} controls className="pea-node-media-preview pea-node-result-preview" />
+              ) : (
+                <audio src={data.resultUrl} controls className="pea-node-audio" />
+              )
+            ) : data.url ? (
               kind === 'image' ? (
                 <img src={data.url} alt={data.label} className="pea-node-media-preview" />
               ) : kind === 'video' ? (
@@ -163,7 +192,14 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
               {def.icon}
             </div>
             <div className="pea-node-generic-label">{tagLabel}</div>
-            {data.prompt ? (
+            {data.generating ? (
+              <div className="pea-node-generating" aria-label="生成中">
+                <div className="pea-node-generate-spinner" />
+                <span className="pea-node-generate-text">生成中…</span>
+              </div>
+            ) : data.resultUrl ? (
+              <img src={data.resultUrl} alt={data.prompt || tagLabel} className="pea-node-result-preview" />
+            ) : data.prompt ? (
               <div className="pea-node-generic-prompt">{data.prompt}</div>
             ) : (
               <div className="pea-node-generic-hint">选中后在下方输入栏描述生成内容</div>

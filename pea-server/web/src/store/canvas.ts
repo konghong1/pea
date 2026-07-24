@@ -17,7 +17,9 @@ export type PeaNodeData = {
   kind: PeaNodeKind;
   prompt?: string;
   html?: string;
-  url?: string;
+  url?: string;           // 用户上传的文件 URL
+  resultUrl?: string;     // 模型生成的结果 URL（图片/视频等）
+  generating?: boolean;   // 是否正在生成中
   meta?: Record<string, unknown>;
 };
 
@@ -38,6 +40,7 @@ interface CanvasState {
   onNodesChange: (c: NodeChange[]) => void;
   onEdgesChange: (c: EdgeChange[]) => void;
   onConnect: (c: Connection) => void;
+  removeEdge: (id: string) => void;
   addNode: (data: PeaNodeData, position: { x: number; y: number }) => string;
   updateNodeData: (id: string, patch: Partial<PeaNodeData>) => void;
   select: (id: string | null) => void;
@@ -80,16 +83,30 @@ export const useCanvas = create<CanvasState>((set, get) => ({
 
   setCanvasMeta: (id, version, title) =>
     set({ canvasId: id, version, ...(title !== undefined ? { title } : {}) }),
-  onNodesChange: (changes) =>
-    set({ nodes: applyNodeChanges(changes, get().nodes) as any, dirty: true }),
+  onNodesChange: (changes) => {
+    const next = applyNodeChanges(changes, get().nodes) as any;
+    const ids = get().selectedIds;
+    // 受控选中：强制 node.selected 与 selectedIds 一致，
+    // 避免 ReactFlow 内部选中（如拖动节点）制造“选中但没弹框/弹错框”的错乱。
+    const reconciled = next.map((n: any) =>
+      n.selected === ids.includes(n.id) ? n : { ...n, selected: ids.includes(n.id) },
+    );
+    set({ nodes: reconciled, dirty: true });
+  },
   onEdgesChange: (changes) =>
     set({ edges: applyEdgeChanges(changes, get().edges), dirty: true }),
-  onConnect: (conn) => set({ edges: addEdge(conn, get().edges), dirty: true }),
+  onConnect: (conn) => set({ edges: addEdge({ ...conn, type: 'pea' }, get().edges), dirty: true }),
+  removeEdge: (id) => set({ edges: get().edges.filter((e) => e.id !== id), dirty: true }),
   addNode: (data, position) => {
     const nodes = get().nodes;
     const id = nextId(nodes);
-    const node: Node<PeaNodeData> = { id, type: 'pea', position, data };
-    set({ nodes: [...nodes, node], dirty: true, selectedId: id });
+    const node: Node<PeaNodeData> = { id, type: 'pea', position, data, selected: true };
+    set({
+      nodes: [...nodes.map((n) => ({ ...n, selected: false })), node],
+      dirty: true,
+      selectedId: id,
+      selectedIds: [id],
+    });
     return id;
   },
   updateNodeData: (id, patch) =>
@@ -99,17 +116,43 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       ),
       dirty: true,
     }),
-  select: (id) => set({ selectedId: id, selectedIds: id ? [id] : [] }),
+  select: (id) =>
+    set((s) => ({
+      selectedId: id,
+      selectedIds: id ? [id] : [],
+      nodes: s.nodes.map((n) => ({ ...n, selected: !!id && n.id === id })),
+    })),
   toggleSelect: (id) =>
     set((s) => {
       const has = s.selectedIds.includes(id);
       const next = has ? s.selectedIds.filter((x) => x !== id) : [...s.selectedIds, id];
-      return { selectedIds: next, selectedId: id };
+      const selId = next.length ? (has ? next[next.length - 1] || id : id) : null;
+      return {
+        selectedIds: next,
+        selectedId: selId,
+        nodes: s.nodes.map((n) => ({ ...n, selected: next.includes(n.id) })),
+      };
     }),
-  setSelection: (ids) => set({ selectedIds: ids, selectedId: ids.length ? ids[ids.length - 1] : null }),
-  clearSelection: () => set({ selectedIds: [], selectedId: null }),
+  setSelection: (ids) =>
+    set((s) => ({
+      selectedIds: ids,
+      selectedId: ids.length ? ids[ids.length - 1] : null,
+      nodes: s.nodes.map((n) => ({ ...n, selected: ids.includes(n.id) })),
+    })),
+  clearSelection: () =>
+    set((s) => ({
+      selectedIds: [],
+      selectedId: null,
+      nodes: s.nodes.map((n) => ({ ...n, selected: false })),
+    })),
   markSaved: (version) => set({ version, dirty: false, lastSavedAt: Date.now(), saveCount: get().saveCount + 1 }),
-  loadGraph: (nodes, edges, version) => set({ nodes, edges, version, dirty: false }),
+  loadGraph: (nodes, edges, version) =>
+    set({
+      nodes,
+      edges: (edges ?? []).map((e: Edge) => (e.type ? e : { ...e, type: 'pea' })),
+      version,
+      dirty: false,
+    }),
   openCanvas: async (id) => {
     const g = await api.get(`/canvases/${id}`);
     const raw = g.data.graph_json;
@@ -120,7 +163,12 @@ export const useCanvas = create<CanvasState>((set, get) => ({
           : { nodes: [], edges: [] }
         : raw ?? { nodes: [], edges: [] };
     set({ canvasId: g.data.id, version: g.data.version, title: g.data.title, dirty: false });
-    set({ nodes: graph.nodes ?? [], edges: graph.edges ?? [], version: g.data.version, dirty: false });
+    set({
+      nodes: graph.nodes ?? [],
+      edges: (graph.edges ?? []).map((e: Edge) => (e.type ? e : { ...e, type: 'pea' })),
+      version: g.data.version,
+      dirty: false,
+    });
   },
   removeNode: (id) =>
     set((s) => ({
@@ -139,8 +187,14 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       type: 'pea',
       position: { x: src.position.x + 40, y: src.position.y + 40 },
       data: { ...src.data },
+      selected: true,
     };
-    set({ nodes: [...get().nodes, copy], selectedId: nid, selectedIds: [nid], dirty: true });
+    set({
+      nodes: [...get().nodes.map((n) => ({ ...n, selected: false })), copy],
+      selectedId: nid,
+      selectedIds: [nid],
+      dirty: true,
+    });
   },
   addConnected: (fromId) => {
     const src = get().nodes.find((n) => n.id === fromId);
@@ -153,7 +207,13 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       data: { label: '生成', kind: 'generate', prompt: '', meta: { error: false } },
     };
     const edge: Edge = { id: `e${nid}`, source: fromId, target: nid };
-    set({ nodes: [...get().nodes, node], edges: [...get().edges, edge], selectedId: nid, selectedIds: [nid], dirty: true });
+    set({
+      nodes: [...get().nodes.map((n) => ({ ...n, selected: false })), node],
+      edges: [...get().edges, edge],
+      selectedId: nid,
+      selectedIds: [nid],
+      dirty: true,
+    });
   },
   copySelected: () => {
     const sel = get().nodes.find((n) => n.id === get().selectedId);
@@ -168,8 +228,14 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       type: 'pea',
       position: { x: clip.position.x + 60, y: clip.position.y + 60 },
       data: { ...clip.data },
+      selected: true,
     };
-    set({ nodes: [...get().nodes, copy], selectedId: nid, dirty: true });
+    set({
+      nodes: [...get().nodes.map((n) => ({ ...n, selected: false })), copy],
+      selectedId: nid,
+      selectedIds: [nid],
+      dirty: true,
+    });
   },
   bumpSave: () => set({ saveCount: get().saveCount + 1 }),
 }));

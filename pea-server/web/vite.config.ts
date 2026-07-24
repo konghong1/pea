@@ -13,6 +13,7 @@ export default defineConfig({
       '/generation': 'http://localhost:4000',
       '/files': 'http://localhost:4000',
       '/canvases': 'http://localhost:4000',
+      '/shared': 'http://localhost:4000',
       '/providers': 'http://localhost:4000',
       '/works': 'http://localhost:4000',
       '/internal': 'http://localhost:4000',

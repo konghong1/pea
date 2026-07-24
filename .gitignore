@@ -36,4 +36,4 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
-verify/shots/
+verify/**/*.png

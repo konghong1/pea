@@ -1,34 +1,400 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import ReactFlow, {
   Background,
   BackgroundVariant,
   ReactFlowProvider,
   useReactFlow,
-  Node,
+  type Node,
   Connection,
+  ConnectionMode,
   MiniMap,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { App } from 'antd';
+import { App, Input, Modal, Select, Tooltip } from 'antd';
+import {
+  ShareAltOutlined,
+  WalletOutlined,
+  CloseOutlined,
+  CompassOutlined,
+  PlayCircleOutlined,
+  TrophyOutlined,
+  EditOutlined,
+  PlusOutlined,
+  DeleteOutlined,
+} from '@ant-design/icons';
 import { toast } from '../store/toast';
 import { api } from '../api/client';
 import { useCanvas, PeaNodeData } from '../store/canvas';
+import { useUi } from '../store/ui';
+import { useAuth } from '../store/auth';
+import { useTheme } from '../store/theme';
+import { canvasesApi } from '../api/canvases';
 import PeaNode from './PeaNode';
+import PeaEdge from './PeaEdge';
 import SidePanel from './SidePanel';
 import NodeChatPrompt from './NodeChatPrompt';
 import TextNodeToolbar from './TextNodeToolbar';
 import {
-  PEA_NODE_TYPES,
   NODE_DEF_OF,
   PeaNodeKind,
 } from '../constants/nodeTypes';
 
 const nodeTypes = { pea: PeaNode };
+const edgeTypes = { pea: PeaEdge };
 
 interface MenuState {
   x: number;
   y: number;
   nodeId: string | null;
+}
+
+function relTime(ts: number | null): string {
+  if (!ts) return '尚未保存';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return '刚刚';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
+}
+
+/** 画布左上角：pea logo + 画布标题 + 上次修改时间（点击展开下拉）。 */
+function CanvasHeader({
+  onClose,
+}: {
+  onClose: () => void;
+}) {
+  const title = useCanvas((s) => s.title);
+  const lastSavedAt = useCanvas((s) => s.lastSavedAt);
+  const canvasId = useCanvas((s) => s.canvasId);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!(e.target instanceof Node) || !wrapRef.current?.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('mousedown', onDocClick);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDocClick);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="pea-canvas-header">
+      <button
+        type="button"
+        className="pea-canvas-header-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`画布：${title}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-to-br from-pea-purple via-pea-brand to-pea-lime shadow-sm" />
+        <div className="min-w-0 text-left">
+          <div className="truncate text-sm font-semibold leading-tight">{title || '未命名画布'}</div>
+          <div className="truncate text-[11px] text-pea-text-muted leading-tight">
+            上次修改于 {relTime(lastSavedAt)}
+          </div>
+        </div>
+        <span className={`pea-canvas-caret ${open ? 'open' : ''}`} aria-hidden>
+          ▾
+        </span>
+      </button>
+
+      {open && (
+        <div role="menu" className="pea-canvas-dropdown">
+          <div className="pea-canvas-dropdown-head">
+            <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-to-br from-pea-purple via-pea-brand to-pea-lime shadow-sm" />
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{title || '未命名画布'}</div>
+              <div className="truncate text-[11px] text-pea-text-muted">
+                上次修改于 {relTime(lastSavedAt)}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            role="menuitem"
+            className="pea-canvas-dropdown-item"
+            onClick={() => {
+              setOpen(false);
+              onClose();
+            }}
+          >
+            ← 返回工作空间
+          </button>
+          <div className="pea-canvas-dropdown-group">探索</div>
+          <button
+            type="button"
+            role="menuitem"
+            className="pea-canvas-dropdown-item muted"
+            onClick={() => {
+              setOpen(false);
+              toast.info('探索即将开放');
+            }}
+          >
+            <CompassOutlined /> 探索
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="pea-canvas-dropdown-item"
+            onClick={() => {
+              setOpen(false);
+              const { setActive } = useUi.getState();
+              setActive('tvtv');
+            }}
+          >
+            <PlayCircleOutlined /> TapTV
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="pea-canvas-dropdown-item"
+            onClick={() => {
+              setOpen(false);
+              const { setActive } = useUi.getState();
+              setActive('arena');
+            }}
+          >
+            <TrophyOutlined /> 竞技场
+          </button>
+          <div className="pea-canvas-dropdown-divider" />
+          <div className="pea-canvas-dropdown-group">项目</div>
+          <RenameItem id={canvasId} title={title} onDone={() => setOpen(false)} />
+          <NewProjectItem onDone={() => setOpen(false)} />
+          <div className="pea-canvas-dropdown-divider" />
+          <DeleteItem id={canvasId} title={title} onDone={() => setOpen(false)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RenameItem({
+  id,
+  title,
+  onDone,
+}: {
+  id: number | null;
+  title: string;
+  onDone: () => void;
+}) {
+  const { message } = App.useApp();
+  const renameInline = useCallback(
+    async (newTitle: string) => {
+      if (id == null) return;
+      const t = newTitle.trim();
+      if (!t || t === title) return;
+      try {
+        await canvasesApi.update(id, { title: t });
+        const s = useCanvas.getState();
+        // 重命名后立刻同步本地标题
+        s.setCanvasMeta(id, s.version, t);
+        toast.success('已重命名');
+        onDone();
+      } catch {
+        toast.error('重命名失败');
+      }
+    },
+    [id, title, onDone],
+  );
+
+  const onClick = () => {
+    let inputValue = title;
+    Modal.confirm({
+      title: '重命名项目',
+      content: (
+        <Input
+          defaultValue={title}
+          autoFocus
+          onChange={(e) => (inputValue = e.target.value)}
+          onPressEnter={(e) => {
+            // antd Modal.confirm 不响应表单回车；自定义输入处理
+            e.preventDefault();
+          }}
+        />
+      ),
+      okText: '保存',
+      cancelText: '取消',
+      onOk: async () => {
+        await renameInline(inputValue);
+      },
+    });
+    void message;
+  };
+
+  return (
+    <button type="button" role="menuitem" className="pea-canvas-dropdown-item" onClick={onClick}>
+      <EditOutlined /> 重命名
+    </button>
+  );
+}
+
+function NewProjectItem({ onDone }: { onDone: () => void }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className="pea-canvas-dropdown-item"
+      onClick={async () => {
+        onDone();
+        try {
+          const { id } = await canvasesApi.create('未命名画布', 'personal');
+          await useCanvas.getState().openCanvas(id);
+          useUi.getState().setActive('canvas');
+          toast.success('已创建并打开新画布');
+        } catch {
+          toast.error('新建失败');
+        }
+      }}
+    >
+      <PlusOutlined /> 新建项目
+    </button>
+  );
+}
+
+function DeleteItem({
+  id,
+  title,
+  onDone,
+}: {
+  id: number | null;
+  title: string;
+  onDone: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className="pea-canvas-dropdown-item danger"
+      onClick={() => {
+        if (id == null) {
+          toast.error('画布不存在');
+          return;
+        }
+        Modal.confirm({
+          title: '删除项目',
+          content: (
+            <span>
+              确认删除 <b>{title || '未命名画布'}</b>？当前为物理删除（不可恢复）。
+            </span>
+          ),
+          okText: '删除',
+          okButtonProps: { danger: true },
+          cancelText: '取消',
+          onOk: async () => {
+            try {
+              await canvasesApi.remove(id);
+              toast.success('已删除');
+              onDone();
+              useUi.getState().setActive('workspace');
+            } catch {
+              toast.error('删除失败');
+            }
+          },
+        });
+      }}
+    >
+      <DeleteOutlined /> 删除
+    </button>
+  );
+}
+
+/** 画布右上角：Tapies 余额 + 社区 + 分享 */
+function CanvasActions() {
+  const balance = useAuth((s) => s.balance);
+  const setBalance = useAuth((s) => s.setBalance);
+  const { mode, setMode } = useTheme();
+  const [shareBusy, setShareBusy] = useState(false);
+  const { message } = App.useApp();
+
+  const refreshBalance = async () => {
+    try {
+      const r = await api.get('/billing/balance');
+      setBalance(r.data.balance);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const onShare = async () => {
+    const url = window.location.href;
+    setShareBusy(true);
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        if (!document.execCommand('copy')) throw new Error('copy failed');
+        document.body.removeChild(ta);
+      }
+      toast.success('链接已复制到剪贴板');
+    } catch {
+      toast.error('复制失败，请手动复制');
+      message.info(url);
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  return (
+    <div className="pea-canvas-actions">
+      <Select
+        className="pea-theme-select"
+        value={mode}
+        onChange={(v) => setMode(v)}
+        suffixIcon={<span className="text-xs">▾</span>}
+        options={[
+          { label: '浅色', value: 'light' },
+          { label: '深色', value: 'dark' },
+          { label: '跟随系统', value: 'system' },
+        ]}
+      />
+      <Tooltip title="账户余额 (Tapies)">
+        <button
+          type="button"
+          className="pea-canvas-tapies"
+          aria-label={`Tapies 余额 ${balance}`}
+          onClick={refreshBalance}
+        >
+          <WalletOutlined />
+          <span>{balance}</span>
+        </button>
+      </Tooltip>
+      <button
+        type="button"
+        className="pea-canvas-community"
+        onClick={() => toast.info('社区功能即将开放')}
+      >
+        ✦ 社区
+      </button>
+      <Tooltip title="复制分享链接">
+        <button
+          type="button"
+          className="pea-canvas-iconbtn"
+          aria-label="复制分享链接"
+          onClick={onShare}
+          disabled={shareBusy}
+        >
+          <ShareAltOutlined />
+        </button>
+      </Tooltip>
+    </div>
+  );
 }
 
 /** 双击画布弹出的"添加节点"菜单（对齐参考图） */
@@ -318,9 +684,9 @@ function TooltipLite({
 }
 
 /**
- * 自定义画布控件（对齐 @image#1）：
+ * 自定义画布控件（对齐图1）：
  * - 深色圆角胶囊容器，底部左侧
- * - 地图/层级、网格、适配视图、缩放滑块
+ * - 缩略图、网格、适配视图、缩放滑块
  * - 右侧独立圆形帮助按钮
  */
 function CanvasControls({
@@ -430,6 +796,28 @@ function CanvasControls({
   );
 }
 
+/** 画布右下角 Brainstorm 提示 + 头像（对齐图1） */
+function BottomPrompt() {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  return (
+    <div className="pea-canvas-bottom-prompt" role="complementary">
+      <span className="pea-canvas-bottom-prompt-text">体验 Brainstorm 模式打开故事方向</span>
+      <button
+        type="button"
+        className="pea-canvas-bottom-prompt-close"
+        aria-label="关闭"
+        onClick={() => setDismissed(true)}
+      >
+        <CloseOutlined />
+      </button>
+      <div className="pea-canvas-bottom-prompt-avatar" aria-hidden>
+        W
+      </div>
+    </div>
+  );
+}
+
 function Flow() {
   const {
     nodes,
@@ -445,10 +833,9 @@ function Flow() {
     canvasId,
     version,
     dirty,
-    setCanvasMeta,
     markSaved,
-    loadGraph,
     removeNode,
+    removeEdge,
     duplicateNode,
     addConnected,
     copySelected,
@@ -465,24 +852,15 @@ function Flow() {
   const [showMinimap, setShowMinimap] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
   const pendingEdge = useRef<{ source: string; handleId: string | null } | null>(null);
+  // 拖动 vs 单击判定：在 ReactFlow 的 onNodeDragStart 处记录按下坐标
+  // （此处不受节点内部 stopPropagation 影响），onNodeClick 时比较位移。
+  const downPosRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    (async () => {
-      if (canvasId != null) return;
-      const { data } = await api.post('/canvases', { title: '我的画布' });
-      setCanvasMeta(data.id, data.version, '我的画布');
-      const g = await api.get(`/canvases/${data.id}`);
-      const raw = g.data.graph_json;
-      const graph =
-        typeof raw === 'string'
-          ? raw
-            ? JSON.parse(raw)
-            : { nodes: [], edges: [] }
-          : raw ?? { nodes: [], edges: [] };
-      loadGraph(graph.nodes ?? [], graph.edges ?? [], g.data.version);
-      if (g.data.title) setCanvasMeta(data.id, g.data.version, g.data.title);
-    })().catch(() => message.error('画布初始化失败'));
-  }, [canvasId, setCanvasMeta, loadGraph]);
+    // 进入画布必须经由「新建项目」或「打开项目」显式创建/加载，
+    // 这里不再自动创建画布，避免每次加载都产生游离画布。
+    // canvasId 为 null 时由下方空状态提示用户。
+  }, [canvasId]);
 
   useEffect(() => {
     if (!dirty || canvasId == null) return;
@@ -567,10 +945,20 @@ function Flow() {
         saveNow();
         return;
       }
-      if (e.key === 'Delete' && sel) {
-        e.preventDefault();
-        removeNode(sel);
-        return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // 优先删除选中的边，再删除选中的节点
+        const selEdge = document.querySelector('.react-flow__edge.selected');
+        if (selEdge) {
+          e.preventDefault();
+          const edgeId = selEdge.getAttribute('data-id');
+          if (edgeId) removeEdge(edgeId);
+          return;
+        }
+        if (sel) {
+          e.preventDefault();
+          removeNode(sel);
+          return;
+        }
       }
       if (e.key === 'Escape' && sel) {
         e.preventDefault();
@@ -578,11 +966,6 @@ function Flow() {
         return;
       }
       if (editing) return;
-      if (e.key === 'Backspace' && sel) {
-        e.preventDefault();
-        removeNode(sel);
-        return;
-      }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
         copySelected();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
@@ -593,7 +976,7 @@ function Flow() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [removeNode, copySelected, pasteNode, fitView, saveNow, clearSelection]);
+  }, [removeNode, removeEdge, copySelected, pasteNode, fitView, saveNow, clearSelection]);
 
   const onNodeCtx = (e: React.MouseEvent, node: Node) => {
     e.preventDefault();
@@ -649,7 +1032,7 @@ function Flow() {
 
   return (
     <div
-      className="relative h-full"
+      className="pea-canvas-host"
       onContextMenu={(e) => e.preventDefault()}
       onDoubleClick={(e) => {
         const t = e.target as HTMLElement;
@@ -661,6 +1044,10 @@ function Flow() {
       }}
       onMouseDown={onPaneMouseDown}
     >
+      <CanvasHeader onClose={() => useUi.getState().setActive('workspace')} />
+      <CanvasActions />
+      <BottomPrompt />
+
       <LeftToolbar
         onAdd={() => setLibAt({ x: (window.innerWidth - 300) / 2, y: window.innerHeight / 2 - 220 })}
         onSearch={() => setSideOpen(true)}
@@ -673,6 +1060,14 @@ function Flow() {
           av?.click();
         }}
       />
+
+      {canvasId == null && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 text-center text-pea-text-secondary">
+          <div className="text-5xl opacity-40">🎨</div>
+          <div className="text-base font-medium text-pea-text">还没有打开画布</div>
+          <div className="text-sm">在「工作空间」中新建或打开一个项目，即可进入画布。</div>
+        </div>
+      )}
 
       {sideOpen && <SidePanel onClose={() => setSideOpen(false)} />}
       {libAt && (
@@ -690,64 +1085,110 @@ function Flow() {
         />
       )}
 
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={(conn: Connection) => {
-          pendingEdge.current = null;
-          onConnect(conn);
-        }}
-        onConnectStart={(_evt: any, params: any) => {
-          pendingEdge.current = { source: params.nodeId ?? null, handleId: params.handleId ?? null };
-        }}
-        onConnectEnd={(evt: any) => {
-          const pending = pendingEdge.current;
-          pendingEdge.current = null;
-          if (!pending?.source) return;
-          const e = evt as MouseEvent;
-          setEdgeMenu({ x: e.clientX, y: e.clientY, sourceId: pending.source });
-        }}
-        onNodeClick={(e, n) => (e.shiftKey ? toggleSelect(n.id) : select(n.id))}
-        onPaneClick={() => {
-          clearSelection();
-          setMenu(null);
-        }}
-        onNodeContextMenu={onNodeCtx}
-        onPaneContextMenu={onPaneCtx}
-        zoomOnDoubleClick={false}
-        panOnDrag={[1, 2]}
-        defaultViewport={{ x: 0, y: 0, zoom: 1 }}
-        minZoom={0.25}
-        maxZoom={3}
-        proOptions={{ hideAttribution: true }}
-      >
-        {showGrid && (
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={22}
-            size={1.2}
-            color="rgba(255,255,255,0.06)"
+      <div className="pea-canvas-flow">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          defaultEdgeOptions={{ type: 'pea' }}
+          connectionMode={ConnectionMode.Loose}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={(conn: Connection) => {
+            pendingEdge.current = null;
+            onConnect(conn);
+          }}
+          onConnectStart={(_evt: any, params: any) => {
+            pendingEdge.current = { source: params.nodeId ?? null, handleId: params.handleId ?? null };
+          }}
+          onConnectEnd={(evt: any) => {
+            const pending = pendingEdge.current;
+            pendingEdge.current = null;
+            if (!pending?.source) return;
+            const e = evt as MouseEvent;
+            const tgt = e.target as HTMLElement;
+            const nodeEl = tgt.closest('.react-flow__node') as HTMLElement | null;
+            const onHandle = !!tgt.closest('.react-flow__handle');
+            const onPane =
+              tgt.classList.contains('react-flow__pane') ||
+              tgt.classList.contains('react-flow__renderer') ||
+              tgt.classList.contains('react-flow__viewport');
+            if (onPane) {
+              // 空白处释放 → 弹出"新建并连接"菜单
+              setEdgeMenu({ x: e.clientX, y: e.clientY, sourceId: pending.source });
+              return;
+            }
+            if (nodeEl && !onHandle) {
+              // 释放在某节点内部（非手柄）→ 视为"从节点拖到节点即连线"，
+              // 自动创建一条边（onConnect 已处理手柄路径，这里只补齐"落在节点本体"的情形）。
+              const targetId = nodeEl.getAttribute('data-id');
+              if (targetId && targetId !== pending.source) {
+                onConnect({
+                  source: pending.source,
+                  target: targetId,
+                  sourceHandle: null,
+                  targetHandle: null,
+                } as Connection);
+              }
+            }
+            // 释放在手柄上：onConnect 已建边，这里无需处理。
+          }}
+          onNodeClick={(e, n) => {
+            // 仅在真实拖动（位移>4px）时抑制随后的 click；纯单击正常选中+弹框
+            if (downPosRef.current) {
+              const dx = e.clientX - downPosRef.current.x;
+              const dy = e.clientY - downPosRef.current.y;
+              if (Math.hypot(dx, dy) > 4) {
+                downPosRef.current = null;
+                return;
+              }
+            }
+            e.shiftKey ? toggleSelect(n.id) : select(n.id);
+          }}
+          onNodeDragStart={(e) => {
+            // 记录按下坐标（用于区分单击/拖动）；用原生事件坐标
+            const me = e as unknown as MouseEvent;
+            downPosRef.current = { x: me.clientX, y: me.clientY };
+          }}
+          onPaneClick={() => {
+            clearSelection();
+            setMenu(null);
+          }}
+          onNodeContextMenu={onNodeCtx}
+          onPaneContextMenu={onPaneCtx}
+          zoomOnDoubleClick={false}
+          panOnDrag={[1, 2]}
+          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+          minZoom={0.25}
+          maxZoom={3}
+          proOptions={{ hideAttribution: true }}
+        >
+          {showGrid && (
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={22}
+              size={1.2}
+              color="rgba(255,255,255,0.06)"
+            />
+          )}
+          {showMinimap && (
+            <MiniMap
+              nodeStrokeWidth={3}
+              zoomable
+              pannable
+              position="top-left"
+              style={{ top: 78, left: 68 }}
+            />
+          )}
+          <CanvasControls
+            showMinimap={showMinimap}
+            setShowMinimap={setShowMinimap}
+            showGrid={showGrid}
+            setShowGrid={setShowGrid}
           />
-        )}
-        {showMinimap && (
-          <MiniMap
-            nodeStrokeWidth={3}
-            zoomable
-            pannable
-            position="top-left"
-            style={{ top: 78, left: 68 }}
-          />
-        )}
-        <CanvasControls
-          showMinimap={showMinimap}
-          setShowMinimap={setShowMinimap}
-          showGrid={showGrid}
-          setShowGrid={setShowGrid}
-        />
-      </ReactFlow>
+        </ReactFlow>
+      </div>
 
       {box && (
         <div

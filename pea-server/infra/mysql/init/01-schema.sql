@@ -88,12 +88,25 @@ CREATE TABLE IF NOT EXISTS canvases (
     id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     owner_id    BIGINT UNSIGNED NOT NULL,
     title       VARCHAR(255) NOT NULL DEFAULT 'Untitled',
+    -- 范围: 个人空间 (root_only) / 团队空间 (scope=team)
+    scope       ENUM('personal','team') NOT NULL DEFAULT 'personal',
+    -- 文件夹 (canvas_folders.id)；NULL = 画布根目录
+    folder_id   BIGINT UNSIGNED NULL,
+    -- 分享令牌；生成后写入，可经公开端点只读访问
+    share_token VARCHAR(64) NULL,
+    -- 首屏缩略图 (可选；前端也可基于 graph 派生 CSS 渐变缩略)
+    thumbnail_url VARCHAR(1024) NULL,
     graph_json  JSON NOT NULL,                        -- {nodes:[...], edges:[...]}
     version     INT UNSIGNED NOT NULL DEFAULT 1,      -- 乐观锁
+    -- 软删除: 列表默认过滤 NULL；回收站恢复需另行设计
+    deleted_at  DATETIME(3) NULL,
     created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (id),
+    UNIQUE KEY uq_canvases_share (share_token),
     KEY idx_canvases_owner (owner_id),
+    KEY idx_canvases_scope (owner_id, scope, deleted_at),
+    KEY idx_canvases_folder (folder_id),
     CONSTRAINT fk_canvases_owner FOREIGN KEY (owner_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
@@ -101,6 +114,33 @@ CREATE TABLE IF NOT EXISTS canvases (
 ALTER TABLE canvases
     ADD COLUMN node_count INT UNSIGNED AS (JSON_LENGTH(graph_json->'$.nodes')) STORED,
     ADD INDEX idx_canvases_node_count (node_count);
+
+-- 画布文件夹: 支持个人/团队双范围；parent_id 自引用形成二级树
+CREATE TABLE IF NOT EXISTS canvas_folders (
+    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    owner_id    BIGINT UNSIGNED NOT NULL,
+    name        VARCHAR(120) NOT NULL DEFAULT '新建文件夹',
+    scope       ENUM('personal','team') NOT NULL DEFAULT 'personal',
+    parent_id   BIGINT UNSIGNED NULL,
+    created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_cf_owner (owner_id, scope),
+    KEY idx_cf_parent (parent_id),
+    CONSTRAINT fk_cf_owner FOREIGN KEY (owner_id) REFERENCES users (id),
+    CONSTRAINT fk_cf_parent FOREIGN KEY (parent_id) REFERENCES canvas_folders (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- 补 FK: canvases.folder_id -> canvas_folders.id (ALTER 兼容旧库)
+SET @fk_exists := (
+  SELECT COUNT(*) FROM information_schema.TABLE_CONSTRAINTS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'canvases'
+    AND CONSTRAINT_NAME = 'fk_canvases_folder'
+);
+SET @sql := IF(@fk_exists = 0,
+  'ALTER TABLE canvases ADD CONSTRAINT fk_canvases_folder FOREIGN KEY (folder_id) REFERENCES canvas_folders (id) ON DELETE SET NULL',
+  'SELECT 1');
+PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
 
 CREATE TABLE IF NOT EXISTS canvas_versions (
     id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -110,7 +150,7 @@ CREATE TABLE IF NOT EXISTS canvas_versions (
     created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     PRIMARY KEY (id),
     KEY idx_cv_canvas (canvas_id),
-    CONSTRAINT fk_cv_canvas FOREIGN KEY (canvas_id) REFERENCES canvases (id)
+    CONSTRAINT fk_cv_canvas FOREIGN KEY (canvas_id) REFERENCES canvases (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ---------------------------------------------------------------------------

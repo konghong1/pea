@@ -42,3 +42,13 @@
 - **连接手柄**：默认 `opacity:0` 隐藏，hover/selected 显示；**勿**用 `.react-flow__node:hover .pea-handle`（Tailwind purge 剥离 `:hover`）→ 改用 `PeaNode` 内 `useState` 控 `.hover` 类。全部 Left/Right。
 - **AI 聊天**：`AgentPanel` 升到 `Workspace` 层级固定最右 380px；默认只显 `.pea-agent-bubble`，展开为 `.pea-agent-panel`。已删 `Inspector.tsx`。
 - **Escape**：`CanvasEditor` 监听 `Escape`→`clearSelection()`，否则手柄常显。
+
+## 视图模型（2026-07-24 起，重大重构）
+- **三态路由**：`useUi().active ∈ {'home','workspace','canvas',…}`，默认 `'workspace'`。
+  - `home` → 占位页（"主页规划中"，等用户后续规划）；
+  - `workspace` → 项目列表（`ProjectList`，原 `Home.tsx` 内容已抽到 `web/src/components/ProjectList.tsx`）；
+  - `canvas` → 画布编辑器，**TopNav 隐藏**，画布自带头部（`CanvasHeader` 左上 + `CanvasActions` 右上 + `BottomPrompt` 右下）。
+- **`PageKey` 必须含 `'workspace'`**；`TopNav` 中"工作空间"标签的 nav-key 是 `'workspace'`（曾被误写成 `'canvas'`，导致点工作空间反而跳画布，已修）。
+- **画布头部下拉（`.pea-canvas-dropdown`）**：返回工作空间 / 探索 / TapTV / 竞技场 / 项目[重命名/新建项目] / 删除（红色）。返回工作空间 = `useUi.getState().setActive('workspace')`。
+- **画布模式下无 TopNav**：从画布回项目列表只能走头部下拉，**不要**用 `get_by_role("button", name="工作空间")`。
+- **`Node` 类型冲突**：ReactFlow `Node` 与 DOM `Node` 同名 → `import type { Node } from 'reactflow'` + 用 `instanceof Node` 时不能用 value-import 形式。

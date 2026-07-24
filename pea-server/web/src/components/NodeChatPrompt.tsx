@@ -3,16 +3,64 @@ import { useViewport } from 'reactflow';
 import { useCanvas } from '../store/canvas';
 import { useAgent } from '../store/agent';
 
+interface KindCfg {
+  label: string;
+  placeholder: string;
+  model: string;
+  modelIcon: string;
+  params: { icon: string; text: string }[];
+}
+
+export const KIND_CFG: Record<string, KindCfg> = {
+  text: {
+    label: '文本',
+    placeholder: '描述任何你想要生成的内容',
+    model: 'Gemini 3.1 Flash Lite',
+    modelIcon: '✦',
+    params: [],
+  },
+  image: {
+    label: '图片',
+    placeholder: '描述任何你想要生成的内容',
+    model: 'Seedream 5.0 Lite',
+    modelIcon: '📊',
+    params: [{ icon: '⊞', text: '1:1 · 2K' }],
+  },
+  video: {
+    label: '视频',
+    placeholder: '描述你想生成的内容，或输入 /@ 唤出素材库与快捷操作',
+    model: 'Seedance 2.0 Mini',
+    modelIcon: '📊',
+    params: [{ icon: '⚙', text: '全能参考 · 16:9 · 480p · 5s' }, { icon: '🔊', text: '' }],
+  },
+  audio: {
+    label: '音频',
+    placeholder: '描述你想要生成的任何内容',
+    model: 'Mureka V8',
+    modelIcon: '🌊',
+    params: [
+      { icon: '♫', text: '音乐' },
+      { icon: '☰', text: '自适应' },
+    ],
+  },
+  generate: {
+    label: '生成',
+    placeholder: '描述你想生成的内容',
+    model: 'Gemini 3.1 Flash Lite',
+    modelIcon: '✦',
+    params: [],
+  },
+};
+
 /**
  * 节点下方全宽输入栏（对齐截图3/4/5/6）。
- * 选中单个节点时在节点正下方浮现与节点同宽的输入栏：
- *  - 顶部工具行：text/audio 只一个 + 按钮；image/video 多一个 ✦（特效）按钮
- *  - 中部 textarea：按节点类型切换占位文案
- *  - 底部状态行：左侧模型 + 参数（按类型），右侧麦克风/1×/Tapies/发送
- * 提交后向副驾驶推用户消息、自动展开右侧聊天面板，generate 节点写回 prompt。
+ * 选中单个节点时在节点正下方浮现与节点同宽的输入栏。
  *
- * 定位采用 fixed 视口坐标，并配合 requestAnimationFrame 实时跟随节点，
- * 因此画布缩放/平移不会导致输入栏错位或变形。
+ * 定位策略（关键修复 2026-07-24）：
+ *  - 不再用 document.querySelector 实时查询节点 DOM（React 重渲期间会返回 null → 输入栏闪退）。
+ *  - 改为基于 store 中的节点 position + measured width/height + reactflow viewport 变换，
+ *    确定性地计算 fixed 视口坐标。位置随拖动/缩放/平移实时更新，永不闪烁、永不丢失。
+ *  - 切换节点时自动恢复该节点的 data.prompt，支持“接着上次编辑的内容继续写”。
  */
 export default function NodeChatPrompt() {
   const selectedIds = useCanvas((s) => s.selectedIds);
@@ -29,50 +77,86 @@ export default function NodeChatPrompt() {
   const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const prevSingleRef = useRef<string | null>(null);
+  // 按节点 id 缓存输入草稿：切换节点再切回时"接着上次编辑的内容继续写"
+  const draftRef = useRef<Record<string, string>>({});
+  // rAF 循环保持位置实时同步（拖动/缩放/平移时输入栏跟随节点）
   const rafRef = useRef<number>();
   const lastRectRef = useRef('');
 
-  // 实时跟随节点位置 / 视口变化重定位（fixed 视口坐标，不受画布缩放影响）
+  // 节点切换：恢复该节点的草稿（优先）/已保存 prompt，否则清空
+  useEffect(() => {
+    if (!single) {
+      setText('');
+      prevSingleRef.current = null;
+      return;
+    }
+    if (single !== prevSingleRef.current) {
+      prevSingleRef.current = single;
+      const node = nodes.find((n) => n.id === single);
+      const restored = draftRef.current[single] ?? node?.data.prompt ?? '';
+      setText(restored);
+      setTimeout(() => inputRef.current?.focus(), 60);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [single, nodes]);
+
+  // 确定性定位：优先读取节点真实渲染底边（getBoundingClientRect），
+  // rAF 循环保持拖动/缩放/平移时输入栏始终跟随节点。
+  // 仅在无选中节点时停止循环。
   useEffect(() => {
     if (!sel || !single) {
       setRect(null);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
       return;
     }
 
-    const updateRect = () => {
-      const el = document.querySelector(
+    const compute = (): { left: number; top: number; width: number } | null => {
+      const nodeEl = document.querySelector(
         `.react-flow__node[data-id="${single}"]`,
       ) as HTMLElement | null;
-      if (!el) {
-        setRect(null);
-        return;
+      if (nodeEl) {
+        const r = nodeEl.getBoundingClientRect();
+        const anchorBottom = r.bottom;
+        const centerX = r.left + r.width / 2;
+        const width = Math.max(360, Math.round(r.width));
+        return { left: Math.round(centerX - width / 2), top: Math.round(anchorBottom + 16), width };
       }
-      const r = el.getBoundingClientRect();
-      const width = Math.max(360, Math.round(r.width));
-      const left = Math.round(r.left + r.width / 2 - width / 2);
-      const top = Math.round(r.bottom + 10);
-      const key = `${left},${top},${width}`;
-      if (lastRectRef.current !== key) {
-        lastRectRef.current = key;
-        setRect({ left, top, width });
-      }
+      // DOM 不可用时回退到 viewport 变换计算
+      const { x: vx, y: vy, zoom } = viewport;
+      const fx = sel.position.x;
+      const fy = sel.position.y;
+      const w = (sel.width ?? 260) * zoom;
+      const h = (sel.height ?? 160) * zoom;
+      const screenX = fx * zoom + vx;
+      const screenY = fy * zoom + vy;
+      const width = Math.max(360, Math.round(w));
+      return { left: Math.round(screenX + w / 2 - width / 2), top: Math.round(screenY + h + 16), width };
     };
 
     const loop = () => {
-      updateRect();
+      const next = compute();
+      if (next) {
+        const key = `${next.left},${next.top},${next.width}`;
+        if (lastRectRef.current !== key) {
+          lastRectRef.current = key;
+          setRect(next);
+        }
+      }
       rafRef.current = requestAnimationFrame(loop);
     };
-    updateRect();
-    rafRef.current = requestAnimationFrame(loop);
 
-    const onResize = () => updateRect();
-    window.addEventListener('resize', onResize);
+    // 立即算一次
+    const initial = compute();
+    if (initial) setRect(initial);
+
+    // 启动 rAF 循环
+    rafRef.current = requestAnimationFrame(loop);
 
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      window.removeEventListener('resize', onResize);
     };
-  }, [sel, single, viewport.x, viewport.y, viewport.zoom]);
+  }, [sel, single, viewport.x, viewport.y, viewport.zoom, sel?.position.x, sel?.position.y, sel?.width, sel?.height]);
 
   if (!sel || !rect || !single) return null;
 
@@ -82,12 +166,13 @@ export default function NodeChatPrompt() {
   const submit = () => {
     const t = text.trim();
     if (!t) return;
-    if (kind === 'generate') {
-      update(single, { prompt: t });
-    }
+    // 写入节点 prompt：既便于提交后恢复，也作为生成/对话的上下文
+    update(single, { prompt: t });
     push('user', `[${sel.data.label || cfg.label}] ${t}`);
     setOpen(true);
+    draftRef.current[single] = '';
     setText('');
+    // 提交后保持输入栏打开，方便连续输入
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
@@ -125,7 +210,11 @@ export default function NodeChatPrompt() {
         placeholder={cfg.placeholder}
         value={text}
         rows={2}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          const v = e.target.value;
+          setText(v);
+          if (single) draftRef.current[single] = v;
+        }}
         onKeyDown={onKey}
         onMouseDown={(e) => e.stopPropagation()}
       />
@@ -175,57 +264,3 @@ export default function NodeChatPrompt() {
     </div>
   );
 }
-
-interface ParamCfg {
-  icon: string;
-  text: string;
-}
-
-interface KindCfg {
-  label: string;
-  placeholder: string;
-  model: string;
-  modelIcon: string;
-  params: ParamCfg[];
-}
-
-const KIND_CFG: Record<string, KindCfg> = {
-  text: {
-    label: '文本',
-    placeholder: '描述任何你想要生成的内容',
-    model: 'Gemini 3.1 Flash Lite',
-    modelIcon: '✦',
-    params: [],
-  },
-  image: {
-    label: '图片',
-    placeholder: '描述任何你想要生成的内容',
-    model: 'Seedream 5.0 Lite',
-    modelIcon: '📊',
-    params: [{ icon: '⊞', text: '1:1 · 2K' }],
-  },
-  video: {
-    label: '视频',
-    placeholder: '描述你想生成的内容，或输入 /@ 唤出素材库与快捷操作',
-    model: 'Seedance 2.0 Mini',
-    modelIcon: '📊',
-    params: [{ icon: '⚙', text: '全能参考 · 16:9 · 480p · 5s' }, { icon: '🔊', text: '' }],
-  },
-  audio: {
-    label: '音频',
-    placeholder: '描述你想要生成的任何内容',
-    model: 'Mureka V8',
-    modelIcon: '🌊',
-    params: [
-      { icon: '♫', text: '音乐' },
-      { icon: '☰', text: '自适应' },
-    ],
-  },
-  generate: {
-    label: '生成',
-    placeholder: '描述你想生成的内容',
-    model: 'Gemini 3.1 Flash Lite',
-    modelIcon: '✦',
-    params: [],
-  },
-};

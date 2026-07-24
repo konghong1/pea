@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type PageKey = 'home' | 'canvas' | 'account' | 'settings' | 'ecom' | 'tvtv' | 'arena';
+export type PageKey = 'home' | 'workspace' | 'canvas' | 'account' | 'settings' | 'ecom' | 'tvtv' | 'arena';
 
 /** 账户中心 7 面板 (对齐 pea-canvas-v12.html `.acct-layout`)。 */
 export type AccountPane =
@@ -22,7 +22,7 @@ interface UiState {
 
 /** SPA 单实例页面状态：切换导航不卸载画布，保留编辑态 (FR-G1)。 */
 export const useUi = create<UiState>((set) => ({
-  active: 'canvas',
+  active: 'workspace',
   accountPane: 'profile',
   setActive: (active) => set({ active }),
   setAccountPane: (accountPane) => set({ accountPane }),

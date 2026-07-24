@@ -1,0 +1,16 @@
+E7 可视化验证
+[PASS] 登录页渲染 
+[PASS] 注册表单切换 
+[PASS] 注册+进入工作空间(画布渲染) 
+[PASS] 顶栏积分显示 balance片段=True
+[PASS] 导航-主页 
+[PASS] 导航-电商套图 
+[PASS] 导航-TapTV 
+[PASS] 导航-竞技场 
+[PASS] SPA返回工作空间(画布常驻) 
+[PASS] 通知中心抽屉+欢迎通知 
+[PASS] 分享复制链接(Toast反馈) 
+[PASS] 用户菜单(统计+退出登录) 
+[PASS] 深色主题切换 htmlClass=dark
+
+console errors: 0
