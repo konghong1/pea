@@ -122,6 +122,12 @@ services:
       PEA_BFF_INTERNAL_BASE_URL: "http://bff:4000"
       PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
       PEA_WORKER_ENABLED: "true"
+      # 生产环境：真实调用失败直接置 FAILED + 自动退款，绝不静默回退 Mock 假图。
+      # allow_mock_fallback 仅离线联调用；线上=true 会把任何故障伪装成占位 SVG，掩盖真实错误。
+      # 图片生成超时 300s：Agnes 图像模型实测 18~77s 且波动大，留足余量避免误判超时（须 < worker 硬超时）。
+      PEA_ALLOW_MOCK_FALLBACK: "false"
+      PEA_PROVIDER_IMAGE_TIMEOUT_S: "300"
+      PEA_PROVIDER_HTTP_CONNECT_TIMEOUT_S: "15"
     ports:
       - "8000:8000"
     depends_on:

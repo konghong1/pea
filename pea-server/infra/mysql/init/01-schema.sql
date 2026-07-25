@@ -406,7 +406,8 @@ INSERT INTO ai_models (id, provider_id, model_name, display_name, model_type, en
 ON DUPLICATE KEY UPDATE
     model_name=VALUES(model_name), display_name=VALUES(display_name),
     model_type=VALUES(model_type), pricing_json=VALUES(pricing_json),
-    params_schema_json=VALUES(params_schema_json), min_plan_level=VALUES(min_plan_level);
+    params_schema_json=VALUES(params_schema_json), min_plan_level=VALUES(min_plan_level),
+    description=VALUES(description);
 
 -- 售卖套餐 (三档)。
 INSERT INTO billing_plans (id, name, plan_level, price_cents, tapies, duration_days, enabled, sort_order, features_json) VALUES

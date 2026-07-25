@@ -143,17 +143,20 @@ class OpenAICompatibleProvider:
         if seed is not None:
             payload["seed"] = seed
 
-        extra_body: dict[str, Any] = {}
+        # Agnes 特有参数：直接合并到 payload（不用 extra_body 嵌套，Agnes 不识别该字段）
+        # 注意：Agnes 图像模型不支持 response_format 参数（会返回 400），故不发送
         if _is_agnes(self.base_url):
-            extra_body["response_format"] = "url"
-        if refs:
-            extra_body["image"] = refs
-            if "agnes-image-2.0" in self.model_name.lower():
-                extra_body["tags"] = ["img2img"]
-            if not _is_agnes(self.base_url):
-                payload["image"] = refs[0] if len(refs) == 1 else refs
-        if extra_body:
-            payload["extra_body"] = extra_body
+            if refs:
+                payload["image"] = refs
+                if "agnes-image-2.0" in self.model_name.lower():
+                    payload["tags"] = ["img2img"]
+        else:
+            # 非 OpenAI 兼容提供商：用 extra_body 透传
+            extra_body: dict[str, Any] = {}
+            if refs:
+                extra_body["image"] = refs
+            if extra_body:
+                payload["extra_body"] = extra_body
 
         url = _api_base(self.base_url, "/v1/images/generations")
         logger.info("[agnes] image model=%s n=%d size=%s refs=%d", self.model_name, n, size, len(refs))

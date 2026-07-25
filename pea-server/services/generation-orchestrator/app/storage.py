@@ -63,6 +63,14 @@ def _public_policy(bucket: str, prefix: str) -> str:
     )
 
 
+def _do_ensure_bucket() -> None:
+    """仅做建桶(若不存在)。策略设置移到 ensure_public_policy, 避免冷启动慢调用阻塞生成。"""
+    client = _get_client()
+    bucket = settings.minio_bucket
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+
+
 def _ensure_bucket() -> None:
     global _bucket_ready
     if _bucket_ready:
@@ -70,18 +78,51 @@ def _ensure_bucket() -> None:
     with _init_lock:
         if _bucket_ready:
             return
-        client = _get_client()
-        bucket = settings.minio_bucket
-        prefix = settings.media_public_prefix
+        # 只做轻量建桶检查(快), 策略设置在 worker 启动时后台重试, 绝不在生成热路径上
+        # 调用可能冷启动缓慢的 set_bucket_policy, 否则会拖垮真实生成 -> 看门狗 -> Mock 假图。
         try:
-            if not client.bucket_exists(bucket):
-                client.make_bucket(bucket)
-            # 幂等设置公开前缀策略 (BFF 可能已建桶但未设策略, 这里补齐)。
-            client.set_bucket_policy(bucket, _public_policy(bucket, prefix))
+            _do_ensure_bucket()
         except Exception as exc:  # noqa: BLE001
-            # 策略设置失败不阻断转存 (桶可能本就公开或权限受限), 仅告警。
-            logger.warning("ensure bucket/policy best-effort failed: %s", exc)
+            logger.warning("ensure bucket best-effort failed: %s", exc)
         _bucket_ready = True
+
+
+def ensure_public_policy(max_retries: int = 8, retry_gap_s: float = 3.0) -> None:
+    """后台尽力设置 `gen/` 前缀公开读策略(幂等, 持久化在桶上, 只需成功一次)。
+
+    set_bucket_policy 在 MinIO 冷启动/部分部署下偶发缓慢(无内置超时), 若放在生成热路径
+    会卡死整条链路。故放到 worker 启动时独立守护线程, 多次重试 + 每次 10s 护栏,
+    成功即返回; 全部失败仅告警(此时 gen/ 对象可能私有, 前端裂图, 但生成本身不阻塞)。
+    """
+    import time
+
+    client = _get_client()
+    bucket = settings.minio_bucket
+    prefix = settings.media_public_prefix
+    policy = _public_policy(bucket, prefix)
+    for attempt in range(1, max_retries + 1):
+        box: dict = {}
+
+        def _run() -> None:
+            try:
+                client.set_bucket_policy(bucket, policy)
+                box["ok"] = True
+            except Exception as e:  # noqa: BLE001
+                box["e"] = e
+
+        th = threading.Thread(target=_run, daemon=True)
+        th.start()
+        th.join(10)
+        if box.get("ok"):
+            logger.info("bucket public policy applied (attempt %d)", attempt)
+            return
+        logger.warning(
+            "set public policy attempt %d/%d failed: %s",
+            attempt, max_retries, box.get("e", "<timeout>"),
+        )
+        if attempt < max_retries:
+            time.sleep(retry_gap_s)
+    logger.warning("set public policy gave up after %d attempts; gen/ objects may be private", max_retries)
 
 
 def _guess_ext(url: str, content_type: str | None, media_type: str) -> str:

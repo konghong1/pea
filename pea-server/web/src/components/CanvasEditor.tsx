@@ -5,9 +5,11 @@ import ReactFlow, {
   ReactFlowProvider,
   useReactFlow,
   type Node,
+  type Edge,
   Connection,
   ConnectionMode,
   MiniMap,
+  SelectionMode,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { App, Input, Modal, Select, Tooltip } from 'antd';
@@ -841,7 +843,6 @@ function Flow() {
     copySelected,
     pasteNode,
   } = useCanvas();
-  const [box, setBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const { screenToFlowPosition, fitView } = useReactFlow();
   const { message } = App.useApp();
   const saveTimer = useRef<number>();
@@ -987,49 +988,6 @@ function Flow() {
     setMenu({ x: e.clientX, y: e.clientY, nodeId: null });
   };
 
-  // Shift + 拖拽空白处 = 框选
-  const onPaneMouseDown = (e: React.MouseEvent) => {
-    const t = e.target as HTMLElement;
-    const onPane =
-      t.classList.contains('react-flow__pane') ||
-      t.classList.contains('react-flow__viewport') ||
-      t.classList.contains('react-flow__renderer');
-    if (!onPane || !e.shiftKey) return;
-    e.preventDefault();
-    const sx = e.clientX;
-    const sy = e.clientY;
-    setBox({ x: sx, y: sy, w: 0, h: 0 });
-    const move = (ev: MouseEvent) => {
-      setBox({
-        x: Math.min(sx, ev.clientX),
-        y: Math.min(sy, ev.clientY),
-        w: Math.abs(ev.clientX - sx),
-        h: Math.abs(ev.clientY - sy),
-      });
-    };
-    const up = (ev: MouseEvent) => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
-      const bx = Math.min(sx, ev.clientX);
-      const by = Math.min(sy, ev.clientY);
-      const bw = Math.abs(ev.clientX - sx);
-      const bh = Math.abs(ev.clientY - sy);
-      const ids: string[] = [];
-      document.querySelectorAll('.react-flow__node').forEach((el) => {
-        const r = el.getBoundingClientRect();
-        const intersect = r.left < bx + bw && r.right > bx && r.top < by + bh && r.bottom > by;
-        if (intersect) {
-          const id = el.getAttribute('data-id');
-          if (id) ids.push(id);
-        }
-      });
-      setSelection(ids.length ? ids : []);
-      setBox(null);
-    };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
-  };
-
   return (
     <div
       className="pea-canvas-host"
@@ -1042,7 +1000,6 @@ function Flow() {
           t.classList.contains('react-flow__renderer');
         if (onPane) setLibAt({ x: e.clientX, y: e.clientY });
       }}
-      onMouseDown={onPaneMouseDown}
     >
       <CanvasHeader onClose={() => useUi.getState().setActive('workspace')} />
       <CanvasActions />
@@ -1158,7 +1115,11 @@ function Flow() {
           onNodeContextMenu={onNodeCtx}
           onPaneContextMenu={onPaneCtx}
           zoomOnDoubleClick={false}
-          panOnDrag={[1, 2]}
+          // Figma 风格：滚轮平移，拖拽=框选，Space+拖拽=平移
+          panOnDrag={false}
+          panOnScroll
+          selectionOnDrag
+          selectionMode={SelectionMode.Partial}
           defaultViewport={{ x: 0, y: 0, zoom: 1 }}
           minZoom={0.25}
           maxZoom={3}
@@ -1190,12 +1151,6 @@ function Flow() {
         </ReactFlow>
       </div>
 
-      {box && (
-        <div
-          className="pea-sel-box"
-          style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
-        />
-      )}
       <TextNodeToolbar />
       <NodeChatPrompt />
 

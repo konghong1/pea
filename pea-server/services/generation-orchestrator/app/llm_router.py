@@ -37,7 +37,11 @@ class BaseProvider(abc.ABC):
 
 
 class MockProvider(BaseProvider):
-    """本地可跑通的占位 provider: 不调外部, 直接返回确定性占位媒体 URL."""
+    """本地可跑通的占位 provider: 不调外部, 直接返回确定性占位媒体 URL.
+
+    占位图改为自包含 data-URI SVG, 浏览器可直接渲染, 不依赖对象存储里是否存在该文件。
+    (原实现返回 cdn_base_url/mock/<id>.png, 该文件在 minio 中不存在 -> 画廊/画布显示裂图。)
+    """
     name = "mock"
 
     def generate(self, req: dict) -> GenerationResult:
@@ -52,8 +56,30 @@ class MockProvider(BaseProvider):
                 url="", provider=self.name, text=f"[mock] {req.get('prompt', '')[:200]}"
             )
         else:
-            url = f"{settings.cdn_base_url}/mock/{job_id}.png"
+            url = self._placeholder_image(job_id, req.get("prompt", ""))
         return GenerationResult(url=url, provider=self.name)
+
+    @staticmethod
+    def _placeholder_image(job_id: str, prompt: str) -> str:
+        from urllib.parse import quote
+
+        safe = (prompt or "pea mock").replace("\n", " ")[:48]
+        svg = (
+            "<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'>"
+            "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
+            "<stop offset='0' stop-color='#1fa2dc'/>"
+            "<stop offset='1' stop-color='#8b5cf6'/>"
+            "</linearGradient></defs>"
+            "<rect width='512' height='512' rx='28' fill='url(#g)'/>"
+            "<text x='50%' y='46%' fill='white' font-size='30' font-family='sans-serif' "
+            "text-anchor='middle' font-weight='700'>pea 生成预览</text>"
+            f"<text x='50%' y='55%' fill='white' font-size='17' font-family='sans-serif' "
+            f"text-anchor='middle' opacity='0.9'>{safe}</text>"
+            f"<text x='50%' y='92%' fill='white' font-size='13' font-family='sans-serif' "
+            f"text-anchor='middle' opacity='0.6'>{job_id[:8]}</text>"
+            "</svg>"
+        )
+        return "data:image/svg+xml;utf8," + quote(svg)
 
 
 _mock = MockProvider()
@@ -78,6 +104,7 @@ def route(req: dict) -> GenerationResult:
 
     # 解析不到模型 / 提供商停用 -> Mock 兜底 (仅联调) 或直接失败。
     if not cfg or not cfg.get("provider_enabled"):
+        print(f"[router] model '{model_id}' -> unavailable (cfg={bool(cfg)}, enabled={cfg.get('provider_enabled') if cfg else None}), allow_mock={settings.allow_mock_fallback}")
         if settings.allow_mock_fallback or (cfg and cfg.get("provider_type") == "mock"):
             return _mock.generate(req)
         raise RuntimeError(f"model '{model_id}' unavailable (not found or provider disabled)")
@@ -90,6 +117,9 @@ def route(req: dict) -> GenerationResult:
         try:
             return _make_real_provider(cfg).generate(req)
         except Exception as e:  # noqa: BLE001
+            import traceback as _tb
+            print(f"[router] !! generate() raised -> {type(e).__name__}: {e}")
+            print(f"[router] traceback:\n{_tb.format_exc()}")
             _emit_fallback_alert(req, cfg.get("provider_name", "provider"), e)
             if settings.allow_mock_fallback:
                 return _mock.generate(req)

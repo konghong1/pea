@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 
-from app import db, models
+from app import db, models, storage
 from app.compensation import refund_on_failure
 from app.config import settings
-from app.llm_router import route
+from app.llm_router import route, _mock
 from app.redis_conn import client, publish_event
 from services.shared.events import GEN_QUEUE, job_updated, notification
 
@@ -38,6 +39,41 @@ def _enter(user_id: int) -> bool:
 def _leave(user_id: int) -> None:
     with _in_flight_lock:
         _in_flight[user_id] = max(0, _in_flight.get(user_id, 1) - 1)
+
+
+# 硬超时护栏：真实提供商调用（DNS/连接黑洞）可能既不返回也不抛异常，导致单线程
+# worker 永久阻塞、任务卡 running。超过此时间强制回退 MockProvider，保证任务总能走到终态。
+# 阈值必须 > PEA_PROVIDER_IMAGE_TIMEOUT_S，否则会把正常的慢速生成（Agnes 18~77s 且有波动）
+# 误判为卡死而强制 mock。这里派生为 image_timeout + 30s，随 compose 配置自动联动。
+_HARD_TIMEOUT = float(os.environ.get("PEA_WORKER_HARD_TIMEOUT_S", str(int(settings.provider_image_timeout_s) + 30)))
+
+
+def _route_with_watchdog(payload: dict):
+    """在独立守护线程执行 route()，加硬超时护栏。
+
+    返回 (GenerationResult, None) 正常；或 (None, Exception) 表示 route 内部抛错
+    （交由上层置 FAILED + 退款）；若超时仍未返回则强制 Mock 兜底。
+    """
+    box: dict = {}
+    err: dict = {}
+
+    def _run() -> None:
+        try:
+            box["r"] = route(payload)
+        except Exception as e:  # noqa: BLE001
+            err["e"] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(_HARD_TIMEOUT)
+    if "r" in box:
+        print(f"[worker] route() completed normally, provider={box['r'].provider}, url={box['r'].url[:80]}")
+        return box["r"], None
+    if "e" in err:
+        print(f"[worker] route() raised exception: {err['e']}")
+        return None, err["e"]
+    print(f"[worker] route() exceeded {_HARD_TIMEOUT}s hard timeout (model={payload.get('model')}, type={payload.get('type')}), forcing mock fallback")
+    return _mock.generate(payload), None
 
 
 def _ensure_group() -> None:
@@ -68,7 +104,9 @@ def _process(job_id: str, payload: dict) -> None:
         ))
         # 确保 job_id 进入 payload, 供 MockProvider 生成确定性占位 URL。
         payload.setdefault("job_id", job_id)
-        result = route(payload)
+        result, route_err = _route_with_watchdog(payload)
+        if route_err is not None:
+            raise route_err
         result_obj: dict = {"url": result.url, "provider": result.provider}
         if result.text is not None:
             result_obj["text"] = result.text
@@ -124,6 +162,8 @@ def run_once() -> None:
 
 def run_forever() -> None:
     _ensure_group()
+    # 后台尽力设置 gen/ 公开读策略(幂等, 不阻塞生成热路径; 冷启动慢调用由重试护栏兜底)。
+    threading.Thread(target=storage.ensure_public_policy, daemon=True).start()
     print("[worker] started")
     while not _stop:
         try:

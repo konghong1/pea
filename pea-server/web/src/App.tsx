@@ -6,11 +6,13 @@ import Workspace from './components/Workspace';
 import Toast from './components/Toast';
 import { useAuth } from './store/auth';
 import { useTheme } from './store/theme';
+import { installPopState } from './store/ui';
 
 export default function App() {
   const token = useAuth((s) => s.token);
   const { mode, init } = useTheme();
   useEffect(() => init(), [init]);
+  useEffect(() => installPopState(), []);
 
   const isDark =
     mode === 'dark' ||

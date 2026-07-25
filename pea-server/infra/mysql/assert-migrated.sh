@@ -16,7 +16,9 @@ HOST="${DB_HOST:-mysql}"
 PORT="${DB_PORT:-3306}"
 ROOT="${DB_ROOT_PASSWORD:-pea_root}"
 DB="${DB_NAME:-pea}"
-MYSQL_BIN="mysql -h $HOST -P $PORT -uroot -p$ROOT --connect-timeout=5"
+# 必须显式指定 utf8mb4: 容器内 mysql 客户端默认 charset 可能不是 utf8mb4,
+# 会导致含中文的种子 (提供商名/模型名/套餐名) 被按 latin1 解读再双编码成乱码。
+MYSQL_BIN="mysql -h $HOST -P $PORT -uroot -p$ROOT --default-character-set=utf8mb4 --connect-timeout=5"
 
 echo "[assert-migrated] waiting for mysql to accept connections..."
 for _ in $(seq 1 60); do
@@ -289,7 +291,8 @@ INSERT INTO $DB.ai_models (id, provider_id, model_name, display_name, model_type
  JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(), '对话/文本生成', 4)
 ON DUPLICATE KEY UPDATE model_name=VALUES(model_name), display_name=VALUES(display_name),
     model_type=VALUES(model_type), pricing_json=VALUES(pricing_json),
-    params_schema_json=VALUES(params_schema_json), min_plan_level=VALUES(min_plan_level);
+    params_schema_json=VALUES(params_schema_json), min_plan_level=VALUES(min_plan_level),
+    description=VALUES(description);
 
 INSERT INTO $DB.billing_plans (id, name, plan_level, price_cents, tapies, duration_days, enabled, sort_order, features_json) VALUES
 ('free',  '免费体验', 0,    0,  1000,  0,  1, 0, JSON_ARRAY('注册即送 1000 Tapies', '可用免费级模型')),

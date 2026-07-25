@@ -71,7 +71,20 @@ class _Conn:
         return self._raw
 
     def __exit__(self, *exc) -> bool:
-        _get_pool().release(self._raw)
+        # 归还前必须回滚未提交事务 (连接池卫生).
+        # 自定义连接池复用同一物理连接, 而 MySQL 默认 autocommit=False + REPEATABLE READ:
+        # 任何 SELECT/SELECT..FOR UPDATE 都会开启一个事务并固定快照.
+        # 若带着未提交事务回到池中, 下次该连接上的 SELECT 仍看旧快照,
+        # 看不到新插入的行 -> get_job 对存在的 job 误报 404 -> BFF 透传为 500.
+        # 显式 rollback 只丢弃被中断/泄漏的事务; 已 commit 的事务 rollback 为 no-op, 安全.
+        try:
+            if getattr(self._raw, "open", False):
+                try:
+                    self._raw.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+        finally:
+            _get_pool().release(self._raw)
         return False
 
     def __getattr__(self, name):
