@@ -1,27 +1,6 @@
-import { Controller, Get, Patch, Param, Body, UseGuards } from '@nestjs/common';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { ProvidersService } from './providers.service';
-import { UpdateProviderDto } from './providers.dto';
-
-@Controller('providers')
-@UseGuards(JwtAuthGuard)
-export class ProvidersController {
-  constructor(private readonly providers: ProvidersService) {}
-
-  /** 列出当前用户的 AI Provider 配置 (首次访问自动种子). */
-  @Get()
-  list(@CurrentUser() u: { sub: number }) {
-    return this.providers.list(u.sub);
-  }
-
-  /** 切换启用状态 / 设为默认 (FR-G7). */
-  @Patch(':id')
-  update(
-    @CurrentUser() u: { sub: number },
-    @Param('id') id: string,
-    @Body() dto: UpdateProviderDto,
-  ) {
-    return this.providers.update(u.sub, id, dto);
-  }
-}
+// 旧的按用户隔离 Provider 控制器已废弃 (改为全局管理员级)。
+// 保留空文件以避免历史 import 悬挂; 新入口见:
+//   - admin-providers.controller.ts  (管理员 提供商 CRUD)
+//   - admin-models.controller.ts     (管理员 模型 CRUD)
+//   - models.controller.ts           (用户侧 可用模型 + 价格预估)
+export {};

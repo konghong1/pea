@@ -8,6 +8,8 @@ import Ecom from './pages/Ecom';
 import TapTV from './pages/TapTV';
 import Arena from './pages/Arena';
 import Account from './pages/Account';
+import Plans from './pages/Plans';
+import Admin from './pages/Admin';
 import { useUi } from '../store/ui';
 
 /**
@@ -50,6 +52,8 @@ export default function Workspace() {
             {active === 'ecom' && <Ecom />}
             {active === 'tvtv' && <TapTV />}
             {active === 'arena' && <Arena />}
+            {active === 'plans' && <Plans />}
+            {active === 'admin' && <Admin />}
           </div>
         )}
       </div>

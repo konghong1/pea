@@ -19,7 +19,7 @@ function UserCard({ name }: { name: string }) {
 
 /** 顶栏用户菜单 (FR-M5-07)：头像下拉，含用户统计与全功能入口。 */
 export default function UserMenu() {
-  const { user, logout } = useAuth();
+  const { user, logout, isAdmin } = useAuth();
   const setActive = useUi((s) => s.setActive);
   const setAccountPane = useUi((s) => s.setAccountPane);
   const [open, setOpen] = useState(false);
@@ -32,17 +32,24 @@ export default function UserMenu() {
     setAccountPane(pane);
     setActive('account');
   };
+  const goPage = (page: 'plans' | 'admin') => () => {
+    setOpen(false);
+    setActive(page);
+  };
 
   const items = [
     { key: 'card', label: <UserCard name={user?.displayName ?? '用户'} />, disabled: true },
     { type: 'divider' as const },
     { key: 'account', label: '账户中心', onClick: goAccount('profile') },
-    { key: 'settings', label: 'AI Provider 设置', onClick: goAccount('aiprov') },
+    // 管理员专属：AI 提供商/模型/套餐 控制台（非管理员不展示；后端 AdminGuard 兜底）
+    ...(isAdmin
+      ? [{ key: 'admin', label: '⚙️ 管理员控制台', onClick: goPage('admin') }]
+      : []),
     { key: 'profile', label: '个人主页', onClick: soon('个人主页') },
     { key: 'notif', label: '通知', onClick: () => setOpen(false) },
     { type: 'divider' as const },
     { key: 'gift', label: '礼包超市', onClick: soon('礼包超市') },
-    { key: 'sub', label: '订阅', onClick: soon('订阅') },
+    { key: 'sub', label: '订阅套餐', onClick: goPage('plans') },
     { type: 'divider' as const },
     { key: 'tutorial', label: '使用教程', onClick: soon('使用教程') },
     { key: 'help', label: '帮助中心', onClick: soon('帮助中心') },

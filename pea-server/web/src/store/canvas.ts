@@ -35,6 +35,14 @@ interface CanvasState {
   lastSavedAt: number | null;
   saveCount: number;
   clipboard: Node<PeaNodeData> | null;
+  /** 生成任务 jobId -> 触发节点 id，用于把异步生成结果回写到对应节点。 */
+  jobNodeMap: Record<string, string>;
+  /** 登记一次生成任务与其触发节点，供 WS job.updated 事件回写结果。 */
+  registerJob: (jobId: string, nodeId: string) => void;
+  /** 按 jobId 把生成结果/状态 patch 回写到对应节点（自动查 jobNodeMap）。 */
+  applyJobResult: (jobId: string, patch: Partial<PeaNodeData>) => void;
+  /** 任务终态后清理 jobNodeMap 登记。 */
+  removeJob: (jobId: string) => void;
 
   setCanvasMeta: (id: number, version: number, title?: string) => void;
   onNodesChange: (c: NodeChange[]) => void;
@@ -80,6 +88,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   lastSavedAt: null,
   saveCount: 0,
   clipboard: null,
+  jobNodeMap: {},
 
   setCanvasMeta: (id, version, title) =>
     set({ canvasId: id, version, ...(title !== undefined ? { title } : {}) }),
@@ -238,4 +247,24 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     });
   },
   bumpSave: () => set({ saveCount: get().saveCount + 1 }),
+  registerJob: (jobId, nodeId) =>
+    set((s) => ({ jobNodeMap: { ...s.jobNodeMap, [jobId]: nodeId } })),
+  applyJobResult: (jobId, patch) =>
+    set((s) => {
+      const nodeId = s.jobNodeMap[jobId];
+      if (!nodeId) return {};
+      return {
+        dirty: true,
+        nodes: s.nodes.map((n) =>
+          n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n,
+        ),
+      };
+    }),
+  removeJob: (jobId) =>
+    set((s) => {
+      if (!(jobId in s.jobNodeMap)) return {};
+      const next = { ...s.jobNodeMap };
+      delete next[jobId];
+      return { jobNodeMap: next };
+    }),
 }));

@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 
-export type PageKey = 'home' | 'workspace' | 'canvas' | 'account' | 'settings' | 'ecom' | 'tvtv' | 'arena';
+export type PageKey =
+  | 'home'
+  | 'workspace'
+  | 'canvas'
+  | 'account'
+  | 'settings'
+  | 'ecom'
+  | 'tvtv'
+  | 'arena'
+  | 'plans'
+  | 'admin';
 
 /** 账户中心 7 面板 (对齐 pea-canvas-v12.html `.acct-layout`)。 */
 export type AccountPane =

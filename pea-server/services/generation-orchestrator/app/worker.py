@@ -66,10 +66,15 @@ def _process(job_id: str, payload: dict) -> None:
             job_id=job_id, user_id=user_id, type=payload.get("type", "image"),
             status="running", progress=0.6,
         ))
+        # 确保 job_id 进入 payload, 供 MockProvider 生成确定性占位 URL。
+        payload.setdefault("job_id", job_id)
         result = route(payload)
+        result_obj: dict = {"url": result.url, "provider": result.provider}
+        if result.text is not None:
+            result_obj["text"] = result.text
         db.update_job_status(
             job_id, models.JobStatus.DONE.value,
-            result_json=json.dumps({"url": result.url, "provider": result.provider}, ensure_ascii=False),
+            result_json=json.dumps(result_obj, ensure_ascii=False),
             cost_tapies=int(payload.get("cost_tapies", settings.default_cost_tapies)),
         )
         publish_event(job_updated(

@@ -6,4 +6,5 @@ pymysql==1.1.1
 redis==5.1.1
 minio==7.2.11
 httpx==0.27.2
+requests==2.32.3
 python-multipart==0.0.9

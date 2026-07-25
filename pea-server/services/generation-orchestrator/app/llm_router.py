@@ -1,7 +1,14 @@
-"""AI 路由层: 统一接入外部大模型, 失败自动回退 (ARCH D5 / ADR-004 LiteLLM).
+"""AI 路由层: 统一接入外部大模型 (ARCH D5 / ADR-004).
 
 本文件是"编排不出图"原则的核心: orchestrator 只调用外部模型, 不自己生图。
-真实环境经 LiteLLM 路由 (provider_primary -> provider_fallback); 本地开发用 MockProvider 直接跑通全链路。
+
+路由策略 (重构后, 按模型驱动):
+- 请求携带 model (= ai_models.id); 编排器据此从 DB 解析真实模型名 + 提供商配置。
+- provider_type == 'mock'  -> MockProvider (本地占位, 不出网, 联调可用)。
+- provider_type == 'openai-compatible' -> OpenAICompatibleProvider (真实调用 Agnes 等)。
+- 解析不到模型/提供商停用 -> 视 settings.allow_mock_fallback 决定回退 Mock 还是失败。
+- 真实提供商调用失败 -> 直接抛出 (worker 置 FAILED + 退款), 默认不静默回退到 Mock,
+  以免给已扣费用户返回假结果并掩盖故障 (allow_mock_fallback=True 时仅供离线联调)。
 """
 from __future__ import annotations
 
@@ -9,14 +16,16 @@ import abc
 import time
 import uuid
 
+from app import db
 from app.config import settings
 
 
 class GenerationResult:
-    def __init__(self, url: str, provider: str, raw: dict | None = None):
+    def __init__(self, url: str, provider: str, raw: dict | None = None, text: str | None = None):
         self.url = url
         self.provider = provider
         self.raw = raw or {}
+        self.text = text  # 文本生成结果 (图像/视频为 None)
 
 
 class BaseProvider(abc.ABC):
@@ -35,60 +44,70 @@ class MockProvider(BaseProvider):
         # 模拟出图耗时
         time.sleep(0.3)
         job_id = req.get("job_id", uuid.uuid4().hex)
-        if req.get("type") == "video":
+        kind = req.get("type")
+        if kind == "video":
             url = f"{settings.cdn_base_url}/mock/{job_id}.mp4"
-        elif req.get("type") == "text":
-            url = f"{settings.cdn_base_url}/mock/{job_id}.txt"
+        elif kind == "text":
+            return GenerationResult(
+                url="", provider=self.name, text=f"[mock] {req.get('prompt', '')[:200]}"
+            )
         else:
             url = f"{settings.cdn_base_url}/mock/{job_id}.png"
         return GenerationResult(url=url, provider=self.name)
 
 
-class LiteLLMProvider(BaseProvider):
-    """真实 provider 模板: 经 litellm 路由到 MJ/Kling/OpenAI 等。
-
-    实际部署时 `pip install litellm` 并填充 call_llm。失败时抛出, 由 router 切 fallback。
-    """
-
-    def __init__(self, litellm_model: str):
-        self.name = f"litellm:{litellm_model}"
-        self.litellm_model = litellm_model
-
-    def generate(self, req: dict) -> GenerationResult:
-        # from litellm import completion  # 真实环境取消注释
-        # resp = completion(model=self.litellm_model, messages=[{"role":"user","content":req["prompt"]}])
-        # ... 调外部并上传到 S3, 返回 CDN URL
-        raise NotImplementedError("LiteLLM provider 需按真实密钥/模型接入")
+_mock = MockProvider()
 
 
-_PROVIDERS: dict[str, BaseProvider] = {
-    "mock": MockProvider(),
-}
+def _make_real_provider(cfg: dict):
+    """按 DB 提供商行构造真实适配器 (延迟导入, 避免与 agnes_provider 形成环)。"""
+    from app.agnes_provider import OpenAICompatibleProvider
 
-
-def get_provider(name: str) -> BaseProvider:
-    if name not in _PROVIDERS:
-        # 未注册的视为 LiteLLM 模型名
-        _PROVIDERS[name] = LiteLLMProvider(name)
-    return _PROVIDERS[name]
+    return OpenAICompatibleProvider(cfg)
 
 
 def route(req: dict) -> GenerationResult:
-    """主 provider 失败 -> 自动切 fallback (ARCH 风险 R2)."""
-    order = [settings.provider_primary, settings.provider_fallback]
-    last_err: Exception | None = None
-    for name in order:
+    """按 model 解析提供商并调用; 真实失败按策略决定回退 Mock 还是抛出。"""
+    model_id = req.get("model")
+    cfg = None
+    try:
+        cfg = db.get_model_with_provider(model_id) if model_id else None
+    except Exception as e:  # noqa: BLE001  DB 抖动不应让整条链路崩, 记录后按缺省处理
+        print(f"[router] resolve model '{model_id}' failed: {e}")
+        cfg = None
+
+    # 解析不到模型 / 提供商停用 -> Mock 兜底 (仅联调) 或直接失败。
+    if not cfg or not cfg.get("provider_enabled"):
+        if settings.allow_mock_fallback or (cfg and cfg.get("provider_type") == "mock"):
+            return _mock.generate(req)
+        raise RuntimeError(f"model '{model_id}' unavailable (not found or provider disabled)")
+
+    provider_type = cfg.get("provider_type")
+    if provider_type == "mock":
+        return _mock.generate(req)
+
+    if provider_type == "openai-compatible":
         try:
-            return get_provider(name).generate(req)
+            return _make_real_provider(cfg).generate(req)
         except Exception as e:  # noqa: BLE001
-            last_err = e
-            # 发布告警事件 (由 BFF 转通知)
-            from app.redis_conn import publish_event
-            from services.shared.events import notification
-            publish_event(notification(
-                user_id=req.get("user_id", 0),
-                title="Provider 回退",
-                body=f"主 provider `{name}` 失败, 尝试回退。",
-                level="warning",
-            ))
-    raise last_err or RuntimeError("all providers failed")
+            _emit_fallback_alert(req, cfg.get("provider_name", "provider"), e)
+            if settings.allow_mock_fallback:
+                return _mock.generate(req)
+            raise  # 传播 -> worker 置 FAILED -> 退款
+
+    raise RuntimeError(f"unsupported provider_type: {provider_type}")
+
+
+def _emit_fallback_alert(req: dict, provider_name: str, err: Exception) -> None:
+    try:
+        from app.redis_conn import publish_event
+        from services.shared.events import notification
+
+        publish_event(notification(
+            user_id=int(req.get("user_id", 0) or 0),
+            title="生成失败",
+            body=f"提供商 `{provider_name}` 调用失败: {str(err)[:160]}",
+            level="error",
+        ))
+    except Exception as e:  # noqa: BLE001
+        print(f"[router] emit alert failed: {e}")

@@ -83,6 +83,37 @@ def get_conn() -> _Conn:
     return _Conn(_get_pool().acquire())
 
 
+def get_model_with_provider(model_id: str) -> dict | None:
+    """按 ai_models.id 联表取模型 + 其提供商配置 (含明文密钥, 仅内部服务使用)。
+
+    返回单行 dict: model_name / model_type / provider_type / base_url / api_key / provider_name 等,
+    找不到或提供商停用返回 None (由调用方决定回退 Mock 还是失败)。
+    """
+    if not model_id:
+        return None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT m.id            AS model_id,
+                       m.model_name    AS model_name,
+                       m.model_type    AS model_type,
+                       m.enabled       AS model_enabled,
+                       p.id            AS provider_id,
+                       p.name          AS provider_name,
+                       p.provider_type AS provider_type,
+                       p.base_url      AS base_url,
+                       p.api_key       AS api_key,
+                       p.enabled       AS provider_enabled
+                FROM ai_models m
+                JOIN ai_providers p ON p.id = m.provider_id
+                WHERE m.id = %s
+                """,
+                [model_id],
+            )
+            return cur.fetchone()
+
+
 def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies=None) -> None:
     """更新任务状态, 并强制校验状态机合法性 (T-GEN-01).
 

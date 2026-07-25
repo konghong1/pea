@@ -1,43 +1,63 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { BillingService } from '../billing/billing.service';
+import { ModelsService } from '../providers/models.service';
 import { OrchestratorHttpClient } from '../orchestrator-client/orchestrator-http.service';
 import { AcceptGenerationDto } from './generation.dto';
 
-const DEFAULT_COST = 10;
-
 /**
- * 生成受理 (T-GEN-02): 校验 -> 预扣积分 -> 写 job(交编排器) -> 返 jobId (p95<2s).
- * 关键点: 预扣失败直接返回明确错误; 预扣成功但下游失败时, 由 orchestrator 补偿退款.
+ * 生成受理 (T-GEN-02): 解析模型 + 访问控制 -> 服务端算价 -> 预扣 -> 交编排器 -> 返 jobId.
+ *
+ * 安全red线 (资深复核):
+ *  - 价格一律由服务端按 模型 pricing_json + 请求参数计算, 忽略任何客户端传入金额。
+ *  - 访问控制: 模型 min_plan_level 高于用户生效权益 -> 403, 不预扣。
+ *  - 预扣成功但下游受理失败 -> 立即本地退款, 避免积分悬空。
  */
 @Injectable()
 export class GenerationService {
   constructor(
     private readonly billing: BillingService,
+    private readonly models: ModelsService,
     private readonly orch: OrchestratorHttpClient,
   ) {}
 
   async accept(userId: number, dto: AcceptGenerationDto) {
-    const cost = dto.costTapies ?? DEFAULT_COST;
-    const idem = dto.idempotencyKey ?? `${userId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const params = dto.params ?? {};
 
-    // 1) 预扣 (强一致, 幂等). 必须 await: 原实现未 await, 下游失败时积分已扣却无退款 -> 白送.
+    // 1) 解析模型 + 访问控制 (未解锁模型/停用模型/停用提供商在此抛错, 不进入扣费)
+    const { model } = await this.models.resolveForGeneration(userId, dto.model, dto.type);
+
+    // 2) 服务端权威算价 (按参数动态计价)
+    const cost = this.models.computeCost(model.pricing_json, params);
+    if (!Number.isFinite(cost) || cost <= 0) {
+      throw new BadRequestException('invalid computed cost');
+    }
+
+    const idem =
+      dto.idempotencyKey ??
+      `${userId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+    // 3) 预扣 (强一致, 幂等). 必须 await.
     await this.billing.preauthorize(userId, cost, `${idem}:preauth`);
 
-    // 2) 受理 (交编排器落库+入队). 若受理失败, 立即本地退款, 避免积分悬空 (资深开发复核 T-GEN-02).
-    //    说明: 仅当 job 未成功创建时才本地退; job 创建成功后由 orchestrator 失败补偿负责退款,
-    //    二者 txn_id 不同键 (预扣=${idem}:preauth, 退款=${job_id}:refund) 互不冲突, 不会双退。
+    // 4) 受理 (交编排器落库+入队). 传 model.id 供编排器从 DB 解析提供商密钥与真实模型名.
     try {
       const job = await this.orch.acceptJob({
         user_id: userId,
         type: dto.type,
         prompt: dto.prompt,
-        model: dto.model,
+        model: model.id,
+        params,
         priority: dto.priority ?? 'normal',
         idempotency_key: idem,
         cost_tapies: cost,
       });
 
-      return { jobId: job.jobId, status: job.status, costTapies: job.cost_tapies };
+      return {
+        jobId: job.jobId,
+        status: job.status,
+        costTapies: cost,
+        model: { id: model.id, name: model.display_name, modelName: model.model_name },
+      };
     } catch (err) {
       await this.billing.refund(userId, cost, `${idem}:refund`);
       throw err;

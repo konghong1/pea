@@ -9,6 +9,7 @@ import { GenerationModule } from './modules/generation/generation.module';
 import { FilesModule } from './modules/files/files.module';
 import { CanvasesModule } from './modules/canvases/canvases.module';
 import { ProvidersModule } from './modules/providers/providers.module';
+import { PlansModule } from './modules/plans/plans.module';
 import { CommunityModule } from './modules/community/community.module';
 import { GatewayModule } from './modules/gateway/gateway.module';
 import { RateLimitMiddleware } from './common/rate-limit.middleware';
@@ -25,6 +26,7 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
     FilesModule,
     CanvasesModule,
     ProvidersModule,
+    PlansModule,
     CommunityModule,
     GatewayModule,
   ],

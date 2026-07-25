@@ -19,17 +19,22 @@ const NAV: { key: PageKey; label: string }[] = [
 
 /** 顶部全局导航 (FR-G1)：Logo + 导航项 + 积分/分享/通知/主题/用户。 */
 export default function TopNav() {
-  const { balance, setBalance } = useAuth();
+  const { balance, setBalance, refreshMe } = useAuth();
   const { mode, setMode } = useTheme();
   const { active, setActive } = useUi();
   const { message } = App.useApp();
 
+  // 拉取 /users/me 同步余额 + 角色(isAdmin) + 权益等级；失败回退到仅取余额。
   useEffect(() => {
-    api
-      .get('/billing/balance')
-      .then((r) => setBalance(r.data.balance))
-      .catch(() => {});
-  }, [setBalance]);
+    refreshMe().then((ok) => {
+      if (!ok) {
+        api
+          .get('/billing/balance')
+          .then((r) => setBalance(r.data.balance))
+          .catch(() => {});
+      }
+    });
+  }, [refreshMe, setBalance]);
 
   const onShare = async () => {
     const url = window.location.href;

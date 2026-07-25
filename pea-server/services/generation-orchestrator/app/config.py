@@ -39,6 +39,21 @@ class Settings(BaseSettings):
     provider_primary: str = "mock"
     provider_fallback: str = "mock"
 
+    # 外部提供商调用 (Agnes 等 OpenAI 兼容)
+    # 图像同步出图较慢, 用较长超时; 视频提交后异步轮询。
+    provider_image_timeout_s: int = 300
+    provider_video_submit_timeout_s: int = 120
+    provider_http_connect_timeout_s: int = 15
+    # 视频轮询: 每 interval 秒查一次, 最多等 max 秒 (超时 -> 失败 -> 退款)。
+    video_poll_interval_s: int = 5
+    video_poll_max_s: int = 300
+    # 真实提供商失败时是否回退到 Mock。
+    # 生产必须为 False: 回退会给已扣费的用户返回假图并掩盖真实故障。
+    # 仅离线联调 (无外网) 时可临时置 True。
+    allow_mock_fallback: bool = False
+    # 生成结果在对象存储中的公开前缀 (浏览器可直接读取 CDN URL)。
+    media_public_prefix: str = "gen"
+
     # Worker
     worker_enabled: bool = True
     worker_poll_ms: int = 500

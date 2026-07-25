@@ -2,18 +2,13 @@ import { useEffect, useState } from 'react';
 import { Card, Avatar, Spin, Table, Tag, Empty, Switch, Button, App, Input, Select } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { api } from '../../api/client';
+import { listAvailableModels } from '../../api/catalog';
+import type { AvailableModel, MeProfile } from '../../api/catalog';
 import { useAuth } from '../../store/auth';
 import { useUi, type AccountPane } from '../../store/ui';
 import { toast } from '../../store/toast';
 
 /* ───────────────────────── 类型 ───────────────────────── */
-interface Profile {
-  id: number;
-  email: string;
-  display_name: string;
-  avatar_url: string | null;
-  created_at: string;
-}
 interface LedgerRow {
   id: number;
   type: 'preauth' | 'confirm' | 'refund' | 'grant';
@@ -22,19 +17,11 @@ interface LedgerRow {
   balance_after: number;
   created_at: string;
 }
-interface Provider {
-  id: string;
-  name: string;
-  kind: 'image' | 'video' | 'text' | 'audio';
-  enabled: boolean;
-  isDefault: boolean;
-  config: any;
-}
-const KIND_COLOR: Record<Provider['kind'], string> = {
-  image: 'purple',
-  video: 'blue',
-  text: 'green',
-  audio: 'orange',
+const MODEL_TYPE_LABEL: Record<string, { color: string; text: string }> = {
+  image: { color: 'purple', text: '图像' },
+  video: { color: 'blue', text: '视频' },
+  text: { color: 'green', text: '文本' },
+  audio: { color: 'orange', text: '音频' },
 };
 
 /* ─────────────────── 账户中心 7 面板导航 ─────────────────── */
@@ -76,14 +63,14 @@ export default function Account() {
   useEffect(() => setPane(initialPane), [initialPane]);
 
   const { user } = useAuth();
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profile, setProfile] = useState<MeProfile | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
-      api.get('/users/me').then((r) => setProfile((r.data as Profile) ?? null)).catch(() => {}),
+      api.get('/users/me').then((r) => setProfile((r.data as MeProfile) ?? null)).catch(() => {}),
       api.get('/billing/balance').then((r) => setBalance((r.data as any)?.balance ?? 0)).catch(() => {}),
       api
         .get('/billing/ledger?page=1&size=20')
@@ -102,7 +89,7 @@ export default function Account() {
     );
   }
 
-  const displayName = profile?.display_name || user?.displayName || '用户';
+  const displayName = profile?.displayName || user?.displayName || '用户';
   const email = profile?.email || user?.email || '';
 
   return (
@@ -174,12 +161,12 @@ function ProfilePane({
   email,
   ledger,
 }: {
-  profile: Profile | null;
+  profile: MeProfile | null;
   displayName: string;
   email: string;
   ledger: LedgerRow[];
 }) {
-  const [nick, setNick] = useState(profile?.display_name || displayName);
+  const [nick, setNick] = useState(profile?.displayName || displayName);
   const [bio, setBio] = useState('I am turning imagination into reality.');
   const [mail, setMail] = useState(profile?.email || email);
 
@@ -292,46 +279,22 @@ function GeneralPane() {
 /* ════════════════ AI 提供商（复用 /providers API） ════════════════ */
 function ProviderPane() {
   const { message } = App.useApp();
-  const [list, setList] = useState<Provider[]>([]);
+  const [list, setList] = useState<AvailableModel[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
-    api
-      .get('/providers')
-      .then((r) => setList((r.data as Provider[]) ?? []))
-      .catch(() => message.error('加载 Provider 失败'))
+    listAvailableModels()
+      .then((r) => setList(r ?? []))
+      .catch(() => message.error('加载可用模型失败'))
       .finally(() => setLoading(false));
   }, [message]);
 
-  const toggle = async (p: Provider) => {
-    setBusy(p.id);
-    try {
-      await api.patch(`/providers/${p.id}`, { enabled: !p.enabled });
-      setList((l) => l.map((x) => (x.id === p.id ? { ...x, enabled: !x.enabled } : x)));
-    } catch {
-      message.error('更新失败');
-    } finally {
-      setBusy(null);
-    }
-  };
-  const setDefault = async (p: Provider) => {
-    setBusy(p.id);
-    try {
-      await api.patch(`/providers/${p.id}`, { isDefault: true });
-      setList((l) => l.map((x) => ({ ...x, isDefault: x.id === p.id })));
-      message.success(`已将 ${p.name} 设为默认`);
-    } catch {
-      message.error('设置默认失败');
-    } finally {
-      setBusy(null);
-    }
-  };
+  const goPlans = () => useUi.getState().setActive('plans');
 
   if (loading) {
     return (
       <section className="acct-pane active">
-        <h3 className="acct-pane-title">限制项目 AI 提供商配置</h3>
+        <h3 className="acct-pane-title">可用 AI 模型</h3>
         <div style={{ marginTop: 24 }}>
           <Spin />
         </div>
@@ -341,51 +304,59 @@ function ProviderPane() {
 
   return (
     <section className="acct-pane active">
-      <h3 className="acct-pane-title">限制项目 AI 提供商配置</h3>
+      <h3 className="acct-pane-title">可用 AI 模型</h3>
       <p className="acct-hint">
-        为当前项目限定可使用的模型提供商；关闭后，该项目生成将不会调用对应服务。
+        AI 提供商与模型由平台统一配置，你无需自行填写 API Key。
+        提升套餐等级可解锁更多模型与更低权益门槛。
       </p>
       <div className="pea-card-grid" style={{ marginTop: 18 }}>
-        {list.map((p) => (
-          <Card
-            key={p.id}
-            styles={{ body: { padding: 18 } }}
-            className="pea-card"
-            style={{ borderColor: p.isDefault ? 'var(--pea-brand)' : undefined }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ color: 'var(--pea-brand)', fontWeight: 600 }}>{p.name}</span>
-                  {p.isDefault && (
-                    <Tag color="purple" style={{ marginInlineEnd: 0 }}>
-                      默认
-                    </Tag>
-                  )}
-                </div>
-                <div style={{ marginTop: 8 }}>
-                  <Tag color={KIND_COLOR[p.kind]}>{p.kind}</Tag>
-                </div>
-              </div>
-              <Switch
-                checked={p.enabled}
-                loading={busy === p.id}
-                onChange={() => toggle(p)}
-                aria-label={`启用 ${p.name}`}
-              />
-            </div>
-            <div style={{ marginTop: 16 }}>
-              <Button
-                size="small"
-                type={p.isDefault ? 'default' : 'primary'}
-                disabled={p.isDefault || busy === p.id}
-                onClick={() => setDefault(p)}
+        {list.length === 0 ? (
+          <Empty description="暂无可用的模型" />
+        ) : (
+          list.map((m) => {
+            const t = MODEL_TYPE_LABEL[m.modelType] ?? { color: 'default', text: m.modelType };
+            return (
+              <Card
+                key={m.id}
+                styles={{ body: { padding: 18 } }}
+                className="pea-card"
+                style={{ borderColor: m.isDefault ? 'var(--pea-brand)' : undefined }}
               >
-                {p.isDefault ? '当前默认' : '设为默认'}
-              </Button>
-            </div>
-          </Card>
-        ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ color: 'var(--pea-brand)', fontWeight: 600 }}>{m.displayName}</span>
+                      {m.isDefault && (
+                        <Tag color="purple" style={{ marginInlineEnd: 0 }}>
+                          默认
+                        </Tag>
+                      )}
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <Tag color={t.color}>{t.text}</Tag>
+                      {m.description && (
+                        <span style={{ marginLeft: 8, color: 'var(--pea-text-muted)', fontSize: 12 }}>
+                          {m.description}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <Tag color={m.allowed ? 'green' : 'orange'}>
+                    {m.allowed ? '可用' : `需 Lv.${m.minPlanLevel}`}
+                  </Tag>
+                </div>
+                <div style={{ marginTop: 16, fontSize: 13, color: 'var(--pea-text-muted)' }}>
+                  基础参考价：<b>💎 {m.baseCost}</b> Tapies（实际按参数动态计）
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <Button size="small" type="link" onClick={goPlans}>
+                    订阅套餐解锁更多 →
+                  </Button>
+                </div>
+              </Card>
+            );
+          })
+        )}
       </div>
     </section>
   );

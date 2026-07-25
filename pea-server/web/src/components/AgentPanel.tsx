@@ -10,6 +10,8 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { api } from '../api/client';
+import { listAvailableModels } from '../api/catalog';
+import type { AvailableModel } from '../api/catalog';
 import { useAgent, AgentModel } from '../store/agent';
 import { useAuth } from '../store/auth';
 import { useCanvas } from '../store/canvas';
@@ -55,6 +57,14 @@ export default function AgentPanel() {
   const user = useAuth((s) => s.user);
   const [input, setInput] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
+  // 默认图片生成模型（供"生成图片"指令真实提交，标签动态展示）
+  const [genModel, setGenModel] = useState<AvailableModel | null>(null);
+
+  useEffect(() => {
+    listAvailableModels('image')
+      .then((list) => setGenModel(list.find((m) => m.isDefault) ?? list[0] ?? null))
+      .catch(() => setGenModel(null));
+  }, []);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
@@ -127,8 +137,15 @@ export default function AgentPanel() {
         const gen = useCanvas.getState().nodes.find((n) => n.data.kind === 'generate');
         if (gen?.data.prompt) {
           api
-            .post('/generation/jobs', { type: 'image', prompt: gen.data.prompt, priority: 'normal' })
-            .then(() => push('assistant', '已自动受理该生成任务，进度会在右侧属性面板更新。'))
+            .post('/generation/jobs', {
+              type: 'image',
+              prompt: gen.data.prompt,
+              model: genModel?.id,
+              priority: 'normal',
+            })
+            .then(() =>
+              push('assistant', `已自动受理该生成任务（${genModel?.displayName ?? '默认模型'}），进度会在右侧属性面板更新。`),
+            )
             .catch(() => {});
         }
       }
@@ -267,8 +284,8 @@ export default function AgentPanel() {
                 onClick: ({ key }) => setModel(key as AgentModel),
               }}
             >
-              <Tag color="blue" className="cursor-pointer" aria-label="模型切换">
-                Kimi 2.6
+              <Tag color="blue" className="cursor-pointer" aria-label="当前生成模型">
+                {genModel ? genModel.displayName : 'AI 助手'}
               </Tag>
             </Dropdown>
             <button className="pea-agent-input-mic" aria-label="语音输入" title="语音输入">🎤</button>
