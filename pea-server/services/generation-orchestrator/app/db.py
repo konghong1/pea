@@ -127,7 +127,8 @@ def get_model_with_provider(model_id: str) -> dict | None:
             return cur.fetchone()
 
 
-def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies=None) -> None:
+def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies=None,
+                      usage_json=None) -> None:
     """更新任务状态, 并强制校验状态机合法性 (T-GEN-01).
 
     非法跳转 (如 done -> refunded, queued -> done) 直接抛错, 杜绝状态错乱。
@@ -145,7 +146,7 @@ def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies
             if not models.can_transition(current, status):
                 raise ValueError(f"illegal transition: {current} -> {status}")
 
-            if result_json is not None or cost_tapies is not None:
+            if result_json is not None or cost_tapies is not None or usage_json is not None:
                 fields, vals = [], []
                 if result_json is not None:
                     fields.append("result_json = %s")
@@ -153,6 +154,9 @@ def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies
                 if cost_tapies is not None:
                     fields.append("cost_tapies = %s")
                     vals.append(cost_tapies)
+                if usage_json is not None:
+                    fields.append("usage_json = %s")
+                    vals.append(usage_json)
                 vals.append(job_id)
                 cur.execute(
                     f"UPDATE generation_jobs SET status=%s, {', '.join(fields)} "
@@ -163,4 +167,45 @@ def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies
                 cur.execute(
                     "UPDATE generation_jobs SET status=%s WHERE id=%s", [status, job_id]
                 )
+        conn.commit()
+
+
+def get_platform_config(pc_id: str) -> dict | None:
+    """按 platform_configs.id 取平台提示词配置 (编排器只读, CRUD 归 BFF)。"""
+    if not pc_id:
+        return None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, owner_id, name, platform, kind, prompt_mode,
+                       presets_json, expand_model, is_default
+                FROM platform_configs WHERE id=%s
+                """,
+                [pc_id],
+            )
+            return cur.fetchone()
+
+
+def insert_usage_record(*, user_id: int, job_id: str | None, node_type: str,
+                        model: str | None, provider: str | None,
+                        platform_config_id: str | None, usage: dict) -> None:
+    """Phase3: 落 token 用量审计。usage = {input_tokens, output_tokens, total_tokens}。"""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO usage_records
+                (user_id, job_id, node_type, model, provider, platform_config_id,
+                 input_tokens, output_tokens, total_tokens)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    user_id, job_id, node_type, model, provider, platform_config_id,
+                    int(usage.get("input_tokens") or 0),
+                    int(usage.get("output_tokens") or 0),
+                    int(usage.get("total_tokens") or
+                        (int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0))),
+                ],
+            )
         conn.commit()

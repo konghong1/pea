@@ -17,22 +17,17 @@
 """
 from __future__ import annotations
 
-import base64
-import binascii
 import logging
 import time
 from typing import Any
 
 import requests
 
-from app import storage
 from app.config import settings
 from app.llm_router import GenerationResult
+from app.param_adapters import normalize_image_params, get_image_adapter, _normalize_refs
 
 logger = logging.getLogger(__name__)
-
-# 尺寸档位 -> 具体像素 (前端只选 1K/2K/4K, 提供商需要真实尺寸)。
-_SIZE_MAP = {"1k": "1024x1024", "2k": "2048x2048", "4k": "4096x4096"}
 
 _VIDEO_DONE = ("completed", "succeeded", "success", "done", "finished", "ready")
 _VIDEO_FAIL = ("failed", "error", "cancelled", "canceled", "rejected")
@@ -45,6 +40,43 @@ def _api_base(base_url: str, path: str) -> str:
     return f"{base}{path}"
 
 
+def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
+                     max_attempts: int = 2, backoff_base: int = 4):
+    """POST JSON 到外部提供商, 对瞬时错误自动重试。
+
+    重试仅针对「真·瞬时错误」: HTTP 429/500/502/503 与连接错误 (ConnectionError)。
+    **不**对读取超时 (ReadTimeout) 重试 —— 读取超时意味着提供商在 timeout[1] 内
+    一字未回 (真挂死/半开连接), 重试只会把已等待的几百秒作废再等一遍, 反而加倍延迟。
+    Agnes 高峰期常延迟 ~100~170s 才返回, 但那是「带 503 的响应」(5xx, 会被正常重试),
+    不是读取超时; 只要 timeout[1] 取到 provider_image_timeout_s (300s, 覆盖其峰值),
+    慢但成功的生成就能在单次尝试内完成, 不再被 110s 误杀后重试翻倍。
+
+    返回: 2xx 响应, 或最后一次仍 5xx 时返回该响应 (交由上层 _raise_for_provider 抛错)。
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+        except requests.ConnectionError as e:  # 连接级错误 -> 重试
+            last_err = e
+            if attempt < max_attempts:
+                wait = min(backoff_base * (2 ** (attempt - 1)), 20)
+                print(f"[agnes] attempt {attempt} network error {e!r}, retry in {wait}s")
+                time.sleep(wait)
+                continue
+            raise
+        if resp.status_code in (429, 500, 502, 503):  # 瞬时过载 -> 重试
+            last_err = RuntimeError(f"provider HTTP {resp.status_code}")
+            if attempt < max_attempts:
+                wait = min(backoff_base * (2 ** (attempt - 1)), 20)
+                print(f"[agnes] attempt {attempt} got HTTP {resp.status_code} (transient), retry in {wait}s")
+                time.sleep(wait)
+                continue
+            return resp
+        return resp
+    raise last_err or RuntimeError("provider call failed after retries")
+
+
 def _is_agnes(base_url: str) -> bool:
     return "agnes" in (base_url or "").lower()
 
@@ -55,32 +87,6 @@ def _clamp_int(v: Any, lo: int, hi: int, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
-
-
-def _map_size(size: Any) -> str | None:
-    """'1K'/'2K'/'4K' -> 像素; 已是 'WxH' 直接透传; 空 -> None (用模型默认尺寸)。"""
-    if not size:
-        return None
-    s = str(size).strip()
-    low = s.lower()
-    if low in _SIZE_MAP:
-        return _SIZE_MAP[low]
-    if "x" in low and any(c.isdigit() for c in low):
-        return s
-    return None
-
-
-def _normalize_refs(refs: Any) -> list[str]:
-    """仅保留提供商可达的参考图: http(s) 外链或 data: 内联; 内部代理/相对路径丢弃。上限 8。"""
-    if not refs:
-        return []
-    if isinstance(refs, str):
-        refs = [refs]
-    out: list[str] = []
-    for r in list(refs)[:8]:
-        if isinstance(r, str) and (r.startswith("http") or r.startswith("data:")):
-            out.append(r)
-    return out
 
 
 def _extract_video_url(data: dict) -> str | None:
@@ -130,39 +136,19 @@ class OpenAICompatibleProvider:
 
     # ── 图像 ────────────────────────────────────────────────────────
     def _generate_image(self, req: dict) -> GenerationResult:
-        params: dict = req.get("params") or {}
-        user_id = req.get("user_id")
-        n = _clamp_int(params.get("n", 1), 1, 8, 1)
-        size = _map_size(params.get("size"))
-        seed = params.get("seed")
-        refs = _normalize_refs(params.get("reference_images"))
-
-        payload: dict[str, Any] = {"model": self.model_name, "prompt": req["prompt"], "n": n}
-        if size:
-            payload["size"] = size
-        if seed is not None:
-            payload["seed"] = seed
-
-        # Agnes 特有参数：直接合并到 payload（不用 extra_body 嵌套，Agnes 不识别该字段）
-        # 注意：Agnes 图像模型不支持 response_format 参数（会返回 400），故不发送
-        if _is_agnes(self.base_url):
-            if refs:
-                payload["image"] = refs
-                if "agnes-image-2.0" in self.model_name.lower():
-                    payload["tags"] = ["img2img"]
-        else:
-            # 非 OpenAI 兼容提供商：用 extra_body 透传
-            extra_body: dict[str, Any] = {}
-            if refs:
-                extra_body["image"] = refs
-            if extra_body:
-                payload["extra_body"] = extra_body
+        # 防腐层: 把规范参数翻译成当前模型/提供商需要的真实请求体。
+        # 这样前端只管 size_tier + aspect_ratio, 模型差异(档位式 vs 精确像素、
+        # 图生图 image 放哪、要不要用 tags)全部收敛到 param_adapters。
+        norm = normalize_image_params(req)
+        adapter = get_image_adapter(self.base_url)
+        payload: dict[str, Any] = adapter.build(norm, self)
 
         url = _api_base(self.base_url, "/v1/images/generations")
-        logger.info("[agnes] image model=%s n=%d size=%s refs=%d", self.model_name, n, size, len(refs))
-        resp = requests.post(
-            url, json=payload, headers=self._headers(),
+        logger.info("[agnes] image model=%s payload=%s", self.model_name, _short(payload))
+        resp = _post_with_retry(
+            url, payload, self._headers(),
             timeout=(settings.provider_http_connect_timeout_s, settings.provider_image_timeout_s),
+            max_attempts=2,
         )
         _raise_for_provider(resp, "image")
         data = resp.json()
@@ -170,19 +156,27 @@ class OpenAICompatibleProvider:
         items = data.get("data") or []
         if not items:
             raise RuntimeError(f"image response has no data: {_short(data)}")
-        first = items[0] or {}
-        img_url = first.get("url")
-        if img_url:
-            stored = storage.store_from_url(img_url, "image", user_id=user_id)
-        elif first.get("b64_json"):
-            try:
-                raw = base64.b64decode(first["b64_json"])
-            except (binascii.Error, ValueError) as exc:
-                raise RuntimeError(f"invalid b64_json image: {exc}") from exc
-            stored = storage.store_bytes(raw, "image", user_id=user_id, content_type="image/png")
-        else:
-            raise RuntimeError(f"image response missing url/b64_json: {_short(first)}")
-        return GenerationResult(url=stored, provider=self.provider_name, raw={"count": len(items)})
+
+        # 收集所有图片 URL（支持 n > 1）
+        urls: list[str] = []
+        for item in items:
+            img_url = item.get("url")
+            if img_url:
+                urls.append(img_url)
+            elif item.get("b64_json"):
+                urls.append(f"data:image/png;base64,{item['b64_json']}")
+
+        if not urls:
+            raise RuntimeError(f"image response missing url/b64_json: {_short(items[0] if items else {})}")
+
+        # 返回所有图片 URL，url 是主图（兼容），urls 是完整数组
+        return GenerationResult(
+            url=urls[0],
+            urls=urls,
+            provider=self.provider_name,
+            raw={"count": len(urls)},
+            usage=data.get("usage") or {}
+        )
 
     # ── 视频 (异步提交 + 轮询) ───────────────────────────────────────
     def _generate_video(self, req: dict) -> GenerationResult:
@@ -217,9 +211,10 @@ class OpenAICompatibleProvider:
 
         submit_url = _api_base(self.base_url, "/v1/videos")
         logger.info("[agnes] video submit model=%s frames=%d refs=%d", self.model_name, num_frames, len(refs))
-        resp = requests.post(
-            submit_url, json=payload, headers=self._headers(),
+        resp = _post_with_retry(
+            submit_url, payload, self._headers(),
             timeout=(settings.provider_http_connect_timeout_s, settings.provider_video_submit_timeout_s),
+            max_attempts=2,
         )
         _raise_for_provider(resp, "video-submit")
         sub = resp.json()
@@ -227,8 +222,9 @@ class OpenAICompatibleProvider:
         # 有些实现同步就返回了成品 URL
         direct = _extract_video_url(sub)
         if direct:
-            stored = storage.store_from_url(direct, "video", user_id=user_id, timeout=settings.provider_image_timeout_s)
-            return GenerationResult(url=stored, provider=self.provider_name, raw={"sync": True})
+            # 直接透传公网 URL, 不走 MinIO 转存 (见 _generate_image 说明)。
+            return GenerationResult(url=direct, provider=self.provider_name, raw={"sync": True},
+                                    usage=sub.get("usage") or {})
 
         task_id = sub.get("id") or sub.get("task_id") or (sub.get("data") or {}).get("id")
         if not task_id:
@@ -253,10 +249,9 @@ class OpenAICompatibleProvider:
                 raw_url = _extract_video_url(data)
                 if not raw_url:
                     raise RuntimeError(f"video completed but no url: {_short(data)}")
-                stored = storage.store_from_url(
-                    raw_url, "video", user_id=user_id, timeout=settings.provider_image_timeout_s
-                )
-                return GenerationResult(url=stored, provider=self.provider_name, raw={"task_id": task_id})
+                # 直接透传公网 URL, 不走 MinIO 转存 (见 _generate_image 说明)。
+                return GenerationResult(url=raw_url, provider=self.provider_name, raw={"task_id": task_id},
+                                        usage=data.get("usage") or {})
             if last_status in _VIDEO_FAIL:
                 reason = data.get("error") or data.get("message") or last_status
                 raise RuntimeError(f"video generation failed: {reason}")
@@ -270,9 +265,10 @@ class OpenAICompatibleProvider:
             "model": self.model_name,
             "messages": [{"role": "user", "content": req["prompt"]}],
         }
-        resp = requests.post(
-            url, json=payload, headers=self._headers(),
-            timeout=(settings.provider_http_connect_timeout_s, settings.provider_image_timeout_s),
+        resp = _post_with_retry(
+            url, payload, self._headers(),
+            timeout=(settings.provider_http_connect_timeout_s, 110),
+            max_attempts=2,
         )
         _raise_for_provider(resp, "text")
         data = resp.json()
@@ -280,7 +276,8 @@ class OpenAICompatibleProvider:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError(f"text response malformed: {_short(data)}") from exc
-        return GenerationResult(url="", provider=self.provider_name, raw={}, text=content)
+        return GenerationResult(url="", provider=self.provider_name, raw={}, text=content,
+                                 usage=data.get("usage") or {})
 
 
 def _raise_for_provider(resp: requests.Response, what: str) -> None:

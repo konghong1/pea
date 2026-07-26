@@ -4,8 +4,57 @@ import { useViewport } from 'reactflow';
 import { useCanvas } from '../store/canvas';
 import { useAgent } from '../store/agent';
 import { toast } from '../store/toast';
-import { listAvailableModels, estimateCost, acceptGenerationJob } from '../api/catalog';
+import { listAvailableModels, estimateCost, acceptNodeGenerationJob } from '../api/catalog';
+import { api } from '../api/client';
 import type { AvailableModel, PricingRule } from '../api/catalog';
+
+/**
+ * 节点生成结果轮询兜底。
+ * WS 的 job.updated 事件是 fire-and-forget：实时图/视频任务若跑了很久（真实模型常 ~1-3 分钟）才完成，
+ * 前端 WS 可能早已不在监听窗口/断连，事件被丢弃，导致节点永远停在 generating、不再出图。
+ * 这里用轮询兜底：事件若先到，会从 jobNodeMap 移除 job，本函数随即终止；否则轮询负责回填结果。
+ * 与 galleryApi 的 pollPeaJob 同源，但作用域限定在单个节点 job。
+ */
+function pollNodeJobResult(jobId: string) {
+  const MAX_ATTEMPTS = 120; // 最多 ~6 分钟（3s 间隔），覆盖真实模型长任务
+  let attempt = 0;
+  const tick = async () => {
+    // 事件已处理 -> jobNodeMap 已无此 job -> 终止轮询（避免重复回填）
+    if (!useCanvas.getState().jobNodeMap[jobId]) return;
+    if (attempt++ >= MAX_ATTEMPTS) {
+      useCanvas.getState().applyJobResult(jobId, { generating: false });
+      useCanvas.getState().removeJob(jobId);
+      toast.error('生成超时，请稍后在历史中查看');
+      return;
+    }
+    try {
+      const { data } = await api.get<any>(`/generation/jobs/${jobId}`);
+      const st = data?.status;
+      if (st === 'done') {
+        const url = data?.resultUrl ?? undefined;
+        useCanvas.getState().applyJobResult(jobId, {
+          generating: false,
+          resultUrl: url,
+          resultUrls: url ? [url] : undefined,
+          resultIndex: 0,
+        });
+        useCanvas.getState().removeJob(jobId);
+        toast.success('生成完成');
+        return;
+      }
+      if (st === 'failed' || st === 'refunded') {
+        useCanvas.getState().applyJobResult(jobId, { generating: false });
+        useCanvas.getState().removeJob(jobId);
+        toast.error(data?.error || '生成失败，已退款');
+        return;
+      }
+    } catch {
+      // 网络抖动忽略，继续轮询
+    }
+    setTimeout(tick, 3000);
+  };
+  setTimeout(tick, 3000);
+}
 
 interface KindCfg {
   label: string;
@@ -51,7 +100,7 @@ const COUNT_OPTIONS = [1, 2, 3, 4].map((n) => ({ label: `${n}x`, value: n }));
  *    job.updated 事件 + canvas.jobNodeMap 把 resultUrl 异步回填到触发节点。
  */
 const KIND_CFG: Record<string, KindCfg> = {
-  text: { label: '文本', placeholder: '描述任何你想要生成的内容', modelIcon: '✦' },
+  text: { label: '文本', placeholder: '输入简短描述，AI 帮你改写为高质量图片/视频生成提示词', modelIcon: '✦' },
   image: { label: '图片', placeholder: '描述任何你想要生成的内容', modelIcon: '📊' },
   video: { label: '视频', placeholder: '描述你想生成的内容，或输入 /@ 唤出素材库与快捷操作', modelIcon: '📊' },
   audio: { label: '音频', placeholder: '描述你想要生成的任何内容', modelIcon: '🌊' },
@@ -66,6 +115,77 @@ const GEN_TYPE: Record<string, 'image' | 'video' | 'text' | null> = {
   generate: 'image',
   audio: null,
 };
+
+/**
+ * 节点聊天 SSE 客户端 (文本节点, 轻量流):
+ * POST /chat/stream, 解析 named SSE 事件 (meta/delta/done/error), 逐 delta 回调。
+ */
+async function streamNodeChat(opts: {
+  nodeId: string;
+  kind: string;
+  prompt: string;
+  model?: string;
+  onMeta: (m: any) => void;
+  onDelta: (t: string) => void;
+  onDone: (d: any) => void;
+  onError: (e: any) => void;
+}): Promise<void> {
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('pea_token') : null;
+  const resp = await fetch('/chat/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      nodeId: opts.nodeId,
+      kind: opts.kind,
+      prompt: opts.prompt,
+      model: opts.model,
+      idempotencyKey: `chat-${opts.nodeId}-${Date.now()}`,
+    }),
+  });
+  if (!resp.ok || !resp.body) {
+    let msg = `HTTP ${resp.status}`;
+    try {
+      const j = await resp.json();
+      msg = j?.message || msg;
+    } catch {
+      /* ignore */
+    }
+    opts.onError({ message: msg });
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split('\n\n');
+    buf = parts.pop() ?? '';
+    for (const part of parts) {
+      let ev = '';
+      let data = '';
+      for (const line of part.split('\n')) {
+        if (line.startsWith('event:')) ev = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      if (!data) continue;
+      let json: any = null;
+      try {
+        json = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      if (ev === 'meta') opts.onMeta(json);
+      else if (ev === 'delta') opts.onDelta(json.text ?? '');
+      else if (ev === 'done') opts.onDone(json);
+      else if (ev === 'error') opts.onError(json);
+    }
+  }
+}
 
 /* ──────────────── 视口感知弹出定位辅助 ──────────────── */
 
@@ -325,12 +445,14 @@ export default function NodeChatPrompt() {
   // 图片节点特有：比例 / 分辨率 / 倍率浮层
   const [aspectOpen, setAspectOpen] = useState(false);
   const [aspectRatio, setAspectRatio] = useState('1:1');
-  const [resolution, setResolution] = useState('2k');
+  const [resolution, setResolution] = useState('1k');
   const [countOpen, setCountOpen] = useState(false);
   const aspectRef = useRef<HTMLDivElement>(null);
   const countRef = useRef<HTMLDivElement>(null);
   const aspectBtnRef = useRef<HTMLButtonElement>(null);
   const [aspectTriggerRect, setAspectTriggerRect] = useState<{ left: number; top: number; width: number; bottom: number } | null>(null);
+  // 出图数触发按钮位置（Portal 定位用）
+  const [countTriggerRect, setCountTriggerRect] = useState<{ left: number; top: number; width: number; bottom: number } | null>(null);
 
   const kind = sel?.data.kind ?? 'text';
   const genType = GEN_TYPE[kind] ?? null;
@@ -339,7 +461,13 @@ export default function NodeChatPrompt() {
   const dimKeys = Object.keys(tiers);
   const multiplier = (selectedModel?.pricing as PricingRule | null)?.multiplier ?? null;
   const params: Record<string, unknown> = { ...tierVals };
-  if (multiplier) params[multiplier] = count;
+  // 图片节点：始终传递 n 参数（出图数量），即使模型没有 multiplier 字段
+  // 这样后端和提供商适配器可以正确处理批量生成
+  if (genType === 'image') {
+    params.n = count;
+  } else if (multiplier) {
+    params[multiplier] = count;
+  }
 
   // 图片节点：把比例和分辨率映射为 width/height
   if (genType === 'image') {
@@ -366,12 +494,18 @@ export default function NodeChatPrompt() {
       const nodeId = useCanvas.getState().jobNodeMap[ev.jobId];
       if (!nodeId) return;
       if (ev.status === 'done') {
+        const url = ev.resultUrl ?? undefined;
+        // 优先使用多图数组，兼容单图
+        const urls = ev.resultUrls ?? (url ? [url] : undefined);
         useCanvas.getState().applyJobResult(ev.jobId, {
           generating: false,
-          resultUrl: ev.resultUrl ?? undefined,
+          resultUrl: urls?.[0] ?? url,
+          resultUrls: urls,
+          resultIndex: 0,
         });
         useCanvas.getState().removeJob(ev.jobId);
-        toast.success('生成完成');
+        const count = urls?.length ?? 1;
+        toast.success(count > 1 ? `生成完成，共 ${count} 张图` : '生成完成');
       } else if (ev.status === 'failed' || ev.status === 'refunded') {
         useCanvas.getState().applyJobResult(ev.jobId, { generating: false });
         useCanvas.getState().removeJob(ev.jobId);
@@ -588,13 +722,25 @@ export default function NodeChatPrompt() {
     }
   }, [single, sel?.data.meta, genType, update]);
 
+  // 出图数量变更时立即持久化到节点 meta（修复切换节点后 count 回退问题）
+  const persistCount = useCallback((v: number) => {
+    setCount(v);
+    if (single && genType === 'image') {
+      const meta = { ...(sel?.data.meta ?? {}) } as Record<string, unknown>;
+      const gp = { ...(meta.genParams as Record<string, unknown> ?? {}) };
+      gp.n = v;
+      update(single, { meta: { ...meta, genParams: gp } });
+    }
+  }, [single, sel?.data.meta, genType, update]);
+
   if (!sel || !rect || !single) return null;
   const cfg = KIND_CFG[kind] ?? KIND_CFG.text;
 
   const onTierChange = (dim: string, v: string) =>
     setTierVals((s) => ({ ...s, [dim]: v }));
-  const onCountChange = (v: number) =>
-    setCount(Number.isFinite(v) && v >= 1 ? Math.min(8, Math.floor(v)) : 1);
+  const onCountChange = (v: number) => {
+    persistCount(Number.isFinite(v) && v >= 1 ? Math.min(8, Math.floor(v)) : 1);
+  };
 
   const submit = async () => {
     const t = text.trim();
@@ -616,12 +762,44 @@ export default function NodeChatPrompt() {
     if (genType === 'image') { extraMeta.aspectRatio = aspectRatio; extraMeta.resolution = resolution; }
     update(single, {
       prompt: t,
+      params,
       meta: { ...(sel.data.meta ?? {}), modelId, genParams: params, ...extraMeta },
     });
+
+    // 文本节点：轻量 SSE 聊天流（润色用户输入为提示词，回写节点内容区）
+    if (genType === 'text') {
+      push('user', `[${sel.data.label || cfg.label}] ${t}`);
+      setSubmitting(true);
+      let acc = '';
+      try {
+        await streamNodeChat({
+          nodeId: single,
+          kind: 'text',
+          prompt: t,
+          model: modelId,
+          onMeta: (m) => {
+            if (m.costTapies != null) toast.success(`已受理，预估 ${m.costTapies} Tapies`);
+          },
+          onDelta: (txt) => {
+            acc += txt;
+            update(single, { html: acc });
+          },
+          onDone: () => toast.success('提示词已生成'),
+          onError: (e) => toast.error(e?.message || '生成失败'),
+        });
+      } catch (e: any) {
+        toast.error(e?.message || '聊天失败');
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    // 图片/视频：现有 WS 任务流
     push('user', `[${sel.data.label || cfg.label}] ${t}`);
     setSubmitting(true);
     try {
-      const res = await acceptGenerationJob({
+      const res = await acceptNodeGenerationJob({
         type: genType,
         prompt: t,
         model: modelId,
@@ -632,8 +810,8 @@ export default function NodeChatPrompt() {
       useCanvas.getState().registerJob(res.jobId, single);
       update(single, { generating: true });
       toast.success('已受理，生成中…');
-      // 保留上一次输入的消息：不清空草稿与输入框，便于点击节点时再次带出 / 连续编辑。
-      // 草稿已在 onChange 中实时写入 draftRef，故此处无需额外处理。
+      // 轮询兜底：WS 事件若丢失，保证长任务结果仍回填到节点
+      pollNodeJobResult(res.jobId);
       setTimeout(() => inputRef.current?.focus(), 0);
     } catch (e: any) {
       toast.error(e?.response?.data?.message || '受理失败，请重试');
@@ -788,12 +966,6 @@ export default function NodeChatPrompt() {
               <span>{tierVals[d] ?? '—'}</span>
             </span>
           ))}
-          {multiplier && genType !== 'image' && (
-            <span className="node-input-param" title={multiplier}>
-              <span className="node-input-param-icon" aria-hidden>×</span>
-              <span>{count}</span>
-            </span>
-          )}
         </div>
 
         {/* 右侧操作区 */}
@@ -806,27 +978,24 @@ export default function NodeChatPrompt() {
                 className="node-count-btn"
                 title="生成数量"
                 aria-expanded={countOpen}
-                onClick={() => setCountOpen((v) => !v)}
+                onClick={() => {
+                  // 记录触发按钮的实际位置，用于 Portal 定位
+                  const btnRect = countRef.current?.getBoundingClientRect();
+                  if (btnRect) {
+                    setCountTriggerRect({
+                      left: btnRect.left,
+                      top: btnRect.top,
+                      width: btnRect.width,
+                      bottom: btnRect.bottom,
+                    });
+                  }
+                  setCountOpen((v) => !v);
+                }}
               >
                 {count}x
               </button>
               {/* hover 提示 "生成数量" */}
               <span className="node-count-btn-hint" aria-hidden>生成数量</span>
-              {countOpen && (
-                <div className="node-count-btn-dropdown">
-                  {COUNT_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      className={`node-count-opt${count === opt.value ? ' active' : ''}`}
-                      onClick={() => { onCountChange(opt.value); setCountOpen(false); }}
-                      title={`生成 ${opt.value} 张图`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           )}
           <span className="node-input-tapies" title="本次预计消耗 Tapies">
@@ -876,6 +1045,43 @@ export default function NodeChatPrompt() {
         />,
         document.body
       )}
+
+      {/* ═════════ 出图数量下拉（Portal 渲染到 body，避免被父容器裁剪）═════════════ */}
+      {countOpen && countTriggerRect && createPortal(
+        <div
+          ref={countRef}
+          className="node-count-btn-dropdown"
+          style={{
+            position: 'fixed',
+            left: Math.max(10, Math.min(countTriggerRect.left + countTriggerRect.width / 2 - 40, window.innerWidth - 90)), // 居中，夹紧边界
+            bottom: window.innerHeight - (countTriggerRect.bottom - 10),   // 弹窗底边 = 按钮底边上方 gap=10（与模型/比例一致）
+            top: 'auto',
+            width: 80,
+          }}
+          role="listbox"
+          aria-label="生成数量"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {COUNT_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              className={`node-count-opt${count === opt.value ? ' active' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onCountChange(opt.value);
+                setCountOpen(false);
+              }}
+              title={`生成 ${opt.value} 张图`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+
+
     </div>
   );
 }

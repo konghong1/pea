@@ -32,6 +32,24 @@ import { useAuth } from '../store/auth';
 import { useTheme } from '../store/theme';
 import { canvasesApi } from '../api/canvases';
 import PeaNode from './PeaNode';
+
+// 仅 dev 模式暴露 zustand store 到 window，方便 verify/E2E 注入测试数据。
+// import.meta.env.DEV 在 prod build 时被 vite 替换为 false，整段死代码被消除。
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
+  // @ts-ignore
+  window.__canvas = useCanvas;
+  // @ts-ignore
+  window.__ui = useUi;
+}
+
+// dev/E2E 钩子: 验证脚本可注入测试数据 (resultUrl)。设置 window.__peaDevHooks=1 后
+// 下次刷新即生效 (CanvasEditor 重 mount 时检查)。prod 默认关闭。
+if (typeof window !== 'undefined' && (window as any).__peaDevHooks) {
+  // @ts-ignore
+  window.__canvas = useCanvas;
+  // @ts-ignore
+  window.__ui = useUi;
+}
 import PeaEdge from './PeaEdge';
 import SidePanel from './SidePanel';
 import NodeChatPrompt from './NodeChatPrompt';
@@ -843,6 +861,59 @@ function Flow() {
     copySelected,
     pasteNode,
   } = useCanvas();
+
+  // 保存前清洗节点：只持久化必要字段（id/type/position/data），丢弃 ReactFlow 运行时字段
+  // （width/height/positionAbsolute/selected/dragging/measured 等），避免脏字段写回导致
+  // 重新加载时视口/布局抖动、表现为「同一画布数据不一致」。
+  const cleanGraph = (nodes: any[], edges: any[]) => ({
+    nodes: nodes.map((n: any) => ({
+      id: n.id,
+      type: n.type || 'pea',
+      position: n.position,
+      data: n.data,
+    })),
+    edges: edges.map((e: any) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle ?? null,
+      targetHandle: e.targetHandle ?? null,
+      type: e.type || 'pea',
+    })),
+  });
+
+  // 离开画布前（返回工作空间 / 刷新 / 关闭）确保未保存的改动落地。
+  // 用 getState() 读最新，避免闭包陈旧；幂等（version 乐观锁，重复 PUT 第二次 409 被忽略）。
+  const flushSave = useCallback(async () => {
+    const s = useCanvas.getState();
+    if (!s.dirty || s.canvasId == null) return;
+    try {
+      const { data } = await api.put(`/canvases/${s.canvasId}`, {
+        graph_json: cleanGraph(s.nodes, s.edges),
+        version: s.version,
+      });
+      useCanvas.getState().markSaved(data.version);
+    } catch {
+      /* 画布可能已删除或网络异常，忽略 */
+    }
+  }, []);
+
+  // 卸载兜底：覆盖任何未显式 flush 的卸载路径（含浏览器刷新 / 关闭）。
+  useEffect(() => {
+    return () => {
+      const s = useCanvas.getState();
+      if (s.dirty && s.canvasId != null) {
+        api
+          .put(`/canvases/${s.canvasId}`, {
+            graph_json: cleanGraph(s.nodes, s.edges),
+            version: s.version,
+          })
+          .then((r: any) => useCanvas.getState().markSaved(r.data.version))
+          .catch(() => {});
+      }
+    };
+  }, []);
+
   const { screenToFlowPosition, fitView } = useReactFlow();
   const { message } = App.useApp();
   const saveTimer = useRef<number>();
@@ -893,7 +964,7 @@ function Flow() {
   const saveNow = async () => {
     if (canvasId == null) return;
     try {
-      const { data } = await api.put(`/canvases/${canvasId}`, { graph_json: { nodes, edges }, version });
+      const { data } = await api.put(`/canvases/${canvasId}`, { graph_json: cleanGraph(nodes, edges), version });
       markSaved(data.version);
       message.success('已保存');
     } catch {
@@ -946,7 +1017,8 @@ function Flow() {
         saveNow();
         return;
       }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !editing) {
+        // 在输入框/文本域/可编辑元素内时, 退格/删除只用于编辑文本, 不删图元 (修复: 输入框退格误删节点)
         // 优先删除选中的边，再删除选中的节点
         const selEdge = document.querySelector('.react-flow__edge.selected');
         if (selEdge) {
@@ -1001,7 +1073,12 @@ function Flow() {
         if (onPane) setLibAt({ x: e.clientX, y: e.clientY });
       }}
     >
-      <CanvasHeader onClose={() => useUi.getState().setActive('workspace')} />
+      <CanvasHeader
+        onClose={async () => {
+          await flushSave();
+          useUi.getState().setActive('workspace');
+        }}
+      />
       <CanvasActions />
       <BottomPrompt />
 
@@ -1120,6 +1197,9 @@ function Flow() {
           panOnScroll
           selectionOnDrag
           selectionMode={SelectionMode.Partial}
+          // 禁用键盘删除：退格/Delete 只用于编辑输入框文本（如节点聊天输入框），
+          // 不再误删选中的节点。节点删除统一走右键菜单 -> 删除。
+          deleteKeyCode={null}
           defaultViewport={{ x: 0, y: 0, zoom: 1 }}
           minZoom={0.25}
           maxZoom={3}

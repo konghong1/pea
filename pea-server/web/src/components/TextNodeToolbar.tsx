@@ -24,9 +24,10 @@ export default function TextNodeToolbar() {
 
   const single = selectedIds.length === 1 ? selectedIds[0] : selectedId;
   const sel = single ? nodes.find((n) => n.id === single) : null;
+  const isTextNode = sel?.data.kind === 'text';
 
-  // 只要有单选节点就启动定位循环
-  const hasSingleSelection = !!single && !!sel;
+  // 只要有单选节点就启动定位循环（但只在 text 节点显示工具按钮）
+  const hasSingleSelection = !!single && !!sel && isTextNode;
 
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const rafRef = useRef<number>();
@@ -35,6 +36,9 @@ export default function TextNodeToolbar() {
   useEffect(() => {
     if (!hasSingleSelection) {
       setPos(null);
+      // 关键修复：取消选中时必须清空 lastPosRef，否则再次选中（节点位置未变）
+      // 会算出与旧 key 相同的位置，setPos 被跳过，pos 永远为 null → 工具条永久消失。
+      lastPosRef.current = '';
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       return;
     }

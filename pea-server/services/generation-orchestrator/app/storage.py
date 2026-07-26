@@ -19,6 +19,7 @@ import uuid
 from datetime import datetime
 
 import requests
+import urllib3
 from minio import Minio
 
 from app.config import settings
@@ -28,6 +29,15 @@ logger = logging.getLogger(__name__)
 _client: Minio | None = None
 _init_lock = threading.Lock()
 _bucket_ready = False
+
+# MinIO 客户端必须有超时: 历史上因缺省无超时, 在某些 MinIO 服务端组合下
+# bucket_exists/put_object/set_bucket_policy 会无限挂死, 直接拖垮生成链路
+# (worker 卡死 / 看门狗超时后被迫回退 Mock 假图)。这里设连接 10s + 读取 60s。
+_HTTP_CLIENT = urllib3.PoolManager(
+    timeout=urllib3.Timeout(connect=10, read=60),
+    retries=urllib3.Retry(total=2, backoff_factor=0.5,
+                           status_forcelist=[500, 502, 503, 504]),
+)
 
 
 def _get_client() -> Minio:
@@ -40,6 +50,7 @@ def _get_client() -> Minio:
                     access_key=settings.minio_access_key,
                     secret_key=settings.minio_secret_key,
                     secure=settings.minio_secure,
+                    http_client=_HTTP_CLIENT,
                 )
     return _client
 

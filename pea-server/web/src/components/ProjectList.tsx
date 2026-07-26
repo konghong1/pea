@@ -676,6 +676,7 @@ function ProjectCard({ item, view, menu, multiSelect, selected, isTrash, onToggl
   return (
     <div
       className={`projects-card${view === 'list' ? ' list' : ''}${multiSelect ? ' multi' : ''}${selected ? ' selected' : ''}`}
+      data-canvas-id={item.id}
       onClick={(e) => {
         if (multiSelect) {
           e.stopPropagation();

@@ -2,7 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { BillingService } from '../billing/billing.service';
 import { ModelsService } from '../providers/models.service';
 import { OrchestratorHttpClient } from '../orchestrator-client/orchestrator-http.service';
-import { AcceptGenerationDto } from './generation.dto';
+import { AcceptGenerationDto, AcceptNodeGenerationDto } from './generation.dto';
 
 /**
  * 生成受理 (T-GEN-02): 解析模型 + 访问控制 -> 服务端算价 -> 预扣 -> 交编排器 -> 返 jobId.
@@ -50,6 +50,53 @@ export class GenerationService {
         priority: dto.priority ?? 'normal',
         idempotency_key: idem,
         cost_tapies: cost,
+        platform_config_id: dto.platformConfigId ?? null,
+      });
+
+      return {
+        jobId: job.jobId,
+        status: job.status,
+        costTapies: cost,
+        model: { id: model.id, name: model.display_name, modelName: model.model_name },
+      };
+    } catch (err) {
+      await this.billing.refund(userId, cost, `${idem}:refund`);
+      throw err;
+    }
+  }
+
+  /**
+   * 节点图片/视频生成受理 — 与电商套图 accept() 解耦:
+   *  - 不接收 platformConfigId; 节点自身用比例/分辨率 UI 拼好 width/height/size, 编排器对空 platform_config_id 原样用 prompt。
+   *  - 其余流程 (解析模型 + 访问控制 + 服务端算价 + 预扣 + 交编排器) 与 accept() 完全一致, 保证计费/扣费安全红线不变。
+   */
+  async acceptNode(userId: number, dto: AcceptNodeGenerationDto) {
+    const params = dto.params ?? {};
+
+    const { model } = await this.models.resolveForGeneration(userId, dto.model, dto.type);
+
+    const cost = this.models.computeCost(model.pricing_json, params);
+    if (!Number.isFinite(cost) || cost <= 0) {
+      throw new BadRequestException('invalid computed cost');
+    }
+
+    const idem =
+      dto.idempotencyKey ??
+      `${userId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+
+    await this.billing.preauthorize(userId, cost, `${idem}:preauth`);
+
+    try {
+      const job = await this.orch.acceptJob({
+        user_id: userId,
+        type: dto.type,
+        prompt: dto.prompt,
+        model: model.id,
+        params,
+        priority: dto.priority ?? 'normal',
+        idempotency_key: idem,
+        cost_tapies: cost,
+        platform_config_id: null,
       });
 
       return {

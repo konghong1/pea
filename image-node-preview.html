@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>图片节点 · 新样式预览</title>
+<style>
+  :root {
+    --pea-brand: #1fa2dc;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(1200px 600px at 70% -10%, rgba(31,162,220,0.10), transparent 60%),
+      #0c0d11;
+    color: #e9e9f0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 48px 20px 80px;
+  }
+  h1 { font-size: 20px; font-weight: 700; letter-spacing: -.01em; margin: 0 0 6px; }
+  .sub { color: #9a9aa8; font-size: 13px; margin: 0 0 36px; text-align: center; line-height: 1.6; }
+  .stage { position: relative; width: 320px; }
+
+  /* ===== 复刻 PeaNode 新样式 ===== */
+  .pea-node {
+    position: relative;
+    width: 320px;
+  }
+  .pea-node-tag-pill {
+    position: absolute;
+    top: -14px; left: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px;
+    background: rgba(34,34,40,.96);
+    border: 1px solid rgba(255,255,255,.08);
+    font-size: 11px; color: #d8d8e0; z-index: 2;
+  }
+  .pea-node-result-toolbar {
+    position: absolute; top: -46px; left: 50%; transform: translateX(-50%);
+    z-index: 30; display: inline-flex; align-items: center; gap: 1px;
+    padding: 6px 8px; border-radius: 999px;
+    background: rgba(30,30,36,.92);
+    border: 1px solid rgba(255,255,255,.10);
+    box-shadow: 0 12px 38px rgba(0,0,0,.5);
+    backdrop-filter: blur(14px) saturate(140%);
+  }
+  .pea-node-toolbar-btn {
+    width: 30px; height: 30px; border-radius: 50%; border: none;
+    background: transparent; color: rgba(255,255,255,.72);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: background .12s ease, color .12s ease, transform .12s ease;
+  }
+  .pea-node-toolbar-btn:hover { background: rgba(255,255,255,.1); color: #fff; transform: translateY(-1px); }
+  .pea-node-toolbar-btn.active { color: #fbbf24; background: rgba(251,191,36,.12); }
+  .pea-node-toolbar-btn.muted { opacity: .45; }
+  .pea-node-toolbar-btn.muted:hover { opacity: .9; background: rgba(255,255,255,.08); }
+  .pea-node-toolbar-divider { width: 1px; height: 18px; margin: 0 3px; background: rgba(255,255,255,.1); }
+
+  .pea-node-result-image-wrap {
+    position: relative; width: 100%; border-radius: 16px; overflow: hidden;
+    background: rgba(0,0,0,.25);
+    border: 1px solid rgba(255,255,255,.08);
+    box-shadow: 0 10px 34px rgba(0,0,0,.35);
+    transition: border-color .2s ease, box-shadow .2s ease;
+  }
+  .pea-node-result-image-wrap:hover {
+    border-color: rgba(255,255,255,.16);
+    box-shadow: 0 14px 44px rgba(0,0,0,.45);
+  }
+  .pea-node-result-image-wrap .img {
+    display: block; width: 100%; height: 220px; object-fit: cover;
+    border-radius: 16px; cursor: default; transition: filter .2s ease;
+  }
+  .pea-node-result-image-wrap:hover .img { filter: brightness(1.04); }
+
+  .pea-node-result-star {
+    position: absolute; top: 8px; left: 8px; z-index: 3;
+    width: 26px; height: 26px; border-radius: 8px; border: none;
+    background: rgba(0,0,0,.45); color: rgba(255,255,255,.55);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    transition: background .15s ease, color .15s ease, transform .15s ease;
+  }
+  .pea-node-result-star:hover { background: rgba(0,0,0,.6); color: #fff; transform: scale(1.08); }
+  .pea-node-result-star.saved { color: #fbbf24; }
+
+  .pea-node-image-badge { position: absolute; top: 8px; right: 8px; z-index: 3; }
+  .pea-node-image-badge-btn {
+    display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px;
+    border-radius: 8px; border: none; background: rgba(0,0,0,.45);
+    color: rgba(255,255,255,.9); font-size: 11px; font-weight: 600; cursor: pointer;
+  }
+  .pea-node-image-badge-btn:hover { background: rgba(0,0,0,.65); }
+
+  .note { margin-top: 28px; max-width: 520px; font-size: 13px; color: #9a9aa8; line-height: 1.8; }
+  .note b { color: #e9e9f0; font-weight: 600; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:rgba(31,162,220,.15); color:#7fdcff; font-size:12px; margin-right:6px;}
+</style>
+</head>
+<body>
+  <h1>图片节点 · 新样式预览</h1>
+  <p class="sub">复刻自 <code>PeaNode.tsx</code> + <code>styles/index.css</code> 的改动<br/>点击图片<strong>不再放大</strong>，工具栏占桩按钮已视觉降权</p>
+
+  <div class="stage">
+    <div class="pea-node">
+      <div class="pea-node-tag-pill"><span>🖼️</span><span>Image</span></div>
+
+      <!-- 功能条 -->
+      <div class="pea-node-result-toolbar">
+        <!-- muted 占桩 -->
+        <button class="pea-node-toolbar-btn muted" title="裁剪">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M2 6h14a2 2 0 0 1 2 2v14"/></svg>
+        </button>
+        <button class="pea-node-toolbar-btn muted" title="3D">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>
+        </button>
+        <button class="pea-node-toolbar-btn muted" title="去背景">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12L4.93 4.93"/></svg>
+        </button>
+        <button class="pea-node-toolbar-btn muted" title="放大">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M7 7l3 3"/><path d="M17 7l-3 3"/><path d="M7 17l3-3"/><path d="M17 17l-3-3"/></svg>
+        </button>
+        <button class="pea-node-toolbar-btn muted" title="更多">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></svg>
+        </button>
+        <div class="pea-node-toolbar-divider"></div>
+        <button class="pea-node-toolbar-btn" title="风格迁移">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/></svg>
+        </button>
+        <div class="pea-node-toolbar-divider"></div>
+        <button class="pea-node-toolbar-btn active" title="保存到素材库">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6"/><path d="M9 14h6"/></svg>
+        </button>
+        <button class="pea-node-toolbar-btn" title="下载">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+        </button>
+        <button class="pea-node-toolbar-btn" title="全屏查看">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+        </button>
+      </div>
+
+      <!-- 图片卡片 -->
+      <div class="pea-node-result-image-wrap">
+        <button class="pea-node-result-star saved" title="已保存"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg></button>
+        <div class="pea-node-image-badge"><button class="pea-node-image-badge-btn">4 <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button></div>
+        <img class="img" src="https://picsum.photos/seed/peanode/640/440" alt="生成结果" />
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <span class="tag">改动 1</span><b>点图不再放大</b>：主图 <code>onClick</code> 已移除，<code>cursor: zoom-in</code> 改为 <code>default</code>，hover 用 <code>brightness</code> 微光替代 <code>scale</code> 缩放。<br/><br/>
+    <span class="tag">改动 2</span><b>容器精致化</b>：16px 圆角 + 细边框 + 柔和投影，hover 边框/光晕微交互。<br/><br/>
+    <span class="tag">改动 3</span><b>工具栏降权</b>：裁剪/3D/去背景/放大/更多 为 <code>muted</code>（半透明占位），仅「风格迁移 / 保存到素材库 / 下载 / 全屏查看」保持醒目。<br/><br/>
+    <span class="tag">保留</span>工具栏「全屏查看」为独立按钮（非点图放大）。如也不需要，告诉我即可删除。
+  </div>
+</body>
+</html>

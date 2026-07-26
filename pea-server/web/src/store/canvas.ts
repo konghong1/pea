@@ -17,9 +17,14 @@ export type PeaNodeData = {
   kind: PeaNodeKind;
   prompt?: string;
   html?: string;
-  url?: string;           // 用户上传的文件 URL
-  resultUrl?: string;     // 模型生成的结果 URL（图片/视频等）
+  url?: string;           // 用户上传的文件 URL（blob 或解析后的签名 URL）
+  fileKey?: string;       // 上传到 MinIO 的持久化 key（u:{userId}/uploads/...），渲染时换签名下载 URL
+  resultUrl?: string;     // 模型生成的结果 URL（图片/视频等，兼容旧数据）
+  resultUrls?: string[];  // 模型生成的多张结果 URL（image 节点支持多图）
+  resultIndex?: number;   // 当前展示 resultUrls 中的第几张
+  savedToLibrary?: boolean; // 是否已保存到素材库
   generating?: boolean;   // 是否正在生成中
+  params?: Record<string, unknown>; // 生成参数（模型、分辨率、比例等，供 lightbox 信息面板展示）
   meta?: Record<string, unknown>;
 };
 
@@ -100,10 +105,21 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     const reconciled = next.map((n: any) =>
       n.selected === ids.includes(n.id) ? n : { ...n, selected: ids.includes(n.id) },
     );
-    set({ nodes: reconciled, dirty: true });
+    // 仅用户实质变更（拖动 position / 增删 / replace）才标脏。
+    // dimensions(ReactFlow 加载时尺寸测量) 与 select(受控选中) 是内部事件，
+    // 不标脏——否则「进入画布即被自动保存」，导致 version 无谓递增、写放大、乐观锁冲突。
+    const isUserChange = changes.some(
+      (c: any) => c.type === 'position' || c.type === 'remove' || c.type === 'add' || c.type === 'replace',
+    );
+    set({ nodes: reconciled, dirty: isUserChange ? true : get().dirty });
   },
-  onEdgesChange: (changes) =>
-    set({ edges: applyEdgeChanges(changes, get().edges), dirty: true }),
+  onEdgesChange: (changes) => {
+    // 同上：select(受控选中) 不标脏，仅 remove/add/position 等实质变更标脏。
+    const isUserChange = changes.some(
+      (c: any) => c.type === 'remove' || c.type === 'add' || c.type === 'position',
+    );
+    set({ edges: applyEdgeChanges(changes, get().edges), dirty: isUserChange ? true : get().dirty });
+  },
   onConnect: (conn) => set({ edges: addEdge({ ...conn, type: 'pea' }, get().edges), dirty: true }),
   removeEdge: (id) => set({ edges: get().edges.filter((e) => e.id !== id), dirty: true }),
   addNode: (data, position) => {
@@ -171,10 +187,27 @@ export const useCanvas = create<CanvasState>((set, get) => ({
           ? JSON.parse(raw)
           : { nodes: [], edges: [] }
         : raw ?? { nodes: [], edges: [] };
+    // 加载时清洗节点：丢弃 ReactFlow 运行时字段（width/height/positionAbsolute/
+    // selected/dragging/measured 等），只保留持久化所需的字段，交由 ReactFlow 重新测量，
+    // 避免陈旧测量值导致 fitView 视口抖动、看起来「内容变了」。
+    const cleanNode = (n: any) => ({
+      id: n.id,
+      type: n.type || 'pea',
+      position: n.position || { x: 0, y: 0 },
+      data: n.data || {},
+    });
+    const cleanEdge = (e: any) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle ?? null,
+      targetHandle: e.targetHandle ?? null,
+      type: e.type || 'pea',
+    });
     set({ canvasId: g.data.id, version: g.data.version, title: g.data.title, dirty: false });
     set({
-      nodes: graph.nodes ?? [],
-      edges: (graph.edges ?? []).map((e: Edge) => (e.type ? e : { ...e, type: 'pea' })),
+      nodes: (graph.nodes ?? []).map(cleanNode),
+      edges: (graph.edges ?? []).map(cleanEdge),
       version: g.data.version,
       dirty: false,
     });

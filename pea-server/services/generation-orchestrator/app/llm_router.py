@@ -18,14 +18,18 @@ import uuid
 
 from app import db
 from app.config import settings
+from app.prompt_construction import INSTANCE as prompt_layer
 
 
 class GenerationResult:
-    def __init__(self, url: str, provider: str, raw: dict | None = None, text: str | None = None):
+    def __init__(self, url: str, provider: str, urls: list[str] | None = None, raw: dict | None = None, text: str | None = None,
+                 usage: dict | None = None):
         self.url = url
+        self.urls = urls or []   # 多图生成时所有图片 URL
         self.provider = provider
         self.raw = raw or {}
         self.text = text  # 文本生成结果 (图像/视频为 None)
+        self.usage = usage or {}  # token 用量 (Phase3): {input_tokens, output_tokens, total_tokens}
 
 
 class BaseProvider(abc.ABC):
@@ -49,15 +53,35 @@ class MockProvider(BaseProvider):
         time.sleep(0.3)
         job_id = req.get("job_id", uuid.uuid4().hex)
         kind = req.get("type")
+        # 从参数中获取出图数量
+        n = 1
+        try:
+            n = max(1, min(4, int(req.get("params", {}).get("n", 1))))
+        except (TypeError, ValueError):
+            n = 1
+        # mock 模式也产出占位 usage, 便于无密钥联调时验证 token 计量链路
+        usage = {
+            "input_tokens": max(1, len(req.get("prompt", "")) // 4),
+            "output_tokens": 0,
+            "total_tokens": max(1, len(req.get("prompt", "")) // 4),
+        }
         if kind == "video":
             url = f"{settings.cdn_base_url}/mock/{job_id}.mp4"
+            return GenerationResult(url=url, provider=self.name, usage=usage)
         elif kind == "text":
             return GenerationResult(
-                url="", provider=self.name, text=f"[mock] {req.get('prompt', '')[:200]}"
+                url="", provider=self.name, text=f"[mock] {req.get('prompt', '')[:200]}",
+                usage=usage,
             )
         else:
-            url = self._placeholder_image(job_id, req.get("prompt", ""))
-        return GenerationResult(url=url, provider=self.name)
+            # 图片生成：支持多张
+            urls = [self._placeholder_image(f"{job_id}_{i}", req.get("prompt", "")) for i in range(n)]
+            return GenerationResult(
+                url=urls[0],
+                urls=urls,
+                provider=self.name,
+                usage=usage
+            )
 
     @staticmethod
     def _placeholder_image(job_id: str, prompt: str) -> str:
@@ -92,8 +116,37 @@ def _make_real_provider(cfg: dict):
     return OpenAICompatibleProvider(cfg)
 
 
+def _with_constructed_prompt(req: dict) -> dict:
+    """Phase2: 图片/视频节点按用户所选平台配置构造平台化提示词。
+
+    仅对 image/video 生效 (文本节点走 BFF SSE, 不经此路径)。无平台配置/加载失败则原样返回。
+    """
+    if req.get("type") not in ("image", "video"):
+        return req
+    pc_id = req.get("platform_config_id")
+    if not pc_id:
+        return req
+    try:
+        pc = db.get_platform_config(pc_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"[router] load platform_config {pc_id} failed: {e}")
+        return req
+    if not pc:
+        return req
+    constructed = prompt_layer.construct(req, pc)
+    if constructed and constructed != req.get("prompt"):
+        req = {**req, "prompt": constructed}
+    return req
+
+
 def route(req: dict) -> GenerationResult:
     """按 model 解析提供商并调用; 真实失败按策略决定回退 Mock 还是抛出。"""
+    # 开发/联调极速开关: 命中的 type 直接走 MockProvider, 跳过 DB 解析与真实模型调用。
+    # 用于把图像/视频生成压到 ~0.5s (真实 Agnes 单张 18~77s, 无法达到 1~3s)。
+    if req.get("type") in settings.force_mock_types_set:
+        print(f"[router] type '{req.get('type')}' in force_mock_types -> MockProvider (dev fast path)")
+        return _mock.generate(req)
+
     model_id = req.get("model")
     cfg = None
     try:
@@ -101,6 +154,9 @@ def route(req: dict) -> GenerationResult:
     except Exception as e:  # noqa: BLE001  DB 抖动不应让整条链路崩, 记录后按缺省处理
         print(f"[router] resolve model '{model_id}' failed: {e}")
         cfg = None
+
+    # Phase2: 图片/视频节点按平台配置构造提示词 (mock / 真实 provider 共用同一构造结果)
+    req = _with_constructed_prompt(req)
 
     # 解析不到模型 / 提供商停用 -> Mock 兜底 (仅联调) 或直接失败。
     if not cfg or not cfg.get("provider_enabled"):

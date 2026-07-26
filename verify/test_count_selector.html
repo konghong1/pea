@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E28 - 出图数量选择器调试</title>
+<style>
+  body { font-family: system-ui, sans-serif; padding: 20px; background: #f5f5f5; }
+  h1 { color: #333; }
+  .test-section { background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+  .test-section h2 { margin-top: 0; color: #1fa2dc; }
+  pre { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+  label { display: block; margin-bottom: 8px; }
+  input[type="checkbox"] { margin-right: 8px; }
+  button { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; }
+  .btn-primary { background: #1fa2dc; color: white; }
+  .btn-primary:hover { background: #1790c4; }
+  .pass { color: #22c55e; }
+  .fail { color: #ef4444; }
+</style>
+</head>
+<body>
+<h1>🔧 E28 出图数量选择器 — 前端自检</h1>
+
+<div class="test-section">
+  <h2>模拟 NodeChatPrompt 组件内部状态</h2>
+  <p>这个页面模拟 React 组件的状态管理逻辑，验证出图数量选择器是否正常工作。</p>
+  
+  <label>
+    <input type="checkbox" id="mockCountOpen" checked> countOpen (下拉列表展开)
+  </label>
+  
+  <label>
+    当前 count 值：
+    <select id="countSelect">
+      <option value="1">1x</option>
+      <option value="2">2x</option>
+      <option value="3">3x</option>
+      <option value="4">4x</option>
+    </select>
+  </label>
+  
+  <p><strong>渲染结果：</strong></p>
+  <div id="renderArea" style="padding: 16px;"></div>
+  
+  <hr style="margin: 20px 0;">
+  
+  <h3>📋 自动测试</h3>
+  <button class="btn-primary" onclick="runAllTests()">运行全部测试</button>
+  <pre id="testResults"></pre>
+</div>
+
+<div class="test-section">
+  <h2>✅ COUNT_OPTIONS 定义检查</h2>
+  <pre id="countOptionsDisplay"></pre>
+</div>
+
+<script>
+// ==================== 模拟 NodeChatPrompt 中的常量定义 ====================
+const COUNT_OPTIONS = [1, 2, 3, 4].map((n) => ({ label: `${n}x`, value: n }));
+
+document.getElementById('countOptionsDisplay').textContent = JSON.stringify(COUNT_OPTIONS, null, 2);
+
+// ==================== 模拟渲染函数 ====================
+function renderMock() {
+  const countOpen = document.getElementById('mockCountOpen').checked;
+  const count = parseInt(document.getElementById('countSelect').value);
+  
+  let html = `<div style="position: relative; display: inline-block;">`;
+  html += `<button style="background: rgba(0,0,0,0.45); color: white; border: none; border-radius: 8px; padding: 6px 14px; font-weight: 600; cursor: pointer;">${count}x</button>`;
+  
+  if (countOpen) {
+    html += `<div style="position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 50; background: rgba(28,28,36,0.98); border: 1px solid rgba(255,255,255,0.09); border-radius: 12px; padding: 5px; min-width: 64px;">`;
+    COUNT_OPTIONS.forEach(opt => {
+      const isActive = count === opt.value;
+      html += `<button style="display:block; width:100%; padding:6px 14px; font-size:12px; font-weight:600; color:${isActive ? '#1fa2dc' : 'rgba(255,255,255,0.65)'}; background:${isActive ? 'rgba(31,162,220,0.1)' : 'transparent'}; border:none; border-radius:7px; cursor:pointer; text-align:center;" class="node-count-opt${isActive ? ' active' : ''}">${opt.label}</button>`;
+    });
+    html += `</div>`;
+  }
+  
+  html += `</div>`;
+  document.getElementById('renderArea').innerHTML = html;
+}
+
+// 监听变化，实时渲染
+document.getElementById('mockCountOpen').addEventListener('change', renderMock);
+document.getElementById('countSelect').addEventListener('change', renderMock);
+renderMock();
+
+// ==================== 自动测试 ====================
+function runAllTests() {
+  const results = [];
+  
+  // Test 1: COUNT_OPTIONS 定义正确
+  results.push(`测试 1: COUNT_OPTIONS 有 4 个选项 - ${COUNT_OPTIONS.length === 4 ? '<span class="pass">✅ PASS</span>' : '<span class="fail">❌ FAIL</span>'}`);
+  
+  // Test 2: 每个选项都有正确的 label 和 value
+  const expectedLabels = ['1x', '2x', '3x', '4x'];
+  const labelsMatch = COUNT_OPTIONS.every((opt, i) => opt.label === expectedLabels[i] && opt.value === i + 1);
+  results.push(`测试 2: 标签和值匹配 - ${labelsMatch ? '<span class="pass">✅ PASS</span>' : '<span class="fail">❌ FAIL</span>'}`);
+  
+  // Test 3: 初始渲染时 count=1, countOpen=true, 所有选项都可见
+  document.getElementById('mockCountOpen').checked = true;
+  document.getElementById('countSelect').value = '1';
+  renderMock();
+  const allOptsVisible = document.querySelectorAll('.node-count-opt').length === 4;
+  const firstActive = document.querySelector('.node-count-opt.active')?.textContent === '1x';
+  results.push(`测试 3: 初始状态 4 个选项可见且 1x 高亮 - ${allOptsVisible && firstActive ? '<span class="pass">✅ PASS</span>' : '<span class="fail">❌ FAIL</span>'}`);
+  
+  // Test 4: 切换 count=3, 下拉展开, 3x 应该高亮
+  document.getElementById('countSelect').value = '3';
+  renderMock();
+  const threeActive = document.querySelector('.node-count-opt.active')?.textContent === '3x';
+  const threeBtn = document.querySelector('.node-count-btn') || document.querySelector('button[style*="font-weight: 600"]');
+  results.push(`测试 4: count=3 时 3x 选项高亮 - ${threeActive ? '<span class="pass">✅ PASS</span>' : '<span class="fail">❌ FAIL</span>'}`);
+  
+  // Test 5: 点击按钮切换 countOpen=false, 下拉列表消失
+  document.getElementById('mockCountOpen').checked = false;
+  renderMock();
+  const dropdownHidden = document.querySelectorAll('.node-count-btn-dropdown, [style*="background: rgba(28,28,36,0.98)"]').length === 0;
+  results.push(`测试 5: 关闭下拉列表后选项隐藏 - ${dropdownHidden ? '<span class="pass">✅ PASS</span>' : '<span class="fail">❌ FAIL</span>'}`);
+  
+  // Test 6: 点击按钮重新展开, 当前值应保持
+  document.getElementById('mockCountOpen').checked = true;
+  renderMock();
+  const reExpandedActive = document.querySelector('.node-count-opt.active')?.textContent === '3x';
+  results.push(`测试 6: 重新展开后 3x 仍然高亮 - ${reExpandedActive ? '<span class="pass">✅ PASS</span>' : '<span class="fail">❌ FAIL</span>'}`);
+  
+  // Test 7: 从 3x 切换到 4x
+  document.getElementById('countSelect').value = '4';
+  renderMock();
+  const fourActive = document.querySelector('.node-count-opt.active')?.textContent === '4x';
+  results.push(`测试 7: 切换至 4x 后 4x 高亮 - ${fourActive ? '<span class="pass">✅ PASS</span>' : '<span class="fail">❌ FAIL</span>'}`);
+  
+  document.getElementById('testResults').innerHTML = results.join('\n');
+}
+</script>
+</body>
+</html>

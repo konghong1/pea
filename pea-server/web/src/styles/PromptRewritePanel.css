@@ -1,0 +1,315 @@
+/* ══════════════════════════════════════════════════════════════
+ * PromptRewritePanel — 提示词改写面板样式
+ * ══════════════════════════════════════════════════════════════ */
+
+.prompt-rewrite-panel {
+  margin-top: 12px;
+}
+
+/* ── 展开/收起按钮 ── */
+.prompt-rewrite-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #f0f4ff 0%, #e8f0fe 100%);
+  border: 1px solid #d0dce8;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1a73e8;
+  font-weight: 500;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.prompt-rewrite-toggle:hover {
+  background: linear-gradient(135deg, #e0ecff 0%, #d6e4fc 100%);
+  border-color: #b0c8f0;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(26, 115, 232, 0.15);
+}
+
+.toggle-icon {
+  font-size: 10px;
+  transition: transform 0.2s ease;
+}
+
+.toggle-label {
+  flex: 1;
+}
+
+/* ── 面板主体 ── */
+.prompt-rewrite-body {
+  margin-top: 8px;
+  padding: 16px;
+  background: #ffffff;
+  border: 1px solid #e0e8f0;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+  animation: pr-fade-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pr-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ── 媒体类型切换 ── */
+.pr-media-type {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.pr-type-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: #f8fafc;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: #475569;
+  transition: all 0.2s ease;
+}
+
+.pr-type-btn:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.pr-type-btn.active {
+  border-color: #1a73e8;
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  color: #1e40af;
+  box-shadow: 0 2px 8px rgba(26, 115, 232, 0.2);
+}
+
+.type-icon {
+  font-size: 16px;
+}
+
+/* ── 风格选择区 ── */
+.pr-style-section {
+  margin-bottom: 16px;
+}
+
+.pr-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.pr-style-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.pr-style-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  background: #f8fafc;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: #64748b;
+  transition: all 0.2s ease;
+}
+
+.pr-style-btn:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+  transform: translateY(-2px);
+}
+
+.pr-style-btn.active {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-color: #f59e0b;
+  color: #92400e;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.25);
+}
+
+.style-icon {
+  font-size: 18px;
+}
+
+/* ── 输入框区 ── */
+.pr-input-section {
+  margin-bottom: 16px;
+}
+
+.pr-input {
+  width: 100%;
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 2px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #1e293b;
+  resize: vertical;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.pr-input::placeholder {
+  color: #94a3b8;
+}
+
+.pr-input:focus {
+  outline: none;
+  border-color: #1a73e8;
+  box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.15);
+}
+
+.pr-input-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+/* ── 改写按钮 ── */
+.pr-rewrite-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 20px;
+  background: linear-gradient(135deg, #1a73e8 0%, #0d6efd 100%);
+  border: none;
+  border-radius: 10px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 2px 8px rgba(26, 115, 232, 0.3);
+}
+
+.pr-rewrite-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #1557b0 0%, #0b5ed7 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(26, 115, 232, 0.4);
+}
+
+.pr-rewrite-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pr-rewrite-btn.loading {
+  background: linear-gradient(135deg, #64748b 0%, #475569 100%);
+}
+
+.btn-icon {
+  font-size: 18px;
+}
+
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── 结果区 ── */
+.pr-result-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.pr-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.pr-result-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pr-copy-btn,
+.pr-apply-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.pr-copy-btn {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+.pr-copy-btn:hover {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.pr-copy-btn.copied {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.pr-apply-btn {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+}
+
+.pr-apply-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.4);
+}
+
+.pr-result-text {
+  padding: 14px 16px;
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #166534;
+  word-break: break-word;
+}

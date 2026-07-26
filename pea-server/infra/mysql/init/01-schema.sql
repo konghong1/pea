@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
     status          ENUM('queued','running','done','failed','refunded') NOT NULL DEFAULT 'queued',
     payload_json    JSON NULL,
     result_json     JSON NULL,
+    usage_json      JSON NULL,                     -- 本次生成的 token 用量 (由编排器回写, Phase3)
     cost_tapies     INT NOT NULL DEFAULT 0,
     idempotency_key VARCHAR(128) NULL,
     created_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -177,6 +178,45 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
     UNIQUE KEY uq_jobs_idem (idempotency_key),
     KEY idx_jobs_user (user_id),
     KEY idx_jobs_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ---------------------------------------------------------------------------
+-- 节点聊天 Agent — 平台提示词配置 (Phase2: 图片/视频按用户所选平台构造提示词)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS platform_configs (
+    id              VARCHAR(64) NOT NULL,
+    owner_id        BIGINT UNSIGNED NOT NULL,
+    name            VARCHAR(120) NOT NULL,
+    platform        VARCHAR(64) NOT NULL DEFAULT 'generic',   -- midjourney/dalle/sora/stable-diffusion/generic
+    kind            ENUM('image','video') NOT NULL DEFAULT 'image',
+    prompt_mode     ENUM('plain','llm') NOT NULL DEFAULT 'plain',  -- plain: 模板拼装; llm: 先调文本 LLM 扩写
+    presets_json    JSON NULL,                                -- {style_prefix, negative_prompt, aspect_ratio, quality, extra}
+    expand_model    VARCHAR(200) NULL,                        -- llm 模式扩写所用模型 (ai_models.id), 空则回退 plain
+    is_default      TINYINT NOT NULL DEFAULT 0,
+    created_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at      DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_pc_owner (owner_id, kind)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ---------------------------------------------------------------------------
+-- 节点聊天 Agent — token 用量计量 (Phase3: 审计/统计, 不动计费公式)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS usage_records (
+    id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id           BIGINT UNSIGNED NOT NULL,
+    job_id            VARCHAR(36) NULL,
+    node_type         ENUM('text','image','video') NOT NULL,
+    model             VARCHAR(200) NULL,
+    provider          VARCHAR(120) NULL,
+    platform_config_id VARCHAR(64) NULL,
+    input_tokens      INT NOT NULL DEFAULT 0,
+    output_tokens     INT NOT NULL DEFAULT 0,
+    total_tokens      INT NOT NULL DEFAULT 0,
+    created_at        DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_ur_user (user_id, created_at),
+    KEY idx_ur_job (job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS generation_plans (

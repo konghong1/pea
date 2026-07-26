@@ -87,6 +87,7 @@ services:
       PEA_MINIO_SECRET_KEY: minioadmin
       PEA_MINIO_USE_SSL: "false"
       PEA_MINIO_BUCKET: pea-media
+      PEA_MINIO_PUBLIC_ENDPOINT: "localhost:9000"
       PEA_CDN_BASE_URL: "http://localhost:9000/pea-media"
       PEA_ORCHESTRATOR_URL: "http://generation-orchestrator:8000"
       PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
@@ -128,6 +129,8 @@ services:
       PEA_ALLOW_MOCK_FALLBACK: "false"
       PEA_PROVIDER_IMAGE_TIMEOUT_S: "300"
       PEA_PROVIDER_HTTP_CONNECT_TIMEOUT_S: "15"
+      # 真实模型出图：不走 mock。图像/视频直接透传提供商公网 CDN URL，浏览器直显。
+      # （之前 PEA_FORCE_MOCK_TYPES=image,video 仅用于联调占位，已移除——用户要求调用真实模型。）
     ports:
       - "8000:8000"
     depends_on:

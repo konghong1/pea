@@ -48,20 +48,47 @@ body {
   transition: background 0.2s ease, color 0.2s ease;
 }
 
-/* ===== 画布节点卡片 (对齐 pea-canvas-v12 截图3/4/5/6) ===== */
+/* ===== 画布节点卡片 (对齐 pea-canvas-v12 截图3/4/5/6) =====
+ * 统一原则：
+ *  - 所有节点外壳（text/image/video/audio/通用）共享同一宽度 + 同一 body-card 圆角/边框/阴影
+ *  - 节点顶部只有小字标签（透明、无边框、无背景）
+ *  - 工具条真正悬浮在节点**外**顶部（不覆盖节点内容区）
+ *  - 图片占满 body-card（不留缝），body-card 自身承担圆角/边框/裁切
+ */
 .pea-node {
   position: relative;
-  width: 260px;
+  width: 280px !important;  /* !important 防止 audio/video 元素的 UA 默认宽度反向撑小 .pea-node 父容器 */
   font-size: 12px;
   color: #fff;
+  box-sizing: border-box;
+  /* 统一手型光标：鼠标移到任意节点上都显示“抓手”(grab)，提示可拖动；
+     按下拖动时变 grabbing，编辑文本态单独用 text 光标（见 .pea-node-text-edit.is-editing）。 */
+  cursor: grab;
+}
+.pea-node:active {
+  cursor: grabbing;
+}
+/* 编辑中的文本节点：光标回到文本输入态（I 型），不与拖动抓手冲突 */
+.pea-node-text-edit.is-editing {
+  cursor: text;
+}
+/* 节点内可点击元素保持 pointer，不被外层 grab 覆盖 */
+.pea-node-media-upload,
+.pea-node-image-picker-item,
+.pea-node-result-star,
+.pea-node-result-replace,
+.pea-node-toolbar-btn {
+  cursor: pointer;
 }
 .pea-node-text {
-  width: 220px;
+  width: 280px;
 }
 /* 节点主体卡片（节点下方深色圆角框） */
 .pea-node-body-card {
   position: relative;
   margin-top: 14px;
+  width: 100%;          /* 撑满 .pea-node 父节点，不被内容（audio/video 等）撑窄 */
+  box-sizing: border-box;
   border-radius: 18px;
   background: rgba(34, 34, 40, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -72,63 +99,107 @@ body {
   justify-content: center;
   padding: 14px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden; /* 图片节点需要让图片完全贴合 body-card 圆角 */
 }
 .pea-node.selected .pea-node-body-card {
   border-color: rgba(255, 255, 255, 0.18);
   box-shadow: 0 22px 50px rgba(0, 0, 0, 0.55), 0 0 0 2px rgba(31, 162, 220, 0.35);
 }
-/* text 节点上方小标签（截图3） */
+/* 节点顶部标签：透明小字（参考截图1），紧贴 body-card 上方居中浮起 */
 .pea-node-tag-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: rgba(34, 34, 40, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
   font-size: 11px;
-  color: #d8d8e0;
+  color: rgba(255, 255, 255, 0.55);
   position: absolute;
-  top: -10px;
+  top: -8px;
   left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
   z-index: 2;
+  letter-spacing: 0.2px;
 }
 .pea-node-tag-icon {
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
-  color: #fff;
+  color: rgba(255, 255, 255, 0.7);
 }
-/* image/video/audio 节点上方圆形"上传"按钮（截图4/5/6） */
-.pea-node-upload-btn {
-  position: absolute;
-  top: -22px;
-  left: 50%;
-  transform: translateX(-50%);
+/* 空媒体节点的安静上传区（取代原先悬浮的大黑“上传”药丸，与结果态标签风格统一） */
+.pea-node-media-placeholder-icon {
+  display: inline-flex;
+  color: rgba(255, 255, 255, 0.42);
+  opacity: 0.9;
+}
+/* 幽灵上传按钮：透明描边、低调，hover 才微亮，避免空节点显得突兀 */
+.pea-node-media-upload {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 12px;
+  padding: 5px 14px;
   border-radius: 999px;
-  background: rgba(34, 34, 40, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #d8d8e0;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.7);
   font-size: 11px;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
   white-space: nowrap;
-  z-index: 2;
 }
-.pea-node-upload-btn:hover {
-  background: rgba(50, 50, 60, 0.98);
-  border-color: rgba(255, 255, 255, 0.18);
+.pea-node-media-upload:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.35);
   color: #fff;
 }
-/* 媒体卡片（image/video/audio） */
+/* image 节点有图片结果时：节点宽度与外壳统一（280px），不再单独放宽/缩窄 */
+.pea-node.pea-node-image.pea-node-has-media {
+  width: 280px;
+}
+/* 图片节点 body-card：去内边距、去掉冗余外框，让图片直接填满节点内容区（不留缝） */
+.pea-node-image.pea-node-has-media .pea-node-body-card {
+  padding: 0;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  min-height: auto;
+  border-radius: 16px;
+  /* 显式覆盖通则 .pea-node-body-card { overflow:hidden }——
+     功能条 .pea-node-result-toolbar 是这个卡片的后代，translateY(-100%) 浮在卡片顶外，
+     overflow:hidden 会把它裁掉。图片圆角改为图片自身 border-radius 承担。
+     用 !important 是因为 esbuild 压缩会删除 overflow:visible（默认值）；
+     !important 强制保留并压过通则。 */
+  overflow: visible !important;
+}
+/* 媒体卡片去内边距，让图片完全贴合 body-card */
+.pea-node-image.pea-node-has-media .pea-node-media-card {
+  padding-top: 0;
+  gap: 0;
+}
+/* image 结果不重复显示内部 media-label */
+.pea-node-image.pea-node-has-media .pea-node-media-label {
+  display: none;
+}
+/* 图片完整展示：完全填满 body-card（不留上下左右缝），用 cover 避免容器留黑边。
+   border-radius:16px 替代 body-card 的 overflow:hidden 圆角裁切（让功能条不被裁掉） */
+.pea-node-image.pea-node-has-media .pea-node-media-preview,
+.pea-node-image.pea-node-has-media .pea-node-result-image-wrap .pea-node-media-preview {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  max-height: 420px;
+  height: auto;
+  object-fit: cover;
+  border-radius: 16px;
+  background: #000;
+}
+
 .pea-node-media-card {
   position: relative;
-  width: 100%;
+  width: 100%;          /* 撑满 body-card 内宽，让 placeholder/audio/video 不被内容撑窄 */
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -145,11 +216,23 @@ body {
 }
 .pea-node-media-placeholder {
   flex: 1;
-  min-height: 110px;
+  min-height: 120px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.35);
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  border-radius: 12px;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.pea-node-media-placeholder:hover {
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(255, 255, 255, 0.6);
+}
+.pea-node-media-placeholder:hover .pea-node-media-placeholder-icon {
+  color: rgba(255, 255, 255, 0.6);
 }
 .pea-node-media-preview {
   width: 100%;
@@ -160,6 +243,9 @@ body {
 }
 .pea-node-audio {
   width: 100%;
+  min-width: 100%;     /* 强制 audio 控件撑满父容器, 避免 controls UA 宽度(~86px)反向撑小 .pea-node */
+  display: block;      /* audio 默认 inline-block, 这里改成 block 让 width:100% 生效 */
+  box-sizing: border-box;
 }
 /* generate / 未知 kind 的通用占位卡片 */
 .pea-node-generic-card {
@@ -253,6 +339,9 @@ body {
 .pea-node-text-edit:focus {
   background: rgba(255, 255, 255, 0.04);
 }
+
+/* 文本节点内容区：回流文本直接写入可编辑区（与用户输入同区） */
+.pea-node-text-wrap { width: 100%; }
 
 /* 节点连接手柄：默认显示小圆点（让用户知道这里能拖线），hover/选中时放大显 +
    ReactFlow 默认 handle 是 pointer-events:none，事件穿透到 node，由 ReactFlow 用 elementsFromPoint 探测 handle */
@@ -2569,24 +2658,32 @@ body {
 .node-count-opt {
   display: block;
   width: 100%;
-  padding: 6px 14px;
-  font-size: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.65);
-  background: none;
-  border: none;
-  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
   cursor: pointer;
-  transition: all 0.12s ease;
+  transition: all 0.15s ease;
   text-align: center;
+  margin-bottom: 6px;
 }
 .node-count-opt:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.12);
   color: #fff;
+  transform: translateY(-1px);
 }
 .node-count-opt.active {
-  color: var(--pea-brand, #1fa2dc);
+  color: #fff;
   background: rgba(31, 162, 220, 0.1);
+  border-color: rgba(31, 162, 220, 0.35);
+  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.15);
+}
+.node-count-opt:last-child {
+  margin-bottom: 0;
 }
 
 /* ── 右侧出图数按钮（参考截图2/3：消耗量前的 1x 按钮）── */
@@ -2594,15 +2691,15 @@ body {
   position: relative;
   display: inline-flex;
   align-items: center;
+  overflow: visible;
 }
 .node-count-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 32px;
-  height: 24px;
-  padding: 0 8px;
-  font-size: 11.5px;
+  min-width: 28px;
+  padding: 2px 7px;
+  font-size: 11px;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.85);
   background: rgba(255, 255, 255, 0.06);
@@ -2612,6 +2709,7 @@ body {
   transition: all 0.15s ease;
   user-select: none;
   white-space: nowrap;
+  gap: 0;
 }
 .node-count-btn:hover {
   background: rgba(255, 255, 255, 0.12);
@@ -2636,22 +2734,20 @@ body {
   opacity: 0;
   transition: all 0.18s ease;
 }
-/* 出图数弹窗（垂直列表，参考截图3：4x / 2x / 1x） */
+/* 出图数弹窗（与模型选择器样式一致） — Portal 渲染时 position 由内联样式覆盖 */
 .node-count-btn-dropdown {
-  position: absolute;
-  /* 与模型/比例弹窗统一：弹窗底边 = 按钮底边上方 10px（gap 一致），不紧贴 */
-  bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 30;
-  background: rgba(28, 28, 36, 0.98);
+  /* position: fixed;  ← 由内联 style 设置，CSS 只需兜底 absolute */
+  background: rgba(30, 30, 38, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 12px;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.2);
+  border-radius: 16px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.25);
   backdrop-filter: blur(24px) saturate(180%);
-  padding: 5px;
-  min-width: 64px;
-  animation: picker-in 0.17s cubic-bezier(0.16, 1, 0.3, 1);
+  padding: 10px;
+  min-width: 80px;
+  animation: drawer-slide-out 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: visible;
+  z-index: 10002; /* 高于 lightbox(9999) 确保最顶层 */
+  pointer-events: auto; /* 明确允许交互 */
 }
 
 /* ===== 截图 #2：节点输入栏使用 fixed 视口定位，避免受画布缩放影响 ===== */
@@ -3304,4 +3400,479 @@ body {
 .dark .pea-canvas-host .pea-canvas-iconbtn,
 .dark .pea-canvas-host .pea-canvas-bottom-prompt {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 节点生成结果图片：工具条、多图角标、全屏查看 Lightbox
+ * ═════════════════════════════════════════════════════════════════════════════ */
+
+/* 结果图容器：仅作为内部 star/badge 定位参考，不自带边框/圆角/overflow——
+   这些由 body-card 承担（统一圆角、统一裁切）。图片完全填满容器。 */
+.pea-node-result-image-wrap {
+  position: relative;
+  width: 100%;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+.pea-node-result-image-wrap .pea-node-media-preview {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  height: auto;
+  object-fit: cover;
+  border-radius: 0;
+  cursor: default;
+  transition: filter 0.2s ease;
+  background: #000;
+}
+.pea-node-result-image-wrap:hover .pea-node-media-preview {
+  filter: brightness(1.04);
+}
+
+/* 左上角收藏星标 */
+.pea-node-result-star {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+.pea-node-result-star:hover {
+  background: rgba(0, 0, 0, 0.6);
+  color: rgba(255, 255, 255, 0.9);
+  transform: scale(1.08);
+}
+.pea-node-result-star.saved {
+  color: #fbbf24;
+}
+
+/* 右上角多图数字角标（被 .pea-node-result-overlay-tr 包住，自身相对定位） */
+.pea-node-image-badge {
+  position: relative;
+}
+.pea-node-image-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.pea-node-image-badge-btn:hover {
+  background: rgba(0, 0, 0, 0.65);
+}
+/* hover 时箭头向右旋转 */
+.pea-node-image-badge-btn-hover-right .pea-badge-arrow {
+  transition: transform 0.2s ease;
+}
+.pea-node-image-badge-btn-hover-right:hover .pea-badge-arrow {
+  transform: rotate(-90deg);
+}
+/* 多图选择器：并排展示 */
+.pea-node-image-picker {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(28, 28, 34, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+}
+.pea-node-image-picker-horizontal {
+  flex-direction: row;
+}
+.pea-node-image-picker-item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  background: rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  padding: 0;
+}
+.pea-node-image-picker-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pea-node-image-picker-item.active,
+.pea-node-image-picker-item:hover {
+  border-color: var(--pea-brand, #1fa2dc);
+}
+
+/* 右上角浮层容器（替换按钮 + 多图角标 并排） */
+.pea-node-result-overlay-tr {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 替换按钮：图片节点默认可见（hover/选中时有微妙的提亮反馈），不依赖 hover 触发可见性。
+   这样点击可发现性更好——对照参考图，替换按钮始终在右上角悬浮。 */
+.pea-node-result-replace {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.6);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  opacity: 1;
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+  backdrop-filter: blur(6px);
+}
+.pea-node-result-replace:hover {
+  background: rgba(0, 0, 0, 0.78);
+  border-color: rgba(255, 255, 255, 0.32);
+  color: #fff;
+}
+.pea-node-result-replace:active {
+  transform: scale(0.97);
+}
+.pea-node-result-replace svg {
+  display: block;
+}
+
+/* 视频/音频/纯上传图片的结果容器（带相对定位，让替换按钮浮在右上角） */
+.pea-node-result-media-wrap {
+  position: relative;
+  width: 100%;
+}
+.pea-node-result-media-wrap .pea-node-result-replace {
+  /* 媒体容器里的替换按钮常驻显示（因为 video/audio 没有 image-wrap 的 hover 继承） */
+  opacity: 1;
+  transform: translateY(0);
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+/* 文本节点编辑态视觉：双击进入编辑时给一个克制的微亮描边，告诉用户可以开始输入 */
+.pea-node-text-edit.is-editing {
+  outline: 1px solid rgba(31, 162, 220, 0.55);
+  outline-offset: 2px;
+  border-radius: 8px;
+  caret-color: var(--pea-brand, #1fa2dc);
+}
+.pea-node-text-edit.is-editing:focus {
+  outline: 1px solid rgba(31, 162, 220, 0.85);
+}
+
+/* 功能条：相对 .pea-node 自身定位，真正悬浮在节点顶部之外（不覆盖任何节点内容）
+   - top:0 + translate(-50%, calc(-100% - 12px)) → 节点顶端上方 12px
+   - 用 :has() 兼容"鼠标移到 toolbar 上时仍保持显示"，避免节点外 hover 失效 */
+.pea-node-result-toolbar {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, calc(-100% - 12px));
+  /* 必须高于连接手柄(z-index:10)，否则在矮节点上手柄会盖住工具栏按钮、拦截点击 */
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: rgba(30, 30, 36, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px) saturate(140%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  white-space: nowrap;
+}
+/* hover 触发：节点 hover / 节点选中 / 工具条自身 hover（:has 兼容） */
+.pea-node:hover .pea-node-result-toolbar,
+.pea-node.selected .pea-node-result-toolbar,
+.pea-node:has(.pea-node-result-toolbar:hover) .pea-node-result-toolbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pea-node-toolbar-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.12s ease;
+}
+.pea-node-toolbar-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  transform: translateY(-1px);
+}
+.pea-node-toolbar-btn.active {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+}
+/* 占桩（即将上线）按钮：视觉降权，避免工具栏显得廉价、拥挤 */
+.pea-node-toolbar-btn.muted {
+  opacity: 0.45;
+}
+.pea-node-toolbar-btn.muted:hover {
+  opacity: 0.9;
+  background: rgba(255, 255, 255, 0.08);
+}
+.pea-node-toolbar-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 全屏查看 Lightbox（截图10）
+ * ═════════════════════════════════════════════════════════════════════════════ */
+.pea-node-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.96);
+  backdrop-filter: blur(4px);
+  animation: pea-fade-in 0.18s ease;
+}
+@keyframes pea-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.pea-node-lightbox-close {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  z-index: 10001;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(34, 34, 40, 0.9);
+  color: #fff;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pea-node-lightbox-close:hover {
+  background: rgba(60, 60, 70, 0.95);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+/* 左侧大图区 */
+.pea-node-lightbox-left {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 60px 110px;
+  min-width: 0;
+}
+.pea-node-lightbox-img {
+  max-width: 100%;
+  max-height: calc(100vh - 140px);
+  object-fit: contain;
+  border-radius: 10px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.35);
+}
+.pea-node-lightbox-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease;
+  z-index: 10000;
+}
+.pea-node-lightbox-arrow:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.2);
+}
+.pea-node-lightbox-arrow:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+.pea-node-lightbox-arrow.left  { left: 18px; }
+.pea-node-lightbox-arrow.right { right: 18px; }
+.pea-node-lightbox-counter {
+  position: absolute;
+  bottom: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  font-weight: 500;
+}
+.pea-node-lightbox-thumbs {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(28, 28, 34, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.pea-node-lightbox-thumbs button {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  background: rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.pea-node-lightbox-thumbs button img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pea-node-lightbox-thumbs button.active,
+.pea-node-lightbox-thumbs button:hover {
+  border-color: var(--pea-brand, #1fa2dc);
+  transform: translateY(-2px);
+}
+
+/* 右侧信息面板 */
+.pea-node-lightbox-info {
+  width: 320px;
+  flex-shrink: 0;
+  padding: 26px;
+  background: rgba(22, 22, 26, 0.98);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.pea-node-lightbox-info-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 10px;
+}
+.pea-node-lightbox-prompt {
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.72);
+  word-break: break-word;
+}
+.pea-node-lightbox-info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+.pea-node-lightbox-info-label {
+  color: rgba(255, 255, 255, 0.45);
+}
+.pea-node-lightbox-info-value {
+  color: rgba(255, 255, 255, 0.82);
+  text-align: right;
+  max-width: 60%;
+  word-break: break-word;
+}
+.pea-node-lightbox-actions {
+  margin-top: auto;
+  padding-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pea-node-lightbox-action {
+  width: 100%;
+  padding: 10px 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pea-node-lightbox-action:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.pea-node-lightbox-action.primary {
+  background: var(--pea-brand, #1fa2dc);
+  border-color: transparent;
+  color: #fff;
+}
+.pea-node-lightbox-action.primary:hover {
+  background: var(--pea-brand-strong, #0b86bd);
+}
+
+/* 响应式：小屏时信息面板隐藏或折叠（优先保证大图） */
+@media (max-width: 720px) {
+  .pea-node-lightbox-info {
+    display: none;
+  }
+  .pea-node-lightbox-left {
+    padding: 40px 20px 90px;
+  }
 }

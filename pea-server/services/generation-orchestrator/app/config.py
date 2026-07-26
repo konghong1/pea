@@ -54,9 +54,19 @@ class Settings(BaseSettings):
     # 生成结果在对象存储中的公开前缀 (浏览器可直接读取 CDN URL)。
     media_public_prefix: str = "gen"
 
+    # 开发/联调极速开关: 逗号分隔的 type 列表 (如 "image,video") 强制走 MockProvider。
+    # 真实图像/视频提供商 (Agnes 等) 单张出图 18~77s, 物理上无法达到 1~3s; 联调/演示期
+    # 用 mock 可在 ~0.5s 内返回占位图。生产务必留空以走真实提供商。
+    # 取值示例: "" (关闭, 走真实) | "image,video" (图像/视频走 mock) | "image,video,text"
+    force_mock_types: str = ""
+
     # Worker
     worker_enabled: bool = True
     worker_poll_ms: int = 500
+
+    @property
+    def force_mock_types_set(self) -> set[str]:
+        return {s.strip() for s in self.force_mock_types.split(",") if s.strip()}
 
 
 settings = Settings()

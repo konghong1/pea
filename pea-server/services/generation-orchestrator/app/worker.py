@@ -10,7 +10,7 @@ import os
 import threading
 import time
 
-from app import db, models, storage
+from app import db, models, storage, usage
 from app.compensation import refund_on_failure
 from app.config import settings
 from app.llm_router import route, _mock
@@ -104,22 +104,40 @@ def _process(job_id: str, payload: dict) -> None:
         ))
         # 确保 job_id 进入 payload, 供 MockProvider 生成确定性占位 URL。
         payload.setdefault("job_id", job_id)
+        _t0 = time.time()
         result, route_err = _route_with_watchdog(payload)
+        _dt = time.time() - _t0
+        print(f"[worker] route() for job {job_id} took {_dt:.2f}s (provider={result.provider if result else 'ERR'})")
         if route_err is not None:
             raise route_err
-        result_obj: dict = {"url": result.url, "provider": result.provider}
+        usage_dict = result.usage or {}
+        result_obj: dict = {
+            "url": result.url,
+            "urls": result.urls,  # 多图生成时的所有图片 URL
+            "provider": result.provider,
+            "usage": usage_dict
+        }
         if result.text is not None:
             result_obj["text"] = result.text
         db.update_job_status(
             job_id, models.JobStatus.DONE.value,
             result_json=json.dumps(result_obj, ensure_ascii=False),
             cost_tapies=int(payload.get("cost_tapies", settings.default_cost_tapies)),
+            usage_json=json.dumps(usage_dict, ensure_ascii=False),
         )
         publish_event(job_updated(
             job_id=job_id, user_id=user_id, type=payload.get("type", "image"),
             status="done", result_url=result.url,
+            result_urls=result.urls if result.urls else None,  # 新增多图支持
             cost=int(payload.get("cost_tapies", settings.default_cost_tapies)),
         ))
+        # Phase3: 生成后钩子 — 把 token 用量写入 usage_records (审计/统计, 不动计费)
+        usage.record_usage(
+            job_id=job_id, user_id=user_id, node_type=payload.get("type", "image"),
+            model=payload.get("model"), provider=result.provider,
+            platform_config_id=payload.get("platform_config_id"),
+            usage=usage_dict,
+        )
     except Exception as e:  # noqa: BLE001
         db.update_job_status(job_id, models.JobStatus.FAILED.value)
         publish_event(job_updated(
@@ -145,7 +163,7 @@ def run_once() -> None:
     resp = r.xreadgroup(
         GROUP, CONSUMER,
         {GEN_QUEUE: ">", FAST_QUEUE: ">"},
-        count=2, block=1000,
+        count=2, block=200,
     )
     if not resp:
         return

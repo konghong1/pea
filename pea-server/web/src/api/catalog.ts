@@ -132,10 +132,46 @@ export interface AcceptJobInput {
   params?: Record<string, unknown>;
   priority?: 'normal' | 'fast';
   idempotencyKey?: string;
+  /** 图片/视频节点所选平台配置 id (提示词构造层据此拼平台化提示词) */
+  platformConfigId?: string | null;
 }
 
-/** 受理一次生成 (服务端按 模型+参数 权威算价并预扣, 客户端不得指定金额)。 */
+/** 受理一次生成 (服务端按 模型+参数 权威算价并预扣, 客户端不得指定金额)。电商套图等批量生成走此接口; 节点图片/视频请改用 acceptNodeGenerationJob。 */
 export async function acceptGenerationJob(input: AcceptJobInput): Promise<AcceptJobResult> {
   const { data } = await api.post<AcceptJobResult>('/generation/jobs', input);
   return data;
+}
+
+/* ════════════════════ 平台提示词配置 (Phase2) ═══════════════════════════ */
+
+/** 节点图片/视频生成专用输入 (不含 platformConfigId: 节点自身用「比例/分辨率」UI 拼参, 不带平台配置)。 */
+export interface AcceptNodeJobInput {
+  type: ModelType;
+  prompt: string;
+  model?: string;
+  params?: Record<string, unknown>;
+  priority?: 'normal' | 'fast';
+  idempotencyKey?: string;
+}
+
+/** 节点图片/视频生成 — 独立接口 POST /generation/node, 与电商套图 /generation/jobs 解耦。 */
+export async function acceptNodeGenerationJob(input: AcceptNodeJobInput): Promise<AcceptJobResult> {
+  const { data } = await api.post<AcceptJobResult>('/generation/node', input);
+  return data;
+}
+
+/* ═══════════════════════════ token 用量 (Phase3) ═══════════════════════════ */
+
+export interface UsageSummaryRow {
+  node_type: 'text' | 'image' | 'video';
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  calls: number;
+}
+
+/** 当前用户 token 用量汇总。 */
+export async function listUsageSummary(): Promise<UsageSummaryRow[]> {
+  const { data } = await api.get<UsageSummaryRow[]>('/usage/summary');
+  return data ?? [];
 }

@@ -279,20 +279,29 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), provider_type=VALUES(provider_type);
 
 INSERT INTO $DB.ai_models (id, provider_id, model_name, display_name, model_type, enabled, is_default, min_plan_level, pricing_json, params_schema_json, description, sort_order) VALUES
 ('agnes-image-2.0-flash', 'agnes', 'agnes-image-2.0-flash', 'Agnes 图像 2.0 Flash', 'image', 1, 1, 0,
- JSON_OBJECT('base', 10, 'tiers', JSON_OBJECT('size', JSON_OBJECT('1K', 0, '2K', 5, '4K', 20)), 'multiplier', 'n'),
- JSON_OBJECT('size', JSON_ARRAY('1K','2K','4K'), 'n', JSON_ARRAY(1,2,4)), '快速图像生成, 免费可用', 1),
+  JSON_OBJECT('base', 10, 'tiers', JSON_OBJECT('size', JSON_OBJECT('1K', 0, '2K', 5, '4K', 20)), 'multiplier', 'n'),
+  JSON_OBJECT('size', JSON_ARRAY('1K','2K','4K'), 'n', JSON_ARRAY(1,2,4)), '快速图像生成, 免费可用', 1),
 ('agnes-image-2.1-flash', 'agnes', 'agnes-image-2.1-flash', 'Agnes 图像 2.1 Flash', 'image', 1, 0, 1,
- JSON_OBJECT('base', 20, 'tiers', JSON_OBJECT('size', JSON_OBJECT('1K', 0, '2K', 10, '4K', 40)), 'multiplier', 'n'),
- JSON_OBJECT('size', JSON_ARRAY('1K','2K','4K'), 'n', JSON_ARRAY(1,2,4)), '高质量图像生成, 需基础套餐', 2),
+  JSON_OBJECT('base', 20, 'tiers', JSON_OBJECT('size', JSON_OBJECT('1K', 0, '2K', 10, '4K', 40)), 'multiplier', 'n'),
+  JSON_OBJECT('size', JSON_ARRAY('1K','2K','4K'), 'n', JSON_ARRAY(1,2,4)), '高质量图像生成, 需基础套餐', 2),
 ('agnes-video-v2.0', 'agnes', 'agnes-video-v2.0', 'Agnes 视频 2.0', 'video', 1, 1, 2,
- JSON_OBJECT('base', 60, 'tiers', JSON_OBJECT('duration', JSON_OBJECT('5', 0, '10', 60)), 'multiplier', 'n'),
- JSON_OBJECT('duration', JSON_ARRAY(5,10), 'n', JSON_ARRAY(1)), '文生/图生视频, 需专业套餐', 3),
+  JSON_OBJECT('base', 60, 'tiers', JSON_OBJECT('duration', JSON_OBJECT('5', 0, '10', 60)), 'multiplier', 'n'),
+  JSON_OBJECT('duration', JSON_ARRAY(5,10), 'n', JSON_ARRAY(1)), '文生/图生视频, 需专业套餐', 3),
 ('agnes-2.5-pro-alpha', 'agnes', 'agnes-2.5-pro-alpha', 'Agnes 文本 2.5 Pro', 'text', 1, 1, 0,
- JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(), '对话/文本生成', 4)
+  JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(), '对话/文本生成', 4)
 ON DUPLICATE KEY UPDATE model_name=VALUES(model_name), display_name=VALUES(display_name),
     model_type=VALUES(model_type), pricing_json=VALUES(pricing_json),
     params_schema_json=VALUES(params_schema_json), min_plan_level=VALUES(min_plan_level),
     description=VALUES(description);
+
+-- 离线占位文本模型 (mock provider): 无真实 key 时文本节点聊天也能跑通整条 SSE 链路 (非默认)。
+INSERT INTO $DB.ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
+VALUES ('mock-text', 'Mock 文本', 'mock', '', '', 'text', 1, 0)
+ON DUPLICATE KEY UPDATE name=VALUES(name), provider_type=VALUES(provider_type), enabled=1;
+INSERT INTO $DB.ai_models (id, provider_id, model_name, display_name, model_type, enabled, is_default, min_plan_level, pricing_json, params_schema_json, description, sort_order)
+VALUES ('mock-text-1', 'mock-text', 'mock-text-1', 'Mock 文本对话', 'text', 1, 0, 0,
+  JSON_OBJECT('base', 1, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(), '离线占位文本模型', 5)
+ON DUPLICATE KEY UPDATE model_name=VALUES(model_name), display_name=VALUES(display_name), is_default=0;
 
 INSERT INTO $DB.billing_plans (id, name, plan_level, price_cents, tapies, duration_days, enabled, sort_order, features_json) VALUES
 ('free',  '免费体验', 0,    0,  1000,  0,  1, 0, JSON_ARRAY('注册即送 1000 Tapies', '可用免费级模型')),
@@ -302,5 +311,67 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), plan_level=VALUES(plan_level), price_
     tapies=VALUES(tapies), duration_days=VALUES(duration_days), features_json=VALUES(features_json);
 "
 echo "[assert-migrated] commercialization base ready."
+
+# -----------------------------------------------------------------------------
+# 断言 7: 节点聊天 Agent 所需 schema (Phase2 提示词构造层 / Phase3 token 计量)
+#  - generation_jobs.usage_json 列
+#  - platform_configs 表 (按用户所选平台配置构造提示词)
+#  - usage_records 表 (token 用量审计)
+# -----------------------------------------------------------------------------
+echo "[assert-migrated] checking node-chat-agent schema..."
+add_col_if_missing generation_jobs usage_json "usage_json JSON NULL AFTER result_json"
+
+$MYSQL_BIN -e "
+CREATE TABLE IF NOT EXISTS $DB.platform_configs (
+    id VARCHAR(64) NOT NULL,
+    owner_id BIGINT UNSIGNED NOT NULL,
+    name VARCHAR(120) NOT NULL,
+    platform VARCHAR(64) NOT NULL DEFAULT 'generic',
+    kind ENUM('image','video') NOT NULL DEFAULT 'image',
+    prompt_mode ENUM('plain','llm') NOT NULL DEFAULT 'plain',
+    presets_json JSON NULL,
+    expand_model VARCHAR(200) NULL,
+    is_default TINYINT NOT NULL DEFAULT 0,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_pc_owner (owner_id, kind)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS $DB.usage_records (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id BIGINT UNSIGNED NOT NULL,
+    job_id VARCHAR(36) NULL,
+    node_type ENUM('text','image','video') NOT NULL,
+    model VARCHAR(200) NULL,
+    provider VARCHAR(120) NULL,
+    platform_config_id VARCHAR(64) NULL,
+    input_tokens INT NOT NULL DEFAULT 0,
+    output_tokens INT NOT NULL DEFAULT 0,
+    total_tokens INT NOT NULL DEFAULT 0,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_ur_user (user_id, created_at),
+    KEY idx_ur_job (job_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+"
+echo "[assert-migrated] node-chat-agent schema ready."
+
+# 注: 必须在 CREATE TABLE platform_configs 之后才能 seed (否则 1146 表不存在)
+echo "[assert-migrated] seeding platform_configs (idempotent)..."
+$MYSQL_BIN -e "
+INSERT INTO $DB.platform_configs (id, owner_id, name, platform, kind, prompt_mode, presets_json, expand_model, is_default)
+SELECT 'pc_midjourney_img', u.id, 'Midjourney 风格', 'midjourney', 'image', 'plain',
+       JSON_OBJECT('style_prefix','masterpiece, best quality, cinematic lighting','negative_prompt','blurry, lowres, deformed','aspect_ratio','1:1','quality','high'), NULL, 1
+FROM $DB.users u WHERE u.email='admin@pea.ai'
+ON DUPLICATE KEY UPDATE name=VALUES(name), presets_json=VALUES(presets_json);
+
+INSERT INTO $DB.platform_configs (id, owner_id, name, platform, kind, prompt_mode, presets_json, expand_model, is_default)
+SELECT 'pc_sora_video', u.id, 'Sora 电影感', 'sora', 'video', 'llm',
+       JSON_OBJECT('style_prefix','cinematic, film grain, 35mm anamorphic','negative_prompt','','aspect_ratio','16:9','quality','high'), 'agnes-2.5-pro-alpha', 0
+FROM $DB.users u WHERE u.email='admin@pea.ai'
+ON DUPLICATE KEY UPDATE name=VALUES(name), presets_json=VALUES(presets_json), expand_model=VALUES(expand_model);
+"
+echo "[assert-migrated] platform_configs seeded."
 
 echo "[assert-migrated] all assertions passed."

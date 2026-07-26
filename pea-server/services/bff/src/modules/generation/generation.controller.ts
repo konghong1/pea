@@ -10,7 +10,7 @@ import {
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { GenerationService } from './generation.service';
-import { AcceptGenerationDto } from './generation.dto';
+import { AcceptGenerationDto, AcceptNodeGenerationDto } from './generation.dto';
 
 @Controller('generation')
 @UseGuards(JwtAuthGuard)
@@ -20,6 +20,12 @@ export class GenerationController {
   @Post('jobs')
   accept(@CurrentUser() u: { sub: number }, @Body() dto: AcceptGenerationDto) {
     return this.gen.accept(u.sub, dto);
+  }
+
+  /** 节点图片/视频生成 — 独立于电商套图 /generation/jobs, 不携带平台配置。 */
+  @Post('node')
+  acceptNode(@CurrentUser() u: { sub: number }, @Body() dto: AcceptNodeGenerationDto) {
+    return this.gen.acceptNode(u.sub, dto);
   }
 
   @Get('jobs/:jobId')

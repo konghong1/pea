@@ -35,6 +35,8 @@ export default () => {
       secretKey: process.env.PEA_MINIO_SECRET_KEY ?? 'minioadmin',
       bucket: process.env.PEA_MINIO_BUCKET ?? 'pea-media',
       cdnBaseUrl: process.env.PEA_CDN_BASE_URL ?? 'http://localhost:9000/pea-media',
+      // 预签名 URL 返回给浏览器时使用的可达 host（dev 下 minio:9000 容器别名浏览器不可达，需改 localhost:9000）。
+      publicEndpoint: process.env.PEA_MINIO_PUBLIC_ENDPOINT ?? (process.env.PEA_MINIO_ENDPOINT ?? 'minio:9000'),
     },
     orchestratorUrl: process.env.PEA_ORCHESTRATOR_URL ?? 'http://generation-orchestrator:8000',
     internalToken: internalToken ?? 'dev-insecure-token-do-not-use-in-prod',

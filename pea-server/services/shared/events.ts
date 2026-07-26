@@ -20,8 +20,10 @@ export interface JobUpdatedEvent {
   status: JobStatus;
   /** 0~1 进度, running 阶段有效 */
   progress?: number;
-  /** 完成后媒体 URL */
+  /** 完成后媒体 URL (主图，兼容单图) */
   resultUrl?: string | null;
+  /** 多图生成时的所有图片 URL (n > 1 时有值) */
+  resultUrls?: string[];
   /** 失败原因 */
   error?: string | null;
   /** 本次消耗 Tapies (done 时回填) */

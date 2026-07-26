@@ -1,29 +1,23 @@
-# 主题控件改下拉（2026-07-24 22:28）
+# 图片节点样式提质 + 移除点图放大
 
-## 用户反馈
-原来 TopNav 顶部的主题控件是 antd `Segmented`（浅 / 深 / 跟随 三个分段按钮），要求改为下拉选择（`Select`）样式，并在画布右上角也加一份同样的下拉。
+## 背景
+用户反馈两点：① 图片节点展示样式很丑；② 点击图片时不要放大（指点击图片弹出全屏 Lightbox）。
+参考页 `superdesign.dev` 需登录，无法抓取其样式 —— 已如实告知，请用户发截图以便 1:1 还原。本次先按 premium 标准在本地代码做提质。
 
-## 改动
-1. **`web/src/components/TopNav.tsx`**
-   - 把 `Segmented` 换成 antd `Select`，共用 class `.pea-theme-select`；
-   - 选项标签从 `浅 / 深 / 跟随` 改为 `浅色 / 深色 / 跟随系统`，更完整；
-   - 后缀箭头 `▾` 替换默认图标，视觉更克制。
-2. **`web/src/components/CanvasEditor.tsx`**
-   - 在 `CanvasActions` 的最左侧新增同样的 `Select`（`useTheme()` 注入 `mode/setMode`）；
-   - **不**用 `<Tooltip>` 包裹（hover 残留文字会跟下拉面板挤在一起，已验证）。
-3. **`web/src/styles/index.css`**
-   - 新增 `.pea-theme-select` 紧凑胶囊样式（32px 高、`border-radius:999px`、hover/open 高亮 brand 色），与 `.pea-canvas-tapies` / `.pea-canvas-community` 视觉一致。
+## 改动清单
 
-## 验证（真机）
-- TopNav `.pea-theme-select` 计数 = 1，画布 `.pea-canvas-actions .pea-theme-select` 计数 = 1；
-- 选项内容一致：`['浅色', '深色', '跟随系统']`；
-- 从任一处切换主题 → 整站即时生效；
-- console error = 0。
+### 1. 移除「点图放大」（`web/src/components/PeaNode.tsx`）
+- `ResultImageView` 主图 `<img onClick={handleFullscreen}>` 已删除，改为 `loading="lazy"` + `draggable={false}`。
+- 工具栏「全屏查看」按钮保留（是独立动作，不是"点图放大"）；如也不需要可告知删除。
 
-## 截图
-- `verify/_canvas_layout/15_canvas_theme_select_closed.png` — 画布关掉下拉
-- `verify/_canvas_layout/16_canvas_theme_select_open.png` — 画布下拉打开（无 Tooltip 残留）
-- `verify/_canvas_layout/19_topnav_theme_select_open.png` — TopNav 下拉打开
+### 2. 样式提质（`web/src/styles/index.css`）
+- **结果图容器** `.pea-node-result-image-wrap`：圆角 12px→16px，加 1px 细边框 + 柔和投影，hover 用边框/光晕微交互替代缩放。
+- **主图** 去掉 `cursor: zoom-in`（改 `default`），hover 由 `scale(1.01)` 改为 `brightness(1.04)`，消除"放大"观感。
+- **功能条** `.pea-node-result-toolbar` 玻璃质感提质（blur 14px + saturate）。
+- **工具栏占桩降权**：`ToolbarButton` 新增 `muted` prop；裁剪/3D/去背景/放大/更多 五个"即将上线"按钮半透明（0.45），仅「风格迁移 / 保存到素材库 / 下载 / 全屏查看」保持醒目 —— 解决廉价拥挤感。
 
-## 部署
-构建产物 `index-D--CFiaQ.js`（CSS `index-C3x9bVgx.css`）已 `docker cp` + `nginx -s reload` 生效。
+## 验证
+改动仅涉及 CSS + 一处 onClick 移除 + 一个可选 prop，风险极低，未触发构建/E2E。需要时可 `npm run build` + `docker cp` 部署核对。
+
+## 交付物
+- `image-node-preview.html`：独立预览，1:1 复刻新图片节点样式，浏览器直接打开即可看效果。

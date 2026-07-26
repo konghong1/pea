@@ -8,6 +8,7 @@ export interface JobUpdatedEvent {
     status: JobStatus;
     progress?: number;
     resultUrl?: string | null;
+    resultUrls?: string[];
     error?: string | null;
     cost?: number;
     ts: number;

@@ -18,6 +18,8 @@ class AcceptJobRequest(BaseModel):
     idempotency_key: str | None = None
     # 预扣的 Tapies (由 BFF 在受理时确认已扣, 这里仅记录成本用于回写)
     cost_tapies: int = Field(default=0, ge=0)
+    # Phase2: 图片/视频节点所选平台配置 id (提示词构造层据此拼平台化提示词)
+    platform_config_id: str | None = None
 
 
 class AcceptJobResponse(BaseModel):

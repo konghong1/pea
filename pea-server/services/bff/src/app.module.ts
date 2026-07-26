@@ -6,6 +6,9 @@ import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { BillingModule } from './modules/billing/billing.module';
 import { GenerationModule } from './modules/generation/generation.module';
+import { PlatformConfigsModule } from './modules/platform-configs/platform-configs.module';
+import { UsageModule } from './modules/usage/usage.module';
+import { ChatModule } from './modules/chat/chat.module';
 import { FilesModule } from './modules/files/files.module';
 import { CanvasesModule } from './modules/canvases/canvases.module';
 import { ProvidersModule } from './modules/providers/providers.module';
@@ -23,6 +26,9 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
     UsersModule,
     BillingModule,
     GenerationModule,
+    PlatformConfigsModule,
+    UsageModule,
+    ChatModule,
     FilesModule,
     CanvasesModule,
     ProvidersModule,

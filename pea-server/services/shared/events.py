@@ -30,10 +30,11 @@ def job_updated(
     status: str,
     progress: Optional[float] = None,
     result_url: Optional[str] = None,
+    result_urls: Optional[list[str]] = None,  # 多图生成时的所有图片 URL
     error: Optional[str] = None,
     cost: Optional[int] = None,
 ) -> dict:
-    return {
+    event = {
         "kind": EventKind.JOB_UPDATED.value,
         "jobId": job_id,
         "userId": user_id,
@@ -45,6 +46,9 @@ def job_updated(
         "cost": cost,
         "ts": __import__("time").time_ns() // 1_000_000,
     }
+    if result_urls:
+        event["resultUrls"] = result_urls
+    return event
 
 
 def balance_changed(

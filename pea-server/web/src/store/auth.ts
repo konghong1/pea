@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { getMe } from '../api/catalog';
+import { clearFileCache } from '../api/files';
 
 export interface AuthUser {
   id: number;
@@ -61,6 +62,7 @@ export const useAuth = create<AuthState>((set) => ({
     }
   },
   logout: () => {
+    clearFileCache();
     localStorage.removeItem('pea_token');
     localStorage.removeItem('pea_user');
     set({
