@@ -359,6 +359,42 @@ function usePopupPosition(anchorRect: { left: number; top: number; width: number
   return pos;
 }
 
+/* 浮层触发按钮的实时视口坐标 */
+type TriggerRect = { left: number; top: number; width: number; bottom: number };
+
+/**
+ * 浮层锚点跟随：浮层打开期间每帧读取触发元素的实时 getBoundingClientRect，
+ * 使弹出层随节点拖拽 / 画布平移缩放无缝跟随（修复：选择框不随节点移动）。
+ * 仅当坐标（取整）变化时才 setState，静止时不触发重渲染，避免无谓开销。
+ */
+function useAnchoredRect(open: boolean, ref: React.RefObject<HTMLElement>): TriggerRect | null {
+  const [rect, setRect] = useState<TriggerRect | null>(null);
+  useEffect(() => {
+    if (!open || !ref.current) {
+      setRect(null);
+      return;
+    }
+    let raf = 0;
+    let last = '';
+    const read = () => {
+      const el = ref.current;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        const key = `${Math.round(r.left)}|${Math.round(r.top)}|${Math.round(r.width)}|${Math.round(r.bottom)}`;
+        if (key !== last) {
+          last = key;
+          setRect({ left: r.left, top: r.top, width: r.width, bottom: r.bottom });
+        }
+      }
+      raf = requestAnimationFrame(read);
+    };
+    raf = requestAnimationFrame(read);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, ref]);
+  return rect;
+}
+
 /* ──────────────── 模型选择弹出层（视口感知） ──────────────── */
 
 interface ModelPickerPopupProps {
@@ -488,7 +524,7 @@ const AspectPickerPopup = forwardRef<HTMLDivElement, AspectPickerPopupProps>((pr
   const isVideo = genType === 'video';
   // 视频面板更宽（5 个区域），图片面板保持紧凑
   const popupWidth = isVideo ? 240 : 200;
-  const estimatedHeight = isVideo ? 420 : 260;
+  const estimatedHeight = isVideo ? 440 : 260;
   const pos = usePopupPosition({ ...rect, bottom: (rect as any).bottom ?? rect.top + 160 }, estimatedHeight, popupWidth);
 
   // 视频比例选项：截图中顺序为 16:9 / 4:3 / 1:1 / 3:4 / 9:16 / 21:9
@@ -526,7 +562,7 @@ const AspectPickerPopup = forwardRef<HTMLDivElement, AspectPickerPopupProps>((pr
               onClick={() => onAspectRatio(ar.value)}
               title={`${ar.label} (${ar.w}×${ar.h})`}
             >
-              <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+              <svg width="22" height="22" viewBox="0 0 28 28" fill="none">
                 <rect x={(28 - 22 * (ar.w / Math.max(ar.w, ar.h))) / 2}
                   y={(28 - 22 * (ar.h / Math.max(ar.w, ar.h))) / 2}
                   width={22 * (ar.w / Math.max(ar.w, ar.h))}
@@ -619,8 +655,8 @@ export default function NodeChatPrompt() {
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   const pickerRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
-  // 触发按钮的位置（用于弹出层定位）
-  const [triggerRect, setTriggerRect] = useState<{ left: number; top: number; width: number; bottom: number } | null>(null);
+  // 触发按钮的实时视口坐标（浮层打开期间每帧跟随节点移动）
+  const triggerRect = useAnchoredRect(pickerOpen, chipRef);
 
   // 图片/视频节点：比例 / 分辨率 / 倍率浮层
   const [aspectOpen, setAspectOpen] = useState(false);
@@ -637,9 +673,9 @@ export default function NodeChatPrompt() {
   const aspectRef = useRef<HTMLDivElement>(null);
   const countRef = useRef<HTMLDivElement>(null);
   const aspectBtnRef = useRef<HTMLButtonElement>(null);
-  const [aspectTriggerRect, setAspectTriggerRect] = useState<{ left: number; top: number; width: number; bottom: number } | null>(null);
+  const aspectTriggerRect = useAnchoredRect(aspectOpen, aspectBtnRef);
   // 出图数触发按钮位置（Portal 定位用）
-  const [countTriggerRect, setCountTriggerRect] = useState<{ left: number; top: number; width: number; bottom: number } | null>(null);
+  const countTriggerRect = useAnchoredRect(countOpen, countRef);
 
   const kind = sel?.data.kind ?? 'text';
   const genType = GEN_TYPE[kind] ?? null;
@@ -915,6 +951,9 @@ export default function NodeChatPrompt() {
       if (countRef.current?.contains(t)) return;
       // 点击富文本输入区也视为浮层外部，关闭模型/参数浮层
       if (t.closest('.node-prompt-input-wrap')) return;
+      // 节点本体 / 编辑器输入栏内的点击（含拖拽节点）不关闭浮层，
+      // 使其能随节点移动而跟随（修复：选择框不随节点移动）
+      if (t.closest('.pea-node') || t.closest('.node-chat-prompt')) return;
       setPickerOpen(false);
       setAspectOpen(false);
       setCountOpen(false);
@@ -960,8 +999,8 @@ export default function NodeChatPrompt() {
       gp.aspectRatio = ar;
       update(single, { aspectRatio: ar, meta: { ...meta, genParams: gp } });
     }
-    // 选中后自动关闭比例浮层
-    setAspectOpen(false);
+    // 选中比例后【不】自动关闭浮层：让用户继续选分辨率/时长/音频，
+    // 浮层由再次点击按钮 / 点击空白处 / Esc 关闭（修复：选尺寸后配置未完成浮层就退出）。
   }, [single, sel?.data.meta, genType, update]);
 
   const persistResolution = useCallback((res: string) => {
@@ -1420,16 +1459,7 @@ useEffect(() => {
               aria-haspopup="dialog"
               aria-expanded={pickerOpen}
               onClick={() => {
-                // 记录触发按钮的实际位置
-                const btnRect = chipRef.current?.getBoundingClientRect();
-                if (btnRect) {
-                  setTriggerRect({
-                    left: btnRect.left,
-                    top: btnRect.top,
-                    width: btnRect.width,
-                    bottom: btnRect.bottom,
-                  });
-                }
+                // 位置由 useAnchoredRect 每帧实时跟随，这里只需切换开关
                 setPickerOpen((v) => !v);
               }}
             >
@@ -1459,15 +1489,7 @@ useEffect(() => {
                 aria-haspopup="dialog"
                 aria-expanded={aspectOpen}
                 onClick={() => {
-                  const btnRect = aspectBtnRef.current?.getBoundingClientRect();
-                  if (btnRect) {
-                    setAspectTriggerRect({
-                      left: btnRect.left,
-                      top: btnRect.top,
-                      width: btnRect.width,
-                      bottom: btnRect.bottom,
-                    });
-                  }
+                  // 位置由 useAnchoredRect 每帧实时跟随，这里只需切换开关
                   setAspectOpen((v) => !v);
                 }}
               >
@@ -1505,16 +1527,7 @@ useEffect(() => {
                 title="生成数量"
                 aria-expanded={countOpen}
                 onClick={() => {
-                  // 记录触发按钮的实际位置，用于 Portal 定位
-                  const btnRect = countRef.current?.getBoundingClientRect();
-                  if (btnRect) {
-                    setCountTriggerRect({
-                      left: btnRect.left,
-                      top: btnRect.top,
-                      width: btnRect.width,
-                      bottom: btnRect.bottom,
-                    });
-                  }
+                  // 位置由 useAnchoredRect 每帧实时跟随，这里只需切换开关
                   setCountOpen((v) => !v);
                 }}
               >

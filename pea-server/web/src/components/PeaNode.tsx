@@ -44,20 +44,31 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const def = NODE_DEF_OF(kind);
   const tagLabel = tagLabelOf(kind);
 
-  // 将 data.aspectRatio（如 "9:16"）映射为 CSS 样式
+  // 将 data.aspectRatio（如 "9:16"）映射为节点尺寸
   // 仅空白节点使用；有内容后由 CSS aspect-ratio:auto 接管（按实际媒体比例包裹）
-  // 宽度固定 340px，横屏比例（16:9/21:9）会导致高度过小，需加 minHeight 保证节点框不会太矮
-  const NODE_WIDTH = 340;
-  const MIN_HEIGHT = 280; // 最小高度：确保即使 21:9 超宽屏也不会缩成一条线
-  const nodeStyle = useMemo(() => {
+  // 关键：让「最长边」恒定 = LONG_EDGE（340px），
+  // 这样切换比例时，比例里那个较大的数字（例如 9:16 与 16:9 中的"16"）
+  // 永远对应相同的物理像素——9:16 的 16 是高度=340，16:9 的 16 是宽度=340，
+  // 视觉上大小完全一致（修复：不同方向同比例数字尺寸不统一）。
+  // 横屏/方形(w>=h)时长边是宽度，竖屏时长边是高度，短边按比例收窄。
+  // 节点外壳宽度通过 CSS 变量 --pea-node-width 动态注入，内层 body-card
+  // 保持 width:100% 撑满外壳，避免出现白边。
+  const LONG_EDGE = 340;
+  const nodeSize = useMemo(() => {
     if (!data.aspectRatio || hasMediaContent) return undefined;
     const [w, h] = data.aspectRatio.split(':').map(Number);
     if (!w || !h) return undefined;
-    const naturalHeight = Math.round(NODE_WIDTH * (h / w));
-    const style: React.CSSProperties = { aspectRatio: `${w}/${h}` };
-    if (naturalHeight < MIN_HEIGHT) style.minHeight = MIN_HEIGHT;
-    return style;
+    return w >= h
+      ? { width: LONG_EDGE, height: Math.round(LONG_EDGE * (h / w)) }
+      : { width: Math.round(LONG_EDGE * (w / h)), height: LONG_EDGE };
   }, [data.aspectRatio, hasMediaContent]);
+
+  const outerStyle = nodeSize
+    ? ({ '--pea-node-width': `${nodeSize.width}px` } as React.CSSProperties)
+    : undefined;
+  const bodyStyle: React.CSSProperties | undefined = nodeSize
+    ? { height: nodeSize.height }
+    : undefined;
 
   // text 节点：把 store 的 html 同步进可编辑区。
   useEffect(() => {
@@ -149,6 +160,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       }}
       onDoubleClick={onNodeDoubleClick}
       data-kind={kind}
+      style={outerStyle}
     >
       {/* 左手柄：用户上传的图片不需要接收其他节点输入，隐藏 */}
       {!isUserUploadedImage && (
@@ -187,7 +199,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       {/* 节点主体 */}
       <div
         className={`pea-node-body-card ${hasImage ? 'pea-node-body-image-result' : ''}`}
-        style={nodeStyle}
+        style={bodyStyle}
       >
         {isText ? (
           <div className="pea-node-text-wrap">

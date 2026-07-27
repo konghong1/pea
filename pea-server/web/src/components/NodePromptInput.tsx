@@ -62,19 +62,23 @@ async function resolveNodeMediaUrl(node: FlowNode<PeaNodeData>): Promise<string 
   // 检测到 blob: 时跳过，继续尝试 fileKey → 签名 URL 路径。
   if (firstUrl && !firstUrl.startsWith('blob:')) return firstUrl;
   if (d.fileKey) {
-    // 优先返回可外传的真实签名 URL（参考图需发给外部模型）；失败再退化为 blob 仅作显示。
+    // 显示用途优先走 BFF 代理的 blob URL（同源，浏览器必然可加载，且不受 MinIO 内网/
+    // CORS 限制影响）；仅当 BFF 代理失败时才退回预签名直链（可能被内网隔离导致浏览器加载失败）。
+    // 注意：此处的返回值只用于「浏览器内显示」（picker 缩略图 / @ token），不会泄漏到
+    // 发给模型的 reference_images（参考图走 resolveUpstreamMediaUrl 的预签名直链）。
+    try {
+      const blob = await getFileUrl(d.fileKey);
+      if (blob) return blob;
+    } catch (e) {
+      console.warn('[resolveNodeMediaUrl] getFileUrl failed', { nodeId: node.id, fileKey: d.fileKey, error: e });
+    }
     try {
       const pu = await getPresignedUrl(d.fileKey);
       if (pu) return pu;
     } catch (e) {
-      console.warn('[resolveNodeMediaUrl] getPresignedUrl failed', { nodeId: node.id, fileKey: d.fileKey, error: e });
+      console.warn('[resolveNodeMediaUrl] getPresignedUrl also failed', { nodeId: node.id, fileKey: d.fileKey, error: e });
     }
-    try {
-      return await getFileUrl(d.fileKey);
-    } catch (e) {
-      console.warn('[resolveNodeMediaUrl] getFileUrl also failed', { nodeId: node.id, fileKey: d.fileKey, error: e });
-      return undefined;
-    }
+    return undefined;
   }
   if (!firstUrl && !d.fileKey) {
     console.warn('[resolveNodeMediaUrl] no resolvable media source', { nodeId: node.id, keys: Object.keys(d) });
@@ -116,6 +120,19 @@ function isTextKind(k: PeaNodeKind): boolean {
 
 function canReference(k: PeaNodeKind): boolean {
   return isMediaKind(k) || isTextKind(k);
+}
+
+/**
+ * 根据当前节点类型决定可引用的上游节点类型。
+ * - 图片/视频/生成节点：只能引用媒体节点作为参考图。
+ * - 文本节点：可引用媒体（作为参考图）和文本（作为 prompt 来源）。
+ * 这样图片节点里 @ 时不会出现连接的文本节点，避免用户误选文本作为图片参考。
+ */
+function canReferenceForKind(hostKind: PeaNodeKind, targetKind: PeaNodeKind): boolean {
+  if (hostKind === 'image' || hostKind === 'video' || hostKind === 'generate') {
+    return isMediaKind(targetKind);
+  }
+  return canReference(targetKind);
 }
 
 /** 在光标处插入一个不可编辑 token。
@@ -166,6 +183,10 @@ function createImageRefPlaceholder(): HTMLElement {
   return span;
 }
 
+function isValidImageUrl(url: unknown): url is string {
+  return typeof url === 'string' && url.length > 0 && (url.startsWith('http') || url.startsWith('data:') || url.startsWith('blob:'));
+}
+
 function insertRefToken(
   editor: HTMLElement,
   nodeId: string,
@@ -184,7 +205,7 @@ function insertRefToken(
   inner.className = 'pea-ref-inner';
   inner.contentEditable = 'false';
   if (kind === 'image') {
-    const imgUrl = typeof label === 'string' && (label.startsWith('http') || label.startsWith('data:') || label.startsWith('blob:')) ? label : '';
+    const imgUrl = isValidImageUrl(label) ? label : '';
     inner.appendChild(imgUrl ? createImageRefThumb(imgUrl, fileKey) : createImageRefPlaceholder());
   } else {
     inner.innerHTML = `<span class="pea-ref-text">${label}</span>`;
@@ -229,13 +250,13 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
   const getUpstream = useCallback((): UpstreamItem[] => {
     const inputs = useCanvas.getState().getUpstreamInputs(nodeId);
     return inputs
-      .filter((n) => canReference(n.data.kind))
+      .filter((n) => canReferenceForKind(kind, n.data.kind))
       .map((n) => ({
         node: n,
         kind: n.data.kind,
         label: isTextKind(n.data.kind) ? getTextSummary(n) : getFileName(n),
       }));
-  }, [nodeId]);
+  }, [nodeId, kind]);
 
   useEffect(() => {
     const load = async () => {
@@ -256,7 +277,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
   useEffect(() => {
     const unsub = useCanvas.subscribe((s) => {
       const items = s.getUpstreamInputs(nodeId)
-        .filter((n) => canReference(n.data.kind))
+        .filter((n) => canReferenceForKind(kind, n.data.kind))
         .map((n) => ({
           node: n,
           kind: n.data.kind,
@@ -269,22 +290,63 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
       });
     });
     return unsub;
-  }, [nodeId]);
+  }, [nodeId, kind]);
+
+  // 上游媒体源指纹：直接读取 store 中上游节点的 fileKey/url/resultUrl/resultUrls。
+  // 关键修复：之前从 `upstream` 数组引用派生，但 subscribe effect 在节点数据变化
+  // （如上传图回填 fileKey、AI 生成回填 resultUrl）时会保留同一数组引用，导致指纹不变、
+  // 缩略图永不刷新（picker 不显示图片、已插入 @ token 裂图）。改为每次 store 变化时
+  // 重新计算指纹，仅当媒体源真的变了才更新，从而可靠触发缩略图重新解析。
+  const [mediaKey, setMediaKey] = useState('');
+
+  const computeMediaKey = useCallback(() => {
+    const items = useCanvas
+      .getState()
+      .getUpstreamInputs(nodeId)
+      .filter((n) => canReferenceForKind(kind, n.data.kind))
+      .map((n) => {
+        const d = n.data;
+        const urls = (d.resultUrls || []).join(',');
+        return `${n.id}:${d.fileKey || ''}:${d.url || ''}:${d.resultUrl || ''}:${urls}`;
+      })
+      .join('|');
+    setMediaKey((prev) => (prev === items ? prev : items));
+  }, [nodeId, kind]);
+
+  // 挂载时计算一次
+  useEffect(() => {
+    computeMediaKey();
+  }, [computeMediaKey]);
+
+  // store 任意变化都重算指纹（computeMediaKey 内部保证值不变时不触发更新，避免无谓刷新）
+  useEffect(() => {
+    const unsub = useCanvas.subscribe(() => {
+      computeMediaKey();
+    });
+    return unsub;
+  }, [computeMediaKey]);
 
   useEffect(() => {
+    if (!mediaKey) return;
     let alive = true;
+    const items = useCanvas
+      .getState()
+      .getUpstreamInputs(nodeId)
+      .filter((n) => canReferenceForKind(kind, n.data.kind));
     (async () => {
       const thumbs: Record<string, string> = {};
-      for (const item of upstream) {
-        if (isMediaKind(item.kind)) {
-          const url = await resolveNodeMediaUrl(item.node);
-          if (url && alive) thumbs[item.node.id] = url;
+      for (const n of items) {
+        if (isMediaKind(n.data.kind)) {
+          const url = await resolveNodeMediaUrl(n);
+          if (url && alive) thumbs[n.id] = url;
         }
       }
       if (alive) setResolvedThumbs(thumbs);
     })();
-    return () => { alive = false; };
-  }, [upstream]);
+    return () => {
+      alive = false;
+    };
+  }, [mediaKey, nodeId, kind]);
 
   // 引用 token 缩略图同步：当 resolvedThumbs 重新解析（如刷新后、上传图签名 URL 过期）时，
   // 把编辑器中已存在的 @ token 的缩略图指向最新 URL；若当前是占位图标则替换为真实 <img>。
@@ -369,7 +431,10 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
               url = urls[0] || d.url || null;
             }
           }
-          if (url && !referenceImages.includes(url)) referenceImages.push(url);
+          // blob: 仅浏览器内显示用，模型侧无法下载（编排器会静默丢弃），
+          // 参考图真实可外传地址由 resolveUpstreamMediaUrl 的预签名直链提供，
+          // 因此这里不把 blob: 纳入 reference_images，避免发送无效参考。
+          if (url && !url.startsWith('blob:') && !referenceImages.includes(url)) referenceImages.push(url);
         }
       });
       let text = '';
@@ -448,6 +513,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
         range.setEnd(endNode, endOffset);
         sel?.removeAllRanges();
         sel?.addRange(range);
+        range.deleteContents();
       } catch {
         /* 选区异常时退化为直接插入 */
       }
@@ -464,33 +530,56 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
   /**
    * 检查光标是否位于或紧邻 pea-ref token。
    * 返回 true 如果光标在 token 内部、token 前、或 token 后的紧挨位置。
+   * 注意：token 后面会插入一个零宽空格占位文本，浏览器可能把后续输入合并进该文本节点，
+   * 因此不能仅因前一个兄弟是 token 就返回 true，必须要求 offset 处于文本节点边界。
    */
   const isCursorInsideOrAdjacentToToken = useCallback((range: Range) => {
     const { startContainer, startOffset } = range;
 
     // 如果光标直接在文本节点内
     if (startContainer.nodeType === Node.TEXT_NODE) {
-      // 检查前一个节点是否为 pea-ref token
+      const textLen = startContainer.textContent?.length ?? 0;
+      // 检查前一个节点是否为 pea-ref token：仅在文本节点开头才算紧贴 token 左边界
       const prev = startContainer.previousSibling;
-      if (prev && prev.nodeType === Node.ELEMENT_NODE && (prev as HTMLElement).classList.contains('pea-ref')) {
+      if (
+        prev &&
+        prev.nodeType === Node.ELEMENT_NODE &&
+        (prev as HTMLElement).classList.contains('pea-ref') &&
+        startOffset === 0
+      ) {
         return true;
       }
       // 检查父元素的前一个节点（防止光标在 token 的子元素内）
       const parentEl = startContainer.parentElement;
       if (parentEl) {
         const parentPrev = parentEl.previousSibling;
-        if (parentPrev && parentPrev.nodeType === Node.ELEMENT_NODE && (parentPrev as HTMLElement).classList.contains('pea-ref')) {
+        if (
+          parentPrev &&
+          parentPrev.nodeType === Node.ELEMENT_NODE &&
+          (parentPrev as HTMLElement).classList.contains('pea-ref') &&
+          startOffset === 0
+        ) {
           return true;
         }
       }
-      // 检查后一个节点是否为 pea-ref token（光标在 token 后面）
+      // 检查后一个节点是否为 pea-ref token：仅在文本节点末尾才算紧贴 token 右边界
       const next = startContainer.nextSibling;
-      if (next && next.nodeType === Node.ELEMENT_NODE && (next as HTMLElement).classList.contains('pea-ref')) {
+      if (
+        next &&
+        next.nodeType === Node.ELEMENT_NODE &&
+        (next as HTMLElement).classList.contains('pea-ref') &&
+        startOffset === textLen
+      ) {
         return true;
       }
       if (parentEl) {
         const parentNext = parentEl.nextSibling;
-        if (parentNext && parentNext.nodeType === Node.ELEMENT_NODE && (parentNext as HTMLElement).classList.contains('pea-ref')) {
+        if (
+          parentNext &&
+          parentNext.nodeType === Node.ELEMENT_NODE &&
+          (parentNext as HTMLElement).classList.contains('pea-ref') &&
+          startOffset === textLen
+        ) {
           return true;
         }
       }

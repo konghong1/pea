@@ -22,7 +22,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +74,13 @@ def _extract_minio_key_from_url(url: str) -> str | None:
 
     URL 格式: http(s)://{host}:{port}/pea-media/{key}?X-Amz-...
     返回 key 部分（如 u:1/abc123.jpg），不含桶名前缀。
+    对 path 做 unquote，避免 key 中的 ':' 等字符被 percent-encoding 后导致 NoSuchKey。
     """
     try:
         parsed = urlparse(url)
         path = parsed.path or ''
         if path.startswith(_BUCKET_PATH_PREFIX):
-            return path[len(_BUCKET_PATH_PREFIX):]
+            return unquote(path[len(_BUCKET_PATH_PREFIX):])
     except Exception:
         pass
     return None
@@ -90,34 +91,55 @@ def _resolve_internal_ref_via_minio(url: str) -> str | None:
 
     流程: 从 URL 提取 object key → 用编排器自有 MinIO 客户端直下 → 转 base64。
     失败返回 None（调用方应丢弃该参考图并告警）。
+
+    鲁棒性: 签名 URL 路径会把 ':' 等字符 percent-encode (u%3A592/...),
+    而 MinIO 实际存储的 key 多为字面量 (u:592/...)。故对提取到的 key 同时尝试
+    "解码后" 与 "原样" 两种候选, 避免 NoSuchKey 导致参考图被静默丢弃。
     """
-    key = _extract_minio_key_from_url(url)
-    if not key:
+    raw_key = _extract_minio_key_from_url(url)
+    if not raw_key:
         logger.warning("[refs] internal URL 无法提取 MinIO key: %s", url[:120])
         return None
 
+    decoded = unquote(raw_key)
+    candidates = []
+    if decoded != raw_key:
+        candidates.append(decoded)   # 优先尝试解码后的字面 key (常见情形)
+    candidates.append(raw_key)       # 再试原样 (极少数按编码存储的情形)
+
     try:
         from app.storage import _get_client
-        import io
 
         client = _get_client()
-        resp = client.get_object('pea-media', key)
-        data = resp.read()
-        resp.close()
-        resp.release_conn()
+        last_exc = None
+        for key in candidates:
+            try:
+                resp = client.get_object('pea-media', key)
+                data = resp.read()
+                resp.close()
+                resp.release_conn()
 
-        # 猜测 MIME 类型
-        ct = getattr(resp, 'content-type', None) or 'image/png'
-        mime = ct.split(';')[0].strip() if ct else 'image/png'
-        b64 = base64.b64encode(data).decode('ascii')
-        result = f'data:{mime};base64,{b64}'
-        logger.info(
-            "[refs] 内部参考图已通过 MinIO 直下转为 data: URI (%d bytes, key=%s)",
-            len(data), key[:60],
-        )
-        return result
+                # 猜测 MIME 类型
+                ct = (
+                    getattr(resp, 'content-type', None)
+                    or (resp.headers.get('Content-Type') if hasattr(resp, 'headers') else None)
+                    or 'image/png'
+                )
+                mime = ct.split(';')[0].strip() if ct else 'image/png'
+                b64 = base64.b64encode(data).decode('ascii')
+                result = f'data:{mime};base64,{b64}'
+                logger.info(
+                    "[refs] 内部参考图已通过 MinIO 直下转为 data: URI (%d bytes, key=%s)",
+                    len(data), key[:60],
+                )
+                return result
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                logger.warning("[refs] MinIO 直下尝试 key=%s 失败: %s", key[:60], exc)
+        logger.warning("[refs] MinIO 直下所有候选 key 均失败, 最后错误: %s", last_exc)
+        return None
     except Exception as exc:
-        logger.warning("[refs] MinIO 直下失败 (key=%s): %s", key[:60], exc)
+        logger.warning("[refs] MinIO 客户端初始化失败: %s", exc)
         return None
 
 

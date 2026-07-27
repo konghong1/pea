@@ -57,7 +57,10 @@ body {
  */
 .pea-node {
   position: relative;
-  width: 340px !important;  /* 放大节点；!important 防止 audio/video 元素的 UA 默认宽度反向撑小 .pea-node 父容器 */
+  /* 宽度默认 340px；空白节点通过 inline style 注入 --pea-node-width 实现比例自适应，
+     既保证横/竖屏节点按真实比例呈现，又避免内层预览框窄于外壳产生白边。
+     !important 保留，防止 audio/video 等 UA 默认宽度反向撑大/撑小节点。 */
+  width: var(--pea-node-width, 340px) !important;
   font-size: 12px;
   color: #fff;
   box-sizing: border-box;
@@ -124,8 +127,10 @@ body {
 
 /* 选中外层光晕 - 已在 .pea-node.selected .pea-node-body-card 中通过 box-shadow 实现 */
 /* 节点框比例：
-   - 图片/视频：由 PeaNode.tsx 根据 data.aspectRatio 写入 inline style（如 "9/16"），
-     新建时从编辑框比例选择器读取，有内容后取消（aspect-ratio:auto 按实际媒体包裹）
+   - 图片/视频空白节点：PeaNode.tsx 根据 data.aspectRatio 计算尺寸，
+     最长边恒为 340，并通过 CSS 变量 --pea-node-width 动态设置节点外壳宽度，
+     内层 body-card 保持 width:100% 撑满外壳，保证 9:16 与 16:9 中的"16"
+     物理尺寸一致且没有白边；有内容后取消（aspect-ratio:auto 按实际媒体包裹）
    - 文本：始终 1:1 正方形
    - 下方 .pea-node-has-media 的规则会覆盖这些值 */
 .pea-node-text .pea-node-body-card {
@@ -2636,8 +2641,10 @@ body {
   backdrop-filter: blur(24px) saturate(180%);
   padding: 12px 14px;
   width: 200px;
-  max-height: 480px;
+  /* 仅在极端矮屏才允许滚动；常规情况下内容自适应高度，避免出现滚动条（修复：视频框滑动条） */
+  max-height: calc(100vh - 24px);
   overflow-y: auto;
+  overflow-x: hidden;
   animation: drawer-slide-out 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   transform-origin: bottom center;
 }
@@ -2691,8 +2698,11 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 3px;
   padding: 6px 2px 4px;
+  min-width: 0;        /* 允许在 6 列网格中收缩，避免横向溢出产生滚动条 */
+  overflow: hidden;
   font-size: 10px;
   color: rgba(255, 255, 255, 0.55);
   background: rgba(255, 255, 255, 0.03);
@@ -2711,6 +2721,10 @@ body {
   color: #fff;
 }
 .aspect-ratio-btn svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+  max-width: 100%;
   opacity: 0.6;
   transition: opacity 0.15s;
 }
@@ -2720,7 +2734,7 @@ body {
 .aspect-grid-6col {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  gap: 5px;
+  gap: 4px;
 }
 
 /* ── 视频时长选择网格 ── */
