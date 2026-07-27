@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   App,
+  AutoComplete,
   Button,
   Empty,
   Form,
@@ -35,6 +36,7 @@ import {
   adminUpdateProvider,
   adminDeleteProvider,
   adminFetchRemoteModels,
+  adminListRemoteModels,
   adminListModels,
   adminCreateModel,
   adminUpdateModel,
@@ -98,12 +100,13 @@ export default function Admin() {
 const PROVIDER_KINDS = ['image', 'video', 'text', 'audio'] as const;
 
 function ProvidersPane() {
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const [rows, setRows] = useState<ProviderView[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<ProviderView | null>(null);
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [remoteFor, setRemoteFor] = useState<ProviderView | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -142,17 +145,8 @@ function ProvidersPane() {
     }
   };
 
-  const onFetchModels = async (p: ProviderView) => {
-    if (!p.baseUrl) return message.warning('该提供商未配置 baseUrl');
-    const hide = message.loading('正在拉取远端模型…', 0);
-    try {
-      const models = await adminFetchRemoteModels(p.id);
-      hide();
-      showRemoteModels(modal, p, models);
-    } catch (e: any) {
-      hide();
-      message.error(e?.response?.data?.message ?? '拉取失败');
-    }
+  const onFetchModels = (p: ProviderView) => {
+    setRemoteFor(p);
   };
 
   const columns: ColumnsType<ProviderView> = [
@@ -201,8 +195,13 @@ function ProvidersPane() {
       width: 240,
       render: (_, r) => (
         <Space size={4}>
-          <Button size="small" icon={<CloudDownloadOutlined />} onClick={() => onFetchModels(r)}>
-            拉模型
+          <Button
+            size="small"
+            icon={<CloudDownloadOutlined />}
+            onClick={() => onFetchModels(r)}
+            title="查看该提供商的远端模型（按类型分组），可重新拉取"
+          >
+            模型
           </Button>
           <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(r)}>
             编辑
@@ -248,36 +247,137 @@ function ProvidersPane() {
           }}
         />
       )}
+      {remoteFor && (
+        <RemoteModelsModal provider={remoteFor} onClose={() => setRemoteFor(null)} />
+      )}
     </>
   );
 }
 
-function showRemoteModels(
-  modal: ReturnType<typeof App.useApp>['modal'],
-  p: ProviderView,
-  models: RemoteModel[],
-) {
-  modal.info({
-    title: `${p.name} 远端可用模型（${models.length}）`,
-    width: 560,
-    content:
-      models.length === 0 ? (
-        <Empty description="未返回任何模型" />
+function RemoteModelsModal({
+  provider,
+  onClose,
+}: {
+  provider: ProviderView;
+  onClose: () => void;
+}) {
+  const { message } = App.useApp();
+  const [models, setModels] = useState<RemoteModel[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
+
+  // 打开即加载「已持久化」的远端模型 (不需实时联网, 与 ai-agent 一致)。
+  const loadStored = useCallback(async () => {
+    setLoading(true);
+    try {
+      setModels(await adminListRemoteModels(provider.id));
+    } catch (e: any) {
+      message.error(e?.response?.data?.message ?? '读取已存模型失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [provider.id, message]);
+
+  useEffect(() => {
+    void loadStored();
+  }, [loadStored]);
+
+  // 重新拉取: 实时从提供商拉取并按类型落库, 再刷新已存视图。
+  const handleRefetch = async () => {
+    if (!provider.baseUrl) return message.warning('该提供商未配置 baseUrl');
+    setFetching(true);
+    try {
+      const ms = await adminFetchRemoteModels(provider.id);
+      setModels(ms);
+      message.success(`已重新拉取并保存 ${ms.length} 个远端模型`);
+    } catch (e: any) {
+      message.error(e?.response?.data?.message ?? '拉取远端模型失败');
+    } finally {
+      setFetching(false);
+    }
+  };
+
+  // 按类型分组 (保留 provider_remote_models.model_type 的全部枚举顺序)。
+  const groups = useMemo(() => {
+    const order = ['text', 'image', 'video', 'audio', 'embedding'];
+    const map = new Map<string, RemoteModel[]>();
+    for (const m of models) {
+      const t = m.modelType || 'unknown';
+      if (!map.has(t)) map.set(t, []);
+      map.get(t)!.push(m);
+    }
+    const entries = order.filter((t) => map.has(t)).map((t) => [t, map.get(t)!] as const);
+    if (map.has('unknown')) entries.push(['unknown', map.get('unknown')!]);
+    return entries;
+  }, [models]);
+
+  return (
+    <Modal
+      title={`${provider.name} · 远端模型`}
+      open
+      width={600}
+      onCancel={onClose}
+      footer={[
+        <Button
+          key="refetch"
+          icon={<CloudDownloadOutlined />}
+          loading={fetching}
+          onClick={handleRefetch}
+        >
+          重新拉取
+        </Button>,
+        <Button key="close" type="primary" onClick={onClose}>
+          关闭
+        </Button>,
+      ]}
+    >
+      <div style={{ marginBottom: 12, color: '#888', fontSize: 12 }}>
+        已持久化 {models.length} 个模型，按能力类型分组展示；点「重新拉取」从
+        <code style={{ margin: '0 4px' }}>{provider.baseUrl || '未配置'}</code>
+        实时刷新并保存。
+      </div>
+      {loading ? (
+        <Empty description="加载中…" />
+      ) : models.length === 0 ? (
+        <Empty description="暂无已存模型，点「重新拉取」从提供商获取" />
       ) : (
-        <div style={{ maxHeight: 360, overflow: 'auto', marginTop: 8 }}>
-          {models.map((m) => (
-            <div
-              key={m.id}
-              style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}
-            >
-              <code>{m.id}</code>
-              {m.owned_by && <span style={{ color: '#999' }}>{m.owned_by}</span>}
+        <div style={{ maxHeight: 440, overflow: 'auto', paddingRight: 4 }}>
+          {groups.map(([t, list]) => (
+            <div key={t} style={{ marginBottom: 14 }}>
+              <div
+                style={{
+                  fontWeight: 600,
+                  marginBottom: 6,
+                  color: REMOTE_TYPE_COLOR[t] || '#333',
+                }}
+              >
+                {REMOTE_TYPE_LABEL[t] || t}（{list.length}）
+              </div>
+              {list.map((m) => (
+                <div
+                  key={m.id}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '3px 0',
+                  }}
+                >
+                  <code>{m.id}</code>
+                  <Space size={6}>
+                    <Tag color={REMOTE_TYPE_COLOR[m.modelType || ''] || 'default'}>
+                      {REMOTE_TYPE_LABEL[m.modelType || ''] || m.modelType || '未知'}
+                    </Tag>
+                    {m.owned_by && <span style={{ color: '#999' }}>{m.owned_by}</span>}
+                  </Space>
+                </div>
+              ))}
             </div>
           ))}
         </div>
-      ),
-    okText: '知道了',
-  });
+      )}
+    </Modal>
+  );
 }
 
 function ProviderModal({
@@ -398,6 +498,24 @@ function ProviderModal({
 /* ══════════════════════════ 模型 & 定价 ══════════════════════════ */
 
 const MODEL_TYPES = ['image', 'video', 'text'] as const;
+
+// 远端模型能力类型 → 中文标签 / antd Tag 颜色 (与后端 provider_remote_models.model_type 对齐)
+const REMOTE_TYPE_LABEL: Record<string, string> = {
+  image: '图像',
+  video: '视频',
+  text: '文本',
+  audio: '音频',
+  embedding: '嵌入',
+};
+const REMOTE_TYPE_COLOR: Record<string, string> = {
+  image: 'magenta',
+  video: 'purple',
+  text: 'blue',
+  audio: 'cyan',
+  embedding: 'green',
+};
+// ai_models.model_type 仅支持这三类, 远端模型若被推断为 audio/embedding 则不自动回填类型。
+const COMPATIBLE_MODEL_TYPES = ['image', 'video', 'text'];
 
 function ModelsPane() {
   const { message } = App.useApp();
@@ -563,7 +681,63 @@ function ModelModal({
   const { message } = App.useApp();
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
+  const [remoteModels, setRemoteModels] = useState<RemoteModel[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   const isEdit = !!record;
+
+  // 监听「提供商」变化, 自动加载该提供商的远端模型清单 (按类型) 作为下拉选项。
+  const providerId = Form.useWatch('providerId', form);
+  const loadRemote = useCallback(
+    async (pid?: string) => {
+      if (!pid) {
+        setRemoteModels([]);
+        return;
+      }
+      try {
+        setRemoteModels(await adminListRemoteModels(pid));
+      } catch {
+        setRemoteModels([]);
+      }
+    },
+    [],
+  );
+  useEffect(() => {
+    void loadRemote(providerId);
+  }, [providerId, loadRemote]);
+
+  // 远端模型按类型分组 (下拉可选项)
+  const remoteOptions = useMemo(() => {
+    const byType = new Map<string, RemoteModel[]>();
+    for (const m of remoteModels) {
+      const t = m.modelType || 'text';
+      if (!byType.has(t)) byType.set(t, []);
+      byType.get(t)!.push(m);
+    }
+    const order = ['image', 'video', 'text', 'audio', 'embedding'];
+    return order
+      .filter((t) => byType.has(t))
+      .map((t) => ({
+        label: `${REMOTE_TYPE_LABEL[t] || t}（${byType.get(t)!.length}）`,
+        options: byType.get(t)!.map((m) => ({ value: m.id, label: m.id, modelType: m.modelType })),
+      }));
+  }, [remoteModels]);
+
+  const onRefreshRemote = async () => {
+    if (!providerId) {
+      message.warning('请先选择提供商');
+      return;
+    }
+    setRefreshing(true);
+    try {
+      const ms = await adminFetchRemoteModels(providerId);
+      setRemoteModels(ms);
+      message.success(`已拉取并保存 ${ms.length} 个远端模型`);
+    } catch (e: any) {
+      message.error(e?.response?.data?.message ?? '拉取远端模型失败');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     form.setFieldsValue({
@@ -666,11 +840,32 @@ function ModelModal({
             label="远端模型名"
             name="modelName"
             style={{ flex: 1 }}
-            rules={[{ required: true, message: '请输入远端模型名' }]}
-            tooltip="调用提供商时使用的真实 model 参数（可用「拉模型」查看）"
+            rules={[{ required: true, message: '请选择或输入远端模型名' }]}
+            tooltip="调用提供商时使用的真实 model 参数；可点「刷新远端模型」从提供商拉取后下拉选择（按类型分组）"
           >
-            <Input placeholder="如 agnes-image-2.0-flash" />
+            <AutoComplete
+              placeholder="选择或输入，如 agnes-image-2.0-flash"
+              options={remoteOptions}
+              showSearch
+              filterOption={(input, option: any) =>
+                (option?.value as string)?.toLowerCase().includes(input.toLowerCase())
+              }
+              onSelect={(_value, option: any) => {
+                const t = option?.modelType;
+                if (t && COMPATIBLE_MODEL_TYPES.includes(t)) {
+                  form.setFieldValue('modelType', t);
+                }
+              }}
+            />
           </Form.Item>
+          <Button
+            style={{ marginTop: 28 }}
+            icon={<CloudDownloadOutlined />}
+            loading={refreshing}
+            onClick={onRefreshRemote}
+          >
+            刷新远端模型
+          </Button>
           <Form.Item label="展示名" name="displayName" style={{ flex: 1 }}>
             <Input placeholder="用户可见名称" />
           </Form.Item>

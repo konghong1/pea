@@ -36,15 +36,24 @@ _AGNES_RATIOS = {"1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"}
 
 
 def _normalize_refs(refs: Any) -> list[str]:
-    """仅保留提供商可达的参考图: http(s) 外链或 data: 内联; 内部代理/相对路径丢弃。上限 8。"""
+    """仅保留提供商可达的参考图: http(s) 外链或 data: 内联; 内部代理/相对/blob 路径丢弃。上限 8，保序。"""
     if not refs:
         return []
     if isinstance(refs, str):
         refs = [refs]
     out: list[str] = []
+    dropped = 0
     for r in list(refs)[:8]:
         if isinstance(r, str) and (r.startswith("http") or r.startswith("data:")):
             out.append(r)
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning(
+            "[refs] dropped %d unreachable reference image(s): need http(s)/data: URL, "
+            "blob:/relative paths are unusable by the model",
+            dropped,
+        )
     return out
 
 
@@ -111,6 +120,10 @@ class AgnesImageAdapter(ImageParamAdapter):
         # 图生图: image 必须进 extra_body, 且不带 tags
         if norm.reference_images:
             payload["extra_body"] = {"image": norm.reference_images}
+            logger.info(
+                "[adapter] agnes image refs=%d (order preserved, sent via extra_body.image)",
+                len(norm.reference_images),
+            )
         return payload
 
 

@@ -11,6 +11,7 @@ import {
 } from 'reactflow';
 import { api } from '../api/client';
 import { PeaNodeKind } from '../constants/nodeTypes';
+import { useUi } from './ui';
 
 export type PeaNodeData = {
   label: string;
@@ -69,6 +70,8 @@ interface CanvasState {
   copySelected: () => void;
   pasteNode: () => void;
   bumpSave: () => void;
+  /** 获取某节点的直接上游输入节点（按边建立顺序排序）。 */
+  getUpstreamInputs: (nodeId: string) => Node<PeaNodeData>[];
 }
 
 /** 基于当前 nodes 生成唯一 ID，防止模块级 seq 在热更新/加载画布后重复导致节点被覆盖。 */
@@ -205,6 +208,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       type: e.type || 'pea',
     });
     set({ canvasId: g.data.id, version: g.data.version, title: g.data.title, dirty: false });
+    useUi.getState().setCanvasId(g.data.id);
     set({
       nodes: (graph.nodes ?? []).map(cleanNode),
       edges: (graph.edges ?? []).map(cleanEdge),
@@ -280,6 +284,19 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     });
   },
   bumpSave: () => set({ saveCount: get().saveCount + 1 }),
+  getUpstreamInputs: (nodeId) => {
+    const { nodes, edges } = get();
+    const upstreamEdges = edges
+      .filter((e) => e.target === nodeId)
+      .sort((a, b) => {
+        // 简单按边 id 字典序稳定排序，保证多参考图顺序可预期
+        return a.id.localeCompare(b.id);
+      });
+    const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+    return upstreamEdges
+      .map((e) => nodeMap.get(e.source))
+      .filter((n): n is Node<PeaNodeData> => !!n);
+  },
   registerJob: (jobId, nodeId) =>
     set((s) => ({ jobNodeMap: { ...s.jobNodeMap, [jobId]: nodeId } })),
   applyJobResult: (jobId, patch) =>

@@ -73,9 +73,12 @@ export interface UpsertPlanInput {
   features?: string[];
 }
 
+export type RemoteModelType = 'image' | 'video' | 'text' | 'audio' | 'embedding';
+
 export interface RemoteModel {
   id: string;
   owned_by?: string;
+  modelType?: RemoteModelType;
 }
 
 /* ═══════════════════════════ 提供商 CRUD ═══════════════════════════ */
@@ -92,11 +95,17 @@ export const adminUpdateProvider = (id: string, dto: UpsertProviderInput) =>
 export const adminDeleteProvider = (id: string) =>
   api.delete<{ ok: true }>(`/admin/providers/${id}`).then((r) => r.data);
 
-/** 拉取提供商远端可用模型 (GET {base}/v1/models, 不落库)。 */
+/** 拉取提供商远端可用模型 (GET {base}/v1/models), 按类型持久化后返回。 */
 export const adminFetchRemoteModels = (id: string) =>
   api
     .post<{ models: RemoteModel[] }>(`/admin/providers/${id}/fetch-models`)
     .then((r) => r.data.models ?? []);
+
+/** 列出某提供商已持久化的远端模型 (按类型, 供下拉选择)。 */
+export const adminListRemoteModels = (id: string) =>
+  api
+    .get<RemoteModel[]>(`/admin/providers/${id}/remote-models`)
+    .then((r) => r.data ?? []);
 
 /* ═══════════════════════════ 模型 CRUD ═══════════════════════════ */
 

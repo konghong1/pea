@@ -31,6 +31,68 @@ export interface UpsertProviderInput {
   config?: any;
 }
 
+/** 远端模型能力类型 (比 ai_models.model_type 更宽, 覆盖提供商实际返回的各类模型)。 */
+export type RemoteModelType = 'image' | 'video' | 'text' | 'audio' | 'embedding';
+
+export interface RemoteModelEntry {
+  id: string;
+  owned_by?: string;
+  modelType: RemoteModelType;
+}
+
+/**
+ * 从模型 id / provider 元数据推断能力类型 (参考 ai-agent 的 _suggest_model_type)。
+ * 优先级: provider 返回的结构化类型/能力 → model id 关键字启发式 (image→video→embedding→audio→text 兜底)。
+ */
+const IMAGE_HINTS = [
+  'dall-e', 'dalle', 'image', 'imagen', 'stable-diffusion', 'sdxl', 'flux', 'cogview',
+  'niji', 'illustrious', 'pony', 'draw', 'paint', 'cartoon', 'art', 'vision',
+  'gpt-image', 'gemini', 'midjourney', 'wanx', 'tongyi', 'doubao', 'jiimagine',
+];
+const VIDEO_HINTS = [
+  'sora', 'video', 'kling', 'cogvideo', 'runway', 'pika', 'luma', 'veo', 'wan',
+  'seedance', 'digo', 'hunyuan-video', 'doubao-video', 'kami', 'mochi',
+];
+const EMBEDDING_HINTS = [
+  'embedding', 'bge', 'text-embedding', 'e5-', 'gte-', 'm3e', 'bce',
+  'jina-embed', 'voyage', 'cohere-embed', 'embed',
+];
+const AUDIO_HINTS = [
+  'tts', 'whisper', 'speech', 'audio', 'voice', 'music', 'suno', 'udio',
+  'cosyvoice', 'chattts', 'bark', 'fishaudio',
+];
+
+export function suggestModelType(modelId: string, raw?: any): RemoteModelType {
+  const lower = (modelId || '').toLowerCase();
+  if (raw && typeof raw === 'object') {
+    const explicit = raw.type || raw.category || raw.model_type || raw.task;
+    if (typeof explicit === 'string') {
+      const e = explicit.toLowerCase();
+      if (/(image|img|draw|paint)/.test(e)) return 'image';
+      if (/(video|movie|film)/.test(e)) return 'video';
+      if (/(embed)/.test(e)) return 'embedding';
+      if (/(audio|speech|tts|voice|music|sound)/.test(e)) return 'audio';
+      if (/(text|chat|llm|language)/.test(e)) return 'text';
+    }
+    const caps =
+      raw.capabilities || raw.modality || raw.modalities ||
+      raw.input_modalities || raw.output_modalities || raw.architecture?.modality;
+    const capStr = Array.isArray(caps) ? caps.join(',') : caps ? String(caps) : '';
+    if (capStr) {
+      const c = capStr.toLowerCase();
+      if (/(image|img)/.test(c)) return 'image';
+      if (/(video|movie|film)/.test(c)) return 'video';
+      if (/(embed)/.test(c)) return 'embedding';
+      if (/(audio|speech|voice|music|sound)/.test(c)) return 'audio';
+    }
+  }
+  if (IMAGE_HINTS.some((k) => lower.includes(k))) return 'image';
+  if (VIDEO_HINTS.some((k) => lower.includes(k))) return 'video';
+  if (EMBEDDING_HINTS.some((k) => lower.includes(k))) return 'embedding';
+  if (AUDIO_HINTS.some((k) => lower.includes(k))) return 'audio';
+  return 'text';
+}
+
 /**
  * AI 提供商 (全局, 仅管理员可写)。密钥明文存内网库, 对外一律脱敏。
  */
@@ -124,30 +186,59 @@ export class ProvidersService {
   }
 
   /**
-   * 拉取远端可用模型列表 (GET {base_url}/v1/models)。仅返回列表, 不落库;
-   * 由管理员从中挑选后调 models CRUD 添加。
+   * 拉取远端可用模型列表 (GET {base_url}/v1/models), 推断类型并**按类型持久化**到
+   * provider_remote_models (幂等 upsert), 返回带 modelType 的列表, 供模型配置下拉选择。
    */
-  async fetchRemoteModels(id: string): Promise<{ models: { id: string; owned_by?: string }[] }> {
+  async fetchRemoteModels(id: string): Promise<{ models: RemoteModelEntry[] }> {
     const p = await this.getRaw(id);
     if (!p.base_url) throw new BadRequestException('provider has no base_url');
     const url = normalizeModelsUrl(p.base_url);
+    let list: any[] = [];
     try {
       const { data } = await axios.get(url, {
         headers: p.api_key ? { Authorization: `Bearer ${p.api_key}` } : {},
         timeout: 20000,
       });
-      const list = Array.isArray(data?.data) ? data.data : [];
-      return {
-        models: list
-          .filter((m: any) => m && m.id)
-          .map((m: any) => ({ id: String(m.id), owned_by: m.owned_by })),
-      };
+      list = Array.isArray(data?.data) ? data.data : [];
     } catch (e: any) {
       const detail = e?.response?.data
         ? JSON.stringify(e.response.data).slice(0, 300)
         : e?.message ?? 'unknown';
       throw new BadRequestException(`fetch remote models failed: ${detail}`);
     }
+    const models: RemoteModelEntry[] = list
+      .filter((m: any) => m && m.id)
+      .map((m: any) => {
+        const mid = String(m.id);
+        return { id: mid, owned_by: m.owned_by, modelType: suggestModelType(mid, m) };
+      });
+    // 落库: 按类型持久化 (provider_id + remote_model_id 唯一, 重复拉取只更新类型/归属)
+    if (models.length) {
+      const rows = models.map((m) => [p.id, m.id, m.owned_by ?? null, m.modelType]);
+      await this.db.query(
+        `INSERT INTO provider_remote_models (provider_id, remote_model_id, owned_by, model_type)
+         VALUES ?
+         ON DUPLICATE KEY UPDATE owned_by = VALUES(owned_by), model_type = VALUES(model_type), updated_at = NOW(3)`,
+        [rows],
+      );
+    }
+    return { models };
+  }
+
+  /** 列出某提供商已持久化的远端模型 (按类型分组, 供下拉选择)。 */
+  async listRemoteModels(id: string): Promise<RemoteModelEntry[]> {
+    await this.getRaw(id); // 404 if missing
+    const rows = await this.db.query<any[]>(
+      `SELECT remote_model_id AS id, owned_by AS owned_by, model_type AS modelType
+       FROM provider_remote_models WHERE provider_id = ?
+       ORDER BY model_type, remote_model_id`,
+      [id],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      owned_by: r.owned_by ?? undefined,
+      modelType: r.modelType,
+    }));
   }
 
   private async getView(id: string): Promise<ProviderView> {

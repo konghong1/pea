@@ -72,6 +72,11 @@ export class AuthService {
     };
   }
 
+  /** 续期：用已校验的 user 重签发新 token（同 sub/email、新过期）。仅当旧 token 仍有效时调用。 */
+  refresh(user: { sub: number; email: string }): { token: string } {
+    return { token: this.sign(user.sub, user.email) };
+  }
+
   private sign(sub: number, email: string): string {
     return this.jwt.sign(
       { sub, email },

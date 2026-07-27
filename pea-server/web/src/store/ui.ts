@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { loadRoute, saveRoute } from './routePersist';
 
 export type PageKey =
   | 'home'
@@ -24,28 +25,45 @@ export type AccountPane =
 
 interface UiState {
   active: PageKey;
+  /** 当前打开的画布 id（供强刷后还原）。 */
+  canvasId: number | null;
   /** 账户中心当前面板，供 UserMenu 深层链接（如「AI Provider 设置」直达 aiprov）。 */
   accountPane: AccountPane;
   /** 导航历史栈 (末位为当前页)，供浏览器回退还原上一页。 */
   _stack: PageKey[];
   /** 用户侧导航：切换页面并压入浏览器历史（支持浏览器回退）。 */
   setActive: (p: PageKey) => void;
+  /** 记录当前画布 id（openCanvas 成功后调用），并持久化路由。 */
+  setCanvasId: (id: number | null) => void;
   /** 内部：仅改 active，不压历史（供 popstate 回退使用，避免循环压栈）。 */
   _restore: (p: PageKey) => void;
   setAccountPane: (pane: AccountPane) => void;
 }
 
 /** SPA 单实例页面状态：切换导航不卸载画布，保留编辑态 (FR-G1)。 */
+const _boot = loadRoute();
+// 兜底：持久化为 canvas 但无 canvasId 时是坏状态，回落 workspace。
+const _bootActive: PageKey =
+  _boot?.active === 'canvas' && !_boot?.canvasId
+    ? 'workspace'
+    : ((_boot?.active as PageKey) ?? 'workspace');
 export const useUi = create<UiState>((set, get) => ({
-  active: 'workspace',
+  active: _bootActive,
+  canvasId: _boot?.canvasId ?? null,
   accountPane: 'profile',
-  _stack: ['workspace'],
+  _stack: [_bootActive],
   setActive: (p) => {
-    const { active, _stack } = get();
+    const { active, _stack, canvasId } = get();
+    set({ active: p });
+    saveRoute({ active: p, canvasId });
     if (p === active) return; // 同页不重复压栈
     const stack = [..._stack, p];
     window.history.pushState({ pea: stack.length - 1 }, '');
     set({ active: p, _stack: stack });
+  },
+  setCanvasId: (id) => {
+    set({ canvasId: id });
+    saveRoute({ active: get().active, canvasId: id });
   },
   _restore: (p) => set({ active: p }),
   setAccountPane: (accountPane) => set({ accountPane }),

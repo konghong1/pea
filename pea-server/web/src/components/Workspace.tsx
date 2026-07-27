@@ -1,4 +1,6 @@
+import { useEffect, useRef } from 'react';
 import { useWs } from '../hooks/useWs';
+import { useAuth } from '../store/auth';
 import TopNav from './TopNav';
 import CanvasEditor from './CanvasEditor';
 import AgentPanel from './AgentPanel';
@@ -26,6 +28,20 @@ import { useUi } from '../store/ui';
 export default function Workspace() {
   useWs();
   const active = useUi((s) => s.active);
+  const { refreshMe, refreshToken } = useAuth();
+
+  // 静默续期（必须在常驻的 Workspace 里，而非 TopNav）：
+  // TopNav 在画布模式下不挂载，若续期放那，画布里登录态会过期被踢。
+  // 这里启动即续期 + 每 30 分钟保活，覆盖所有页面（含画布）。
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    refreshMe().then((ok) => { if (ok) refreshToken(); });
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => {
+      if (useAuth.getState().token) refreshToken();
+    }, 30 * 60 * 1000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [refreshMe, refreshToken]);
 
   const inCanvas = active === 'canvas';
 

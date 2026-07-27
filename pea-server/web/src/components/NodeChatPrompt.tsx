@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState, useCallback, forwardRef } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, forwardRef } from 'react';
 import { createPortal } from 'react-dom';
-import { useViewport } from 'reactflow';
-import { useCanvas } from '../store/canvas';
+import { Node } from 'reactflow';
+import { useCanvas, PeaNodeData } from '../store/canvas';
 import { useAgent } from '../store/agent';
 import { toast } from '../store/toast';
 import { listAvailableModels, estimateCost, acceptNodeGenerationJob } from '../api/catalog';
 import { api } from '../api/client';
 import type { AvailableModel, PricingRule } from '../api/catalog';
+import NodePromptInput, { NodePromptInputRef, ParsedPrompt } from './NodePromptInput';
+import { getFileUrl, getPresignedUrl } from '../api/files';
+import { PeaNodeKind } from '../constants/nodeTypes';
 
 /**
  * 节点生成结果轮询兜底。
@@ -99,6 +102,98 @@ const COUNT_OPTIONS = [1, 2, 3, 4].map((n) => ({ label: `${n}x`, value: n }));
  *  - 提交真实 POST /generation/jobs（带 model + params + 幂等键）；通过 WS
  *    job.updated 事件 + canvas.jobNodeMap 把 resultUrl 异步回填到触发节点。
  */
+/* ──────────────── 上游输入解析辅助 ──────────────── */
+
+function extractNodeText(node: Node<PeaNodeData>): string {
+  const raw = node.data.prompt || node.data.html || '';
+  return raw.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+async function resolveUpstreamMediaUrl(node: Node<PeaNodeData>): Promise<string | undefined> {
+  const d = node.data;
+  const urls = d.resultUrls?.length ? d.resultUrls : d.resultUrl ? [d.resultUrl] : [];
+  const firstUrl = urls[0] || d.url;
+  if (firstUrl) return firstUrl;
+  if (d.fileKey) {
+    // 优先返回可外传的真实签名 URL（参考图需发给外部模型）；失败再退化为 blob 仅作显示。
+    try {
+      const pu = await getPresignedUrl(d.fileKey);
+      if (pu) return pu;
+    } catch {
+      /* fallthrough */
+    }
+    try {
+      return await getFileUrl(d.fileKey);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** 取参考图的可读名称（文件名优先，其次 URL 末段），用于提示词中显式标注每张参考图。 */
+function describeRef(node?: Node<PeaNodeData> | null): string {
+  if (!node) return '';
+  const meta = (node.data.meta ?? {}) as Record<string, string>;
+  if (meta.fileName) return meta.fileName;
+  const url = node.data.url || node.data.resultUrl || node.data.resultUrls?.[0];
+  if (url) {
+    try {
+      const name = new URL(url).pathname.split('/').pop();
+      if (name) return decodeURIComponent(name);
+    } catch {
+      /* ignore */
+    }
+  }
+  return node.data.label || (node.data.kind === 'image' ? '图片' : '视频');
+}
+
+/**
+ * 构建「参考图说明」块，拼到 prompt 最前面。
+ * 多图时显式编号 + 角色区分（首图=主体，其余=风格/背景/构图），并加全局防混淆提示，
+ * 让模型即使无法靠数组顺序对齐，也能按"文字描述的内容"自行匹配每张参考图，避免混淆。
+ * 编号顺序与上传的 reference_images 数组顺序严格一致。
+ */
+function buildReferenceBlock(urls: string[], nameMap: Map<string, string>): string {
+  if (urls.length === 0) return '';
+  const lines: string[] = [];
+  if (urls.length === 1) {
+    const name = nameMap.get(urls[0]) || '参考图';
+    lines.push(
+      `【参考图】${name}：请严格保持该参考图中物体的款式、颜色、材质、形状、图案与原图完全一致；` +
+      `仅允许调整其摆放位置、角度或所处场景，不得重新设计并改变其外观。`,
+    );
+  } else {
+    lines.push(
+      `【参考图清单】共 ${urls.length} 张，已随请求按序上传，请严格按编号分别使用，切勿混淆彼此用途：`,
+    );
+    urls.forEach((u, i) => {
+      const name = nameMap.get(u) || `参考图${i + 1}`;
+      if (i === 0) {
+        lines.push(
+          `【参考图 ${i + 1}】${name}：主体参考 —— 请严格保持图中物体的款式、颜色、材质、形状、图案与参考图完全一致；` +
+          `仅允许调整摆放位置/角度/场景，不得重新设计并改变该物体外观。`,
+        );
+      } else {
+        lines.push(
+          `【参考图 ${i + 1}】${name}：风格/背景/构图参考 —— 仅参考其整体氛围、色调、质感与布局；` +
+          `不得改变【参考图 1】中主体的外观。`,
+        );
+      }
+    });
+  }
+  return lines.join('\n');
+}
+
+/** 同步获取节点媒体首图 URL(缩略图展示用;仅 fileKey 场景会缺失,回退占位)。 */
+function getNodeMediaUrlSync(node: Node<PeaNodeData>): string | undefined {
+  const d = node.data;
+  const urls = d.resultUrls?.length ? d.resultUrls : d.resultUrl ? [d.resultUrl] : [];
+  return urls[0] || d.url;
+}
+
+const PLACEHOLDER_THUMB = 'https://placehold.co/40x40/1a1a1a/888?text=?';
+
 const KIND_CFG: Record<string, KindCfg> = {
   text: { label: '文本', placeholder: '输入简短描述，AI 帮你改写为高质量图片/视频生成提示词', modelIcon: '✦' },
   image: { label: '图片', placeholder: '描述任何你想要生成的内容', modelIcon: '📊' },
@@ -410,24 +505,24 @@ AspectPickerPopup.displayName = 'AspectPickerPopup';
 export default function NodeChatPrompt() {
   const selectedIds = useCanvas((s) => s.selectedIds);
   const selectedId = useCanvas((s) => s.selectedId);
+  // 必须在引用它的选择器（upstream）之前声明，避免 TDZ 崩溃
+  const single = selectedIds.length === 1 ? selectedIds[0] : selectedId;
   const nodes = useCanvas((s) => s.nodes);
   const update = useCanvas((s) => s.updateNodeData);
+  const upstream = useCanvas((s) => (single ? s.getUpstreamInputs(single) : []));
   const push = useAgent((s) => s.push);
   const setOpen = useAgent((s) => s.setOpen);
-  const viewport = useViewport();
 
-  const single = selectedIds.length === 1 ? selectedIds[0] : selectedId;
   const sel = single ? nodes.find((n) => n.id === single) : null;
 
-  const [rect, setRect] = useState<{ left: number; top: number; width: number; bottom: number } | null>(null);
-  const [text, setText] = useState('');
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<NodePromptInputRef>(null);
   const prevSingleRef = useRef<string | null>(null);
   // 按节点 id 缓存输入草稿：切换节点再切回时"接着上次编辑的内容继续写"
   const draftRef = useRef<Record<string, string>>({});
-  // rAF 循环保持位置实时同步（拖动/缩放/平移时输入栏跟随节点）
-  const rafRef = useRef<number>();
-  const lastRectRef = useRef('');
+
+  // 通过 +「从画布选择参考」显式添加的图片/视频节点 id(也包含 @ 选择器插入的图片)
+  const [referencedNodeIds, setReferencedNodeIds] = useState<string[]>([]);
+  const [canvasPickMode, setCanvasPickMode] = useState(false);
 
   // ── 生成态（模型/参数/预估）──
   const [models, setModels] = useState<AvailableModel[]>([]);
@@ -437,6 +532,8 @@ export default function NodeChatPrompt() {
   const [est, setEst] = useState<{ cost: number; allowed: boolean; minPlanLevel: number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [hasInput, setHasInput] = useState(false);
+  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   const pickerRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   // 触发按钮的位置（用于弹出层定位）
@@ -456,6 +553,15 @@ export default function NodeChatPrompt() {
 
   const kind = sel?.data.kind ?? 'text';
   const genType = GEN_TYPE[kind] ?? null;
+  // 用户自己上传的图片/视频节点（有 fileKey/url，但非模型生成结果）：
+  // 不需要下方生成编辑框，避免"对上传内容重新生成"的误导，且由上方功能条承接操作。
+  const data = sel?.data;
+  const isUploadedMedia =
+    (kind === 'image' || kind === 'video') &&
+    // 没有生成结果（resultUrl/resultUrls）且明确是用户上传（有 fileKey）才视为上传媒体
+    !data?.resultUrl &&
+    !(data?.resultUrls?.length) &&
+    !!data?.fileKey;
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
   const tiers = (selectedModel?.pricing as PricingRule | null)?.tiers ?? {};
   const dimKeys = Object.keys(tiers);
@@ -519,19 +625,81 @@ export default function NodeChatPrompt() {
   // ── 节点切换：恢复该节点的草稿（优先）/已保存 prompt，否则清空 ──
   useEffect(() => {
     if (!single) {
-      setText('');
       prevSingleRef.current = null;
       return;
     }
     if (single !== prevSingleRef.current) {
       prevSingleRef.current = single;
       const node = nodes.find((n) => n.id === single);
-      const restored = draftRef.current[single] ?? node?.data.prompt ?? '';
-      setText(restored);
+      // 还原编辑框：优先用本会话草稿（HTML），其次用持久化的 editorText（纯文本）。
+      // 注意：不能用 node.data.prompt —— 那是「上游文本 + 用户文本」的合并结果，
+      // 回填空会导致二次提交时上游文本被重复拼接。
+      const restored = draftRef.current[single] ?? (node?.data.meta?.editorText as string | undefined) ?? '';
+      // 仅当 restored 是纯文本时才需要 escape；包含 <span data-pea-ref> 等 HTML 标签时直接作为 HTML 写入
+      // （否则 token span 会被错误转义，以 `&lt;span&gt;` 形式显示为源码）。
+      const isHtml = /<[a-z][^>]*data-pea-ref/i.test(restored) || /<br\b/i.test(restored);
+      const html = isHtml
+        ? restored
+        : restored
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, '<br>');
+      inputRef.current?.setHtml(html);
       setTimeout(() => inputRef.current?.focus(), 60);
+      // 恢复通过 + 选择器显式引用的节点 id
+      const meta = (node?.data.meta ?? {}) as Record<string, unknown>;
+      const saved = Array.isArray(meta.referencedNodeIds) ? (meta.referencedNodeIds as string[]) : [];
+      setReferencedNodeIds(saved);
+      setCanvasPickMode(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [single, nodes]);
+
+  // ── 显式引用关系持久化到节点 meta(随画布保存) ──
+  useEffect(() => {
+    if (!single) return;
+    const node = nodes.find((n) => n.id === single);
+    const meta = (node?.data.meta ?? {}) as Record<string, unknown>;
+    const saved = Array.isArray(meta.referencedNodeIds) ? (meta.referencedNodeIds as string[]) : [];
+    if (JSON.stringify(saved) !== JSON.stringify(referencedNodeIds)) {
+      update(single, { meta: { ...meta, referencedNodeIds } });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [referencedNodeIds, single]);
+
+  // ──「从画布选择参考」模式：点击图片/视频节点加入引用集合 ──
+  useEffect(() => {
+    if (!canvasPickMode || !single) return;
+    const onClick = (e: MouseEvent) => {
+      const nodeEl = (e.target as HTMLElement | null)?.closest('.react-flow__node') as HTMLElement | null;
+      if (!nodeEl) return;
+      const id = nodeEl.getAttribute('data-id');
+      if (!id || id === single) return;
+      const node = useCanvas.getState().nodes.find((n) => n.id === id);
+      if (!node) return;
+      // 允许图片/视频/文本三种节点的引用（图/视频作为参考图，文本作为 prompt 来源）
+      if (node.data.kind !== 'image' && node.data.kind !== 'video' && node.data.kind !== 'text') {
+        toast.info('请选择图片、视频或文本节点作为参考');
+        return;
+      }
+      setReferencedNodeIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      const kindLabel = node.data.kind === 'text' ? '文本' : node.data.kind === 'image' ? '图片' : '视频';
+      toast.success(`已添加${kindLabel}参考`);
+      // 阻止 ReactFlow 把选中态切到被点击节点,避免输入栏关闭
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCanvasPickMode(false);
+    };
+    document.addEventListener('click', onClick, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('click', onClick, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [canvasPickMode, single]);
 
   // ── 加载可用模型 + 依据节点已存 meta 还原模型/参数选择 ──
   useEffect(() => {
@@ -620,6 +788,8 @@ export default function NodeChatPrompt() {
       if (pickerRef.current?.contains(t) || chipRef.current?.contains(t)) return;
       if (aspectRef.current?.contains(t) || aspectBtnRef.current?.contains(t)) return;
       if (countRef.current?.contains(t)) return;
+      // 点击富文本输入区也视为浮层外部，关闭模型/参数浮层
+      if (t.closest('.node-prompt-input-wrap')) return;
       setPickerOpen(false);
       setAspectOpen(false);
       setCountOpen(false);
@@ -635,58 +805,9 @@ export default function NodeChatPrompt() {
     };
   }, [pickerOpen, aspectOpen, countOpen]);
 
-  // ── 确定性定位：基于节点真实 DOM 底边 + rAF 循环跟随 ──
-  useEffect(() => {
-    if (!sel || !single) {
-      setRect(null);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      return;
-    }
-
-    const compute = (): { left: number; top: number; width: number; bottom: number } | null => {
-      const nodeEl = document.querySelector(
-        `.react-flow__node[data-id="${single}"]`,
-      ) as HTMLElement | null;
-      if (nodeEl) {
-        const r = nodeEl.getBoundingClientRect();
-        const centerX = r.left + r.width / 2;
-        const width = Math.max(520, Math.round(r.width));
-        const top = Math.round(r.bottom + 16);
-        return { left: Math.round(centerX - width / 2), top, width, bottom: top + 130 };
-      }
-      // DOM 不可用时回退到 viewport 变换计算
-      const { x: vx, y: vy, zoom } = viewport;
-      const fx = sel.position.x;
-      const fy = sel.position.y;
-      const w = (sel.width ?? 260) * zoom;
-      const h = (sel.height ?? 160) * zoom;
-      const screenX = fx * zoom + vx;
-      const screenY = fy * zoom + vy;
-      const width = Math.max(520, Math.round(w));
-      const top = Math.round(screenY + h + 16);
-      return { left: Math.round(screenX + w / 2 - width / 2), top, width, bottom: top + 130 };
-    };
-
-    const loop = () => {
-      const next = compute();
-      if (next) {
-        const key = `${next.left},${next.top},${next.width},${next.bottom}`;
-        if (lastRectRef.current !== key) {
-          lastRectRef.current = key;
-          setRect(next);
-        }
-      }
-      rafRef.current = requestAnimationFrame(loop);
-    };
-
-    const initial = compute();
-    if (initial) setRect(initial);
-    rafRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    };
-  }, [sel, single, viewport.x, viewport.y, viewport.zoom, sel?.position.x, sel?.position.y, sel?.width, sel?.height]);
+  // 编辑器不再用 rAF + getBoundingClientRect 做视口定位：它会被 portal 进选中节点内部的
+  // .pea-node-editor-anchor，随节点平移无缝贴合，并通过 CSS counter-scale(var(--pea-inv-zoom))
+  // 抵消画布缩放，保持屏幕恒定大小（详见 PeaNode.tsx / index.css）。
 
   // 模型切换回调（必须放在早期 return 之前，避免 hooks 数量随 rect 变化而触发 React #310）
   const onModelChange = useCallback((v: string) => {
@@ -733,8 +854,85 @@ export default function NodeChatPrompt() {
     }
   }, [single, sel?.data.meta, genType, update]);
 
-  if (!sel || !rect || !single) return null;
+  // 引用条数据源：上游连接的图片/视频节点 + 显式通过 + 添加的(去重)
+  // 必须在 early-return 之前声明，否则非 null 渲染会比 null 渲染多 hooks，触发 React #310 崩溃
+  const refIds = useMemo(() => {
+    const ids: string[] = [];
+    const add = (id: string) => { if (id && !ids.includes(id)) ids.push(id); };
+    upstream.filter((n) => n.data.kind === 'image' || n.data.kind === 'video').forEach((n) => add(n.id));
+    referencedNodeIds.forEach(add);
+    return ids;
+  }, [upstream, referencedNodeIds]);
+
+  const refImageNodes = useMemo(() => {
+    return refIds.map((id) => nodes.find((n) => n.id === id)).filter(Boolean) as Node<PeaNodeData>[];
+  }, [refIds, nodes]);
+
+  const hasUpstreamText = useMemo(() => {
+    return upstream.some((n) => n.data.kind === 'text' && extractNodeText(n).length > 0);
+  }, [upstream]);
+
+  // 解析引用条缩略图 URL（fileKey 需要异步换签名 URL）
+  // 用稳定 key 作依赖，避免 nodes 数组引用变化导致反复重解
+  const refThumbKey = useMemo(
+    () => refImageNodes.map((n) => `${n.id}:${n.data.fileKey || n.data.url || n.data.resultUrl || ''}`).join('|'),
+    [refImageNodes],
+  );
+  useEffect(() => {
+    let cancelled = false;
+    const resolve = async () => {
+      const map: Record<string, string> = {};
+      await Promise.all(
+        refImageNodes.map(async (n) => {
+          const d = n.data;
+          let url: string | undefined = d.url || d.resultUrl || d.resultUrls?.[0];
+          if (!url && d.fileKey) {
+            try {
+              url = await getFileUrl(d.fileKey);
+            } catch {
+              url = undefined;
+            }
+          }
+          map[n.id] = url || PLACEHOLDER_THUMB;
+        }),
+      );
+      if (cancelled) return;
+      setThumbUrls((prev) => {
+        const same = Object.keys(map).length === Object.keys(prev).length
+          && Object.entries(map).every(([k, v]) => prev[k] === v);
+        return same ? prev : map;
+      });
+    };
+    resolve();
+    return () => { cancelled = true; };
+  }, [refThumbKey]);
+
+  // 锚定到选中节点的 DOM 容器（.pea-node-editor-anchor 由 PeaNode 渲染），
+// 编辑框作为该节点的子元素随其平移，无需 rAF，零抖动。
+// 使用 ref 缓存 anchorElement，避免在 DOM 未完全更新时查询导致消失。
+const anchorElRef = useRef<Element | null>(null);
+useEffect(() => {
+  if (single && typeof document !== 'undefined') {
+    const el = Array.from(document.querySelectorAll<HTMLElement>('.pea-node-editor-anchor')).find(
+      (item) => item.getAttribute('data-pea-anchor') === single,
+    ) ?? null;
+    anchorElRef.current = el;
+  } else {
+    anchorElRef.current = null;
+  }
+}, [single]);
+
+const anchorEl = anchorElRef.current;
+
+  // 编辑框始终锚定在节点正下方（相对节点固定），不再根据视口落点翻转到节点上方。
+  // 这样「上方功能条」（恒在节点上方）与「下方编辑框」（恒在节点下方）都相对节点固定、行为一致。
+  // 若节点贴近视口底部导致编辑框被裁切，由画布平移（右键拖拽 / 滚轮）调整视图，而非改变相对位置。
+
+  if (!sel || !single || isUploadedMedia || !anchorEl) return null;
   const cfg = KIND_CFG[kind] ?? KIND_CFG.text;
+
+  const hasImageRefs = refImageNodes.length > 0;
+  const canSend = hasInput || hasUpstreamText || hasImageRefs;
 
   const onTierChange = (dim: string, v: string) =>
     setTierVals((s) => ({ ...s, [dim]: v }));
@@ -743,39 +941,130 @@ export default function NodeChatPrompt() {
   };
 
   const submit = async () => {
-    const t = text.trim();
-    if (!t || submitting) return;
+    if (submitting) return;
     if (!genType) {
       toast.info('音频生成即将开放，敬请期待');
       return;
     }
+
+    const parsed = inputRef.current?.getParsed() ?? { text: '', referenceImages: [], referencedNodeIds: [], html: '' };
+    const upstream = useCanvas.getState().getUpstreamInputs(single);
+    const atReferencedIds = new Set(parsed.referencedNodeIds);
+
+    // 引用集合：上游连接的 + 显式通过 + 添加的 + @ 选择器插入的(去重，保留顺序)
+    // 同时支持图片/视频（reference_images）和文本（合并进 prompt）
+    const refIds: string[] = [];
+    const addRefId = (id: string) => { if (id && !refIds.includes(id)) refIds.push(id); };
+    for (const n of upstream) {
+      if (n.data.kind === 'image' || n.data.kind === 'video' || n.data.kind === 'text') addRefId(n.id);
+    }
+    for (const id of referencedNodeIds) addRefId(id);
+    for (const id of parsed.referencedNodeIds) {
+      const n = nodes.find((x) => x.id === id);
+      if (n && (n.data.kind === 'image' || n.data.kind === 'video' || n.data.kind === 'text')) addRefId(id);
+    }
+
+    // 收集参考图 URL（仅 image/video 节点），按引用顺序构建，并附带可读名称用于提示词编排。
+    // 上传图经 getPresignedUrl 解析为真实可外传签名 URL（blob 会被编排器丢弃，导致"参考图没上传"）。
+    const referenceImages: string[] = [];
+    const refNameMap = new Map<string, string>();
+    const addRef = (url: string | undefined, name: string) => {
+      if (!url) return;
+      if (!referenceImages.includes(url)) {
+        referenceImages.push(url);
+        refNameMap.set(url, name || `参考图${referenceImages.length}`);
+      }
+    };
+    for (const id of refIds) {
+      const n = nodes.find((x) => x.id === id);
+      if (!n) continue;
+      if (n.data.kind !== 'image' && n.data.kind !== 'video') continue;
+      const url = await resolveUpstreamMediaUrl(n);
+      addRef(url, describeRef(n));
+    }
+    // 兜底：@ 选择器可能直接解析出 URL（未必能映射到节点），也并入并去重
+    for (const url of parsed.referenceImages) {
+      const n = nodes.find((x) => {
+        const u = [x.data.url, x.data.resultUrl, ...(x.data.resultUrls || [])];
+        return u.includes(url);
+      });
+      addRef(url, describeRef(n));
+    }
+
+    // 自动合并文本节点内容：① 上游连接的文本(排除已在 @ 中显式引用的，避免重复)
+    //                      ② 显式通过 + 添加的文本节点(来自 + 按钮)
+    const autoTextParts: string[] = [];
+    const addedTextIds = new Set<string>();
+    for (const n of upstream) {
+      if (atReferencedIds.has(n.id)) continue;
+      if (n.data.kind === 'text') {
+        const txt = extractNodeText(n);
+        if (txt) { autoTextParts.push(txt); addedTextIds.add(n.id); }
+      }
+    }
+    // 防止上游文本被 + 引用重复合并（atReferencedIds 已在 NodePromptInput 解析时建立）
+    for (const id of referencedNodeIds) {
+      if (addedTextIds.has(id) || atReferencedIds.has(id)) continue;
+      const n = nodes.find((x) => x.id === id);
+      if (n && n.data.kind === 'text') {
+        const txt = extractNodeText(n);
+        if (txt) { autoTextParts.push(txt); addedTextIds.add(id); }
+      }
+    }
+
+    // 参考图提示词编排：多图时显式编号 + 角色区分，避免模型混淆；单图时强调"主体严格一致"。
+    // 说明块按数组顺序与上传的 reference_images 一一对应。
+    const refBlock = buildReferenceBlock(referenceImages, refNameMap);
+    const parts: string[] = [];
+    if (refBlock) parts.push(refBlock);
+    if (autoTextParts.length) parts.push(autoTextParts.join('\n'));
+    if (parsed.text) parts.push(parsed.text);
+    const finalPrompt = parts.join('\n\n').trim();
+
+    if (!finalPrompt && referenceImages.length === 0) {
+      toast.info('请输入描述或连接上游节点');
+      return;
+    }
+
+    // 先持久化用户输入：合并后的 prompt + reference_images 写入节点（随画布保存）。
+    // 该步骤与「能否发起生成」无关——即使套餐不可用，用户的引用关系也已正确落库，
+    // 选好模型/升级套餐后即可直接重试，不会丢失已拼接的多图引用与文本输入。
+    const extraMeta: Record<string, unknown> = {};
+    if (genType === 'image') { extraMeta.aspectRatio = aspectRatio; extraMeta.resolution = resolution; }
+    const mergedParams = { ...params };
+    if (referenceImages.length) mergedParams.reference_images = referenceImages;
+    const metaPatch: Record<string, unknown> = { genParams: mergedParams, ...extraMeta };
+    if (modelId) metaPatch.modelId = modelId;
+    // 持久化「用户自己的编辑框内容」(完整 HTML，含 @ 引用 token)，独立于合并后的 prompt。
+    // 必须存完整 HTML 而非纯文本——否则 @ 引用 token 会在刷新后丢失，
+    // 导致重新打开编辑框时 @ 的图片消失、且发送时 reference_images 为空、生成不参考该图片。
+    metaPatch.editorText = parsed.html || parsed.text;
+    update(single, {
+      prompt: finalPrompt,
+      params: mergedParams,
+      meta: { ...(sel.data.meta ?? {}), ...metaPatch },
+    });
+
+    // 以下为实际生成接入：需要模型可用
     if (!modelId || !selectedModel) {
-      toast.error('暂无可用模型，请联系管理员配置');
+      toast.error('暂无可用模型，已保存草稿，请配置模型后再生成');
       return;
     }
     if (est && !est.allowed) {
-      toast.error(`该模型需要更高套餐（权益等级 ≥ ${est.minPlanLevel}）`);
+      toast.error(`该模型需要更高套餐（权益等级 ≥ ${est.minPlanLevel}），已保存草稿`);
       return;
     }
-    // 写入节点 prompt，并记忆所选模型/参数（随画布保存）
-    const extraMeta: Record<string, unknown> = {};
-    if (genType === 'image') { extraMeta.aspectRatio = aspectRatio; extraMeta.resolution = resolution; }
-    update(single, {
-      prompt: t,
-      params,
-      meta: { ...(sel.data.meta ?? {}), modelId, genParams: params, ...extraMeta },
-    });
 
     // 文本节点：轻量 SSE 聊天流（润色用户输入为提示词，回写节点内容区）
     if (genType === 'text') {
-      push('user', `[${sel.data.label || cfg.label}] ${t}`);
+      push('user', `[${sel.data.label || cfg.label}] ${finalPrompt}`);
       setSubmitting(true);
       let acc = '';
       try {
         await streamNodeChat({
           nodeId: single,
           kind: 'text',
-          prompt: t,
+          prompt: finalPrompt,
           model: modelId,
           onMeta: (m) => {
             if (m.costTapies != null) toast.success(`已受理，预估 ${m.costTapies} Tapies`);
@@ -796,20 +1085,20 @@ export default function NodeChatPrompt() {
     }
 
     // 图片/视频：现有 WS 任务流
-    push('user', `[${sel.data.label || cfg.label}] ${t}`);
+    push('user', `[${sel.data.label || cfg.label}] ${finalPrompt}`);
     setSubmitting(true);
     try {
       const res = await acceptNodeGenerationJob({
         type: genType,
-        prompt: t,
+        prompt: finalPrompt,
         model: modelId,
-        params,
+        params: mergedParams,
         priority: 'normal',
         idempotencyKey: `gen-${single}-${Date.now()}`,
       });
       useCanvas.getState().registerJob(res.jobId, single);
       update(single, { generating: true });
-      toast.success('已受理，生成中…');
+      toast.success(referenceImages.length ? `已受理，含 ${referenceImages.length} 张参考图` : '已受理，生成中…');
       // 轮询兜底：WS 事件若丢失，保证长任务结果仍回填到节点
       pollNodeJobResult(res.jobId);
       setTimeout(() => inputRef.current?.focus(), 0);
@@ -820,14 +1109,13 @@ export default function NodeChatPrompt() {
     }
   };
 
-  const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setText('');
-    }
+  const onInputChange = (html: string, plainText: string) => {
+    if (single) draftRef.current[single] = html;
+    const has = plainText.trim().length > 0 || html.includes('data-pea-ref');
+    setHasInput(has);
+    // 注意：清空内容时不要 delete draftRef[single]，保留为空字符串。
+    // 否则 initialHtml 会回退到 sel.data.meta.editorText（旧 prompt），
+    // 编辑器会被旧文本重新顶回来（用户反馈的「删光文本又全冒出来」）。
   };
 
   const costLabel =
@@ -843,50 +1131,109 @@ export default function NodeChatPrompt() {
     return '✦';
   };
 
-  return (
+  const editorRoot = (
     <div
-      className="node-input-bar node-chat-prompt"
-      style={{ left: rect.left, top: rect.top, width: rect.width, position: 'fixed' }}
+      className="node-input-bar node-chat-prompt nodrag nopan placed-below"
       role="dialog"
       aria-label={`对 ${cfg.label} 节点提问`}
       data-kind={kind}
+      onMouseDown={(e) => e.stopPropagation()}
     >
-      {/* 工具栏 */}
-      <div className="node-input-tools">
-        {(kind === 'image' || kind === 'video') && (
-          <button type="button" className="node-input-tool" title="特效/灵感" aria-label="特效">
-            ✦
-          </button>
-        )}
-        <button type="button" className="node-input-tool" title="附件" aria-label="附件">
+      {/* 「从画布选择参考」顶部提示条 */}
+      {canvasPickMode && createPortal(
+        <div className="node-canvas-pick-bar">
+          <div className="node-canvas-pick-inner">
+            <span className="node-canvas-pick-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+              从画布选择参考
+            </span>
+            <button
+              type="button"
+              className="node-canvas-pick-exit"
+              onClick={() => setCanvasPickMode(false)}
+            >
+              退出
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* 引用条：✦ + 已引用节点（图片/视频显示缩略图，文本显示文本图标）+ + */}
+      <div className="node-ref-bar">
+        <button type="button" className="node-ref-tool" title="特效/灵感" aria-label="特效">✦</button>
+        <div className="node-ref-thumbs">
+          {refImageNodes.map((n) => {
+            const isText = n.data.kind === 'text';
+            const textSummary = isText
+              ? (n.data.html || n.data.prompt || '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim().slice(0, 36) || '空文本'
+              : '';
+            return (
+              <div
+                key={n.id}
+                className={`node-ref-thumb${isText ? ' node-ref-thumb-text' : ''}`}
+                title={isText ? `文本：${textSummary}` : (n.data.label || '参考图')}
+                data-ref-kind={n.data.kind}
+              >
+                {isText ? (
+                  <span className="node-ref-text-icon" aria-hidden>
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="5" y1="7" x2="19" y2="7" />
+                      <line x1="5" y1="12" x2="19" y2="12" />
+                      <line x1="5" y1="17" x2="13" y2="17" />
+                    </svg>
+                  </span>
+                ) : (
+                  <img
+                    src={thumbUrls[n.id] || PLACEHOLDER_THUMB}
+                    alt=""
+                    loading="lazy"
+                    onError={(e) => { e.currentTarget.src = PLACEHOLDER_THUMB; }}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="node-ref-remove"
+                  title="移除该引用"
+                  aria-label="移除该引用"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setReferencedNodeIds((prev) => prev.filter((x) => x !== n.id));
+                  }}
+                >
+                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                    <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          className={`node-ref-tool${canvasPickMode ? ' active' : ''}`}
+          title="从画布选择参考"
+          aria-label="从画布选择参考"
+          aria-pressed={canvasPickMode}
+          onClick={() => setCanvasPickMode((v) => !v)}
+        >
           +
         </button>
       </div>
 
-      {/* 输入框（自动撑开，无滚动条） */}
-      <textarea
+      {/* 输入框（富文本，支持 @ 引用上游节点） */}
+      <NodePromptInput
         ref={inputRef}
-        className="node-input-textarea node-chat-prompt-input"
+        nodeId={single}
+        kind={kind as PeaNodeKind}
         placeholder={cfg.placeholder}
-        value={text}
-        rows={1}
-        onChange={(e) => {
-          const v = e.target.value;
-          setText(v);
-          if (single) draftRef.current[single] = v;
-          // 自动撑开：重置高度后根据内容计算
-          e.target.style.height = 'auto';
-          e.target.style.height = `${e.target.scrollHeight}px`;
+        initialHtml={draftRef.current[single] ?? (sel.data.meta?.editorText as string | undefined) ?? ''}
+        onChange={onInputChange}
+        onSubmit={submit}
+        onInsertReference={(id) => {
+          setReferencedNodeIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
         }}
-        onKeyDown={onKey}
-        onMouseDown={(e) => {
-          // 点击输入框属于「点击非选择框区域」→ 关闭所有浮层（否则 stopPropagation 会阻止 window 监听器收到事件）
-          setPickerOpen(false);
-          setAspectOpen(false);
-          setCountOpen(false);
-          e.stopPropagation();
-        }}
-        style={{ minHeight: '60px', maxHeight: '200px', overflow: 'hidden', resize: 'none' }}
       />
 
       {/* 状态栏：左侧（模型/参数）+ 右侧（操作） */}
@@ -1007,7 +1354,7 @@ export default function NodeChatPrompt() {
             className="node-input-send node-chat-prompt-send"
             title="发送 (Enter)"
             aria-label="发送"
-            disabled={!text.trim() || submitting || (!!genType && !modelId)}
+            disabled={!canSend || submitting}
             onMouseDown={(e) => e.preventDefault()}
             onClick={submit}
           >
@@ -1084,4 +1431,6 @@ export default function NodeChatPrompt() {
 
     </div>
   );
+
+  return createPortal(editorRoot, anchorEl);
 }

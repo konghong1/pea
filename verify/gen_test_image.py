@@ -21,4 +21,4 @@ def make_png(path, w, h):
         f.write(png)
     print('wrote', path, w, 'x', h)
 
-make_png(r'C:/workspace/pea/pea-server/web/public/e2e-test.png', 400, 300)
+make_png(r'D:/workspace/pea/pea-server/web/public/e2e-test.png', 400, 300)

@@ -174,8 +174,14 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
               onInput={() => update(id, { html: editRef.current?.innerHTML })}
               onBlur={onEditBlur}
               onMouseDown={(e) => {
-                // 编辑态下点击可编辑区不应触发外层拖动判定
-                if (editing) e.stopPropagation();
+                // 编辑态下：阻止冒泡，避免触发节点拖动
+                // 非编辑态下：preventDefault() 阻止 contentEditable 自动获取焦点，
+                // 但不阻止事件冒泡，这样 ReactFlow 和父节点的 onMouseDown 都能收到事件
+                if (editing) {
+                  e.stopPropagation();
+                } else {
+                  e.preventDefault();
+                }
               }}
             />
           </div>

@@ -4,6 +4,7 @@ import ReactFlow, {
   BackgroundVariant,
   ReactFlowProvider,
   useReactFlow,
+  useViewport,
   type Node,
   type Edge,
   Connection,
@@ -33,18 +34,11 @@ import { useTheme } from '../store/theme';
 import { canvasesApi } from '../api/canvases';
 import PeaNode from './PeaNode';
 
-// 仅 dev 模式暴露 zustand store 到 window，方便 verify/E2E 注入测试数据。
-// import.meta.env.DEV 在 prod build 时被 vite 替换为 false，整段死代码被消除。
-if (typeof window !== 'undefined' && import.meta.env.DEV) {
-  // @ts-ignore
-  window.__canvas = useCanvas;
-  // @ts-ignore
-  window.__ui = useUi;
-}
-
-// dev/E2E 钩子: 验证脚本可注入测试数据 (resultUrl)。设置 window.__peaDevHooks=1 后
-// 下次刷新即生效 (CanvasEditor 重 mount 时检查)。prod 默认关闭。
-if (typeof window !== 'undefined' && (window as any).__peaDevHooks) {
+// dev/E2E 钩子：暴露 zustand store 到 window，方便 verify 脚本注入测试数据。
+// - dev 模式始终暴露；
+// - prod 模式仅在 localStorage.__peaDevHooks === '1' 时暴露，便于自动化验证生产构建。
+// 不影响任何业务行为。
+if (typeof window !== 'undefined' && (import.meta.env.DEV || localStorage.getItem('__peaDevHooks') === '1')) {
   // @ts-ignore
   window.__canvas = useCanvas;
   // @ts-ignore
@@ -61,6 +55,20 @@ import {
 
 const nodeTypes = { pea: PeaNode };
 const edgeTypes = { pea: PeaEdge };
+
+/**
+ * 把当前画布缩放的倒数(1/zoom)写入全局 CSS 变量 --pea-inv-zoom。
+ * 节点上的编辑框/功能条用 transform: scale(var(--pea-inv-zoom)) 抵消画布缩放，
+ * 使它们随节点平移、但屏幕大小恒定（不随放大缩小而变形）。
+ * 仅在 zoom 变化时写一次变量，节点本身不因此重渲，性能无忧。
+ */
+function ZoomVarSync() {
+  const { zoom } = useViewport();
+  useEffect(() => {
+    document.documentElement.style.setProperty('--pea-inv-zoom', String(1 / zoom));
+  }, [zoom]);
+  return null;
+}
 
 interface MenuState {
   x: number;
@@ -802,7 +810,7 @@ function CanvasControls({
         title="快捷键帮助"
         onClick={() =>
           toast.info(
-            '快捷键：Ctrl+S 保存 / Delete 删除 / Esc 取消选中 / 双击空白添加节点 / Shift+拖拽框选',
+            '快捷键：Ctrl+S 保存 / Delete 删除 / Esc 取消选中 / 双击空白添加节点 / 左键拖拽框选 / 右键拖拽平移画布',
           )
         }
       >
@@ -914,7 +922,7 @@ function Flow() {
     };
   }, []);
 
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, getViewport, setViewport } = useReactFlow();
   const { message } = App.useApp();
   const saveTimer = useRef<number>();
   const [sideOpen, setSideOpen] = useState(false);
@@ -927,6 +935,13 @@ function Flow() {
   // 拖动 vs 单击判定：在 ReactFlow 的 onNodeDragStart 处记录按下坐标
   // （此处不受节点内部 stopPropagation 影响），onNodeClick 时比较位移。
   const downPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // 右键拖拽平移画布：仅当右键在空白画布区按下时启动，拖动超过阈值即平移视口；
+  // 松开后抑制随之而来的 contextmenu，使"右键单击=菜单 / 右键拖拽=平移"两者并存，
+  // 且不与左键框选(selectionOnDrag)冲突。
+  const flowRef = useRef<HTMLDivElement>(null);
+  const panRef = useRef<{ active: boolean; moved: boolean; startX: number; startY: number; vx: number; vy: number } | null>(null);
+  const suppressCtxRef = useRef(false);
 
   useEffect(() => {
     // 进入画布必须经由「新建项目」或「打开项目」显式创建/加载，
@@ -1020,16 +1035,21 @@ function Flow() {
       if ((e.key === 'Delete' || e.key === 'Backspace') && !editing) {
         // 在输入框/文本域/可编辑元素内时, 退格/删除只用于编辑文本, 不删图元 (修复: 输入框退格误删节点)
         // 优先删除选中的边，再删除选中的节点
-        const selEdge = document.querySelector('.react-flow__edge.selected');
+        // 注: ReactFlow v11 的连线 <g> 元素没有 data-id 属性, 直接读 DOM 取不到 id。
+        //     改为从 store 读取已标记 selected 的连线 (onEdgesChange 已写入 selected 字段)。
+        const selEdge = useCanvas.getState().edges.find((ed) => ed.selected);
         if (selEdge) {
           e.preventDefault();
-          const edgeId = selEdge.getAttribute('data-id');
-          if (edgeId) removeEdge(edgeId);
+          removeEdge(selEdge.id);
           return;
         }
         if (sel) {
           e.preventDefault();
-          removeNode(sel);
+          // 先检查节点是否存在于 nodes 中，避免删除已不存在的节点
+          const nodes = useCanvas.getState().nodes;
+          if (nodes.some((n) => n.id === sel)) {
+            removeNode(sel);
+          }
           return;
         }
       }
@@ -1047,8 +1067,9 @@ function Flow() {
         fitView();
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // 使用 capture 阶段确保尽早捕获 Delete 键，防止被其他组件拦截
+    window.addEventListener('keydown', onKey, { capture: true });
+    return () => window.removeEventListener('keydown', onKey, { capture: true });
   }, [removeNode, removeEdge, copySelected, pasteNode, fitView, saveNow, clearSelection]);
 
   const onNodeCtx = (e: React.MouseEvent, node: Node) => {
@@ -1057,7 +1078,64 @@ function Flow() {
   };
   const onPaneCtx = (e: React.MouseEvent) => {
     e.preventDefault();
+    // 若刚发生了右键拖拽平移，则抑制随之触发的画布菜单（保留纯右键单击的菜单）
+    if (suppressCtxRef.current) {
+      suppressCtxRef.current = false;
+      return;
+    }
     setMenu({ x: e.clientX, y: e.clientY, nodeId: null });
+  };
+
+  // —— 右键拖拽平移画布（与左键框选、右键菜单互不冲突）——
+  const isCanvasBackground = (t: EventTarget | null): boolean => {
+    const el = t as HTMLElement | null;
+    if (!el || !el.closest) return false;
+    // 命中节点/手柄/各类浮层控件时不启动平移，留给各自的交互
+    return !el.closest(
+      '.react-flow__node, .react-flow__handle, .pea-canvas-controls, .pea-toolbar, .pea-canvas-header, .pea-canvas-actions, .pea-canvas-bottom-prompt, .pea-add-menu, .pea-edge-menu, .pea-canvas-dropdown, .fixed.inset-0',
+    );
+  };
+
+  const onFlowPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 2) return; // 仅响应右键
+    if (!isCanvasBackground(e.target)) return;
+    suppressCtxRef.current = false; // 每次右键交互重置抑制标记
+    const vp = getViewport();
+    panRef.current = {
+      active: true,
+      moved: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      vx: vp.x,
+      vy: vp.y,
+    };
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    e.preventDefault();
+  };
+
+  const onFlowPointerMove = (e: React.PointerEvent) => {
+    const p = panRef.current;
+    if (!p || !p.active) return;
+    const dx = e.clientX - p.startX;
+    const dy = e.clientY - p.startY;
+    if (!p.moved) {
+      if (Math.hypot(dx, dy) < 4) return; // 拖动阈值：区分"单击"与"拖拽"
+      p.moved = true;
+      flowRef.current?.classList.add('pea-panning');
+    }
+    // 视口 translate 为屏幕像素，平移量 = 指针位移
+    setViewport({ x: p.vx + dx, y: p.vy + dy, zoom: getViewport().zoom }, { duration: 0 });
+  };
+
+  const onFlowPointerUp = (e: React.PointerEvent) => {
+    const p = panRef.current;
+    if (!p || !p.active) return;
+    if (p.moved) {
+      suppressCtxRef.current = true; // 松开后抑制 contextmenu，避免误弹菜单
+      flowRef.current?.classList.remove('pea-panning');
+    }
+    panRef.current = null;
+    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
   };
 
   return (
@@ -1119,7 +1197,13 @@ function Flow() {
         />
       )}
 
-      <div className="pea-canvas-flow">
+      <div
+        ref={flowRef}
+        className="pea-canvas-flow"
+        onPointerDown={onFlowPointerDown}
+        onPointerMove={onFlowPointerMove}
+        onPointerUp={onFlowPointerUp}
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -1231,6 +1315,7 @@ function Flow() {
         </ReactFlow>
       </div>
 
+      <ZoomVarSync />
       <TextNodeToolbar />
       <NodeChatPrompt />
 

@@ -221,6 +221,19 @@ CREATE TABLE IF NOT EXISTS $DB.ai_models (
     KEY idx_models_type (model_type, enabled),
     CONSTRAINT fk_models_provider FOREIGN KEY (provider_id) REFERENCES $DB.ai_providers (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+CREATE TABLE IF NOT EXISTS $DB.provider_remote_models (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    provider_id VARCHAR(64) NOT NULL,
+    remote_model_id VARCHAR(255) NOT NULL,
+    owned_by VARCHAR(255) NULL,
+    model_type ENUM('image','video','text','audio','embedding') NOT NULL DEFAULT 'text',
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_provider_remote (provider_id, remote_model_id),
+    KEY idx_remote_provider (provider_id),
+    CONSTRAINT fk_remote_provider FOREIGN KEY (provider_id) REFERENCES $DB.ai_providers (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 CREATE TABLE IF NOT EXISTS $DB.billing_plans (
     id VARCHAR(64) NOT NULL,
     name VARCHAR(120) NOT NULL,
@@ -255,7 +268,7 @@ echo "[assert-migrated] seeding admin / agnes / plans (idempotent)..."
 $MYSQL_BIN -e "
 INSERT INTO $DB.users (email, password_hash, display_name, role, plan_level)
 VALUES ('admin@pea.ai', '\$2a\$10\$gjL30swN9Kg2.2mV7GmVBOCoe8XgHnLuVKSC.YkfjfqGZgEzlfemi', '平台管理员', 'admin', 999)
-ON DUPLICATE KEY UPDATE role='admin', plan_level=999;
+ON DUPLICATE KEY UPDATE role='admin', plan_level=999, display_name='平台管理员';
 
 INSERT INTO $DB.accounts (user_id, balance, version)
 SELECT id, 100000, 0 FROM $DB.users WHERE email='admin@pea.ai'

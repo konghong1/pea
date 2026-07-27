@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, theme as antdTheme, App as AntApp } from 'antd';
 import Login from './components/Login';
@@ -6,7 +6,9 @@ import Workspace from './components/Workspace';
 import Toast from './components/Toast';
 import { useAuth } from './store/auth';
 import { useTheme } from './store/theme';
-import { installPopState } from './store/ui';
+import { useUi, PageKey, installPopState } from './store/ui';
+import { useCanvas } from './store/canvas';
+import { loadRoute } from './store/routePersist';
 
 export default function App() {
   const token = useAuth((s) => s.token);
@@ -17,6 +19,25 @@ export default function App() {
   const isDark =
     mode === 'dark' ||
     (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+  // 启动还原：token 有效时，读回上次导航页/打开的画布（强刷不丢位置）。
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (!token || restoredRef.current) return;
+    restoredRef.current = true;
+    const r = loadRoute();
+    if (!r) return;
+    const ui = useUi.getState();
+    if (r.active === 'canvas' && r.canvasId) {
+      ui.setActive('canvas');
+      useCanvas
+        .getState()
+        .openCanvas(r.canvasId)
+        .catch(() => ui.setActive('workspace'));
+    } else if (r.active && r.active !== 'login') {
+      ui.setActive(r.active as PageKey);
+    }
+  }, [token]);
 
   return (
     <ConfigProvider

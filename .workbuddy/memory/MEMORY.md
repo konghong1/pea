@@ -1,54 +1,48 @@
-# 项目长期记忆 — pea Creative OS
+# 项目长期记忆 — pea Creative OS（精简版）
 
-## 目录约定（重要）
-- `D:\workspace\pea\pea-design/` = 产品设计路径（原型 HTML + PRD/ARCH/ROADMAP/DESIGN/TECH）。
-- `D:\workspace\pea\pea-server/` = 代码仓库，与 `pea-design/` 平级（勿嵌套）。结构：web/ + services/(bff, generation-orchestrator, shared) + infra/(docker, k8s, mysql)。
-- 品牌统一为 **pea**，全仓不得出现 tapnow（2026-07-22 指令）。
+## 目录与基线
+- `pea-design/`=产品原型/PRD/ARCH；`pea-server/`=代码（web/ + services/{bff,generation-orchestrator,shared} + infra/）。两者平级，勿嵌套。品牌统一 **pea**，禁 tapnow。
+- 技术栈：React18+TS+ReactFlow+Zustand+Tailwind+antd v5+Vite；BFF NestJS；编排 Python FastAPI；主库 MySQL8(JSON列+生成列)；生成走外部大模型(LiteLLM)。三重心：生成异步解耦/积分双记账本/画布自动保存。
 
-## 已锁定技术决策（基线，见 pea-design/ARCH-pea-Final.md）
-- 演进式模块化单体；前端 React18+TS+ReactFlow+Zustand+Tailwind+antd v5+Vite；BFF Node NestJS；生成编排 Python FastAPI。
-- **主库 MySQL 8**（用户拍板）：JSON 列 + 生成列索引；向量检索后期独立上 Qdrant。
-- 生成 = 调外部大模型（LiteLLM 路由+回退），Orchestrator 只编排。Redis 缓存/队列；Docker+K8s；OTel+Prometheus。
-- 三重心：生成异步解耦、积分双记账本、画布自动保存。容量 ~10万用户/DAU2万/日生成6k。
+## 启动与排错
+- 根目录 `start.sh`/`start.cmd` → `cd pea-server && docker compose up --build`。web 宿主端口 **8088**(原 8080 被占，留注释)。
+- 快速迭代 web：本地 `npm run build` → `docker cp web/dist/. pea-server-web-1:/usr/share/nginx/html/ && docker exec pea-server-web-1 nginx -s reload`；生产改仍 `docker compose up -d --build web`。
+- **Windows .bat/.cmd 必须纯 ASCII + CRLF**，否则 GBK 拆坏 UTF-8 中文乱码。
 
-## 启动方式
-- 根 `C:\workspace\pea\`：`start.sh`(Git Bash)/`start.cmd`(Windows 双击) → `cd pea-server && docker compose up --build`。`./start.sh -d` 后台+开浏览器；`--down`/`--logs`/`--build`。需 Docker Desktop（compose 插件）。
-- **Windows .bat/.cmd 坑**：必须纯 ASCII（勿中文 echo/注释）+ CRLF，否则 GBK 拆坏 UTF-8 中文报乱码命令错。`.sh` 在 Git Bash 无碍。
-- 快速迭代 web：本地 `npm run build` → `docker cp web/dist/. pea-server-web-1:/usr/share/nginx/html/ && docker exec pea-server-web-1 nginx -s reload`。生产仍 `docker compose up -d --build web`。
+## ⚠️ Docker 持久卷 DDL 陷阱（关键）
+- named volume 启动不重跑 `initdb.d/*.sql`，源码 DDL 变更不自动生效 → schema 漂移。
+- 根治(T-OBS-04)：`infra/mysql/assert-migrated.sh` 幂等自检 + `dbmigrate` 一次性服务，`bff`/`orchestrator` 的 `depends_on` 加 `condition: service_completed_successfully`。**新 DDL：① 改 `01-schema.sql` ② 在脚本追加断言**。
 
-## 启动排错（已修）
-- web 端口：宿主机 8080 被 PID 6992(powershell) 占用 → `docker-compose.yml` web `ports` 改 `8088:80`（注释已留，释放后改回）。
-- orchestrator 启动崩溃：`main.py` 原 `parents[3]` 越界 → 改为向上查含 `services/shared` 的 `_ROOT`，并 `sys.path` 加 app 包目录。改完 `docker compose up -d --build generation-orchestrator`。
-- compose override 的 `ports` 是**追加**非替换，故直接改基文件而非 override。
+## ⚠️ 协作红线（2026-07-27 用户明确）
+- 验证脚本因「选择器错/路径错/token key 错」失败 → **只修脚本**，严禁为跑通验证去偷偷改无关实现代码。
+- 验证常见坑：① 注册先点「没有账号？去注册」，昵称框 `input[placeholder="可选"]` 才出现；② token=`localStorage['pea_token']`（非 `'token'`）；③ 建画布走 `/canvases`（**无 `/api` 前缀**）；④ dev(5174) 别用 `wait_until="networkidle"`，用 `domcontentloaded`+`wait_for_selector`。
+- 生产 E2E 注入式测试须先 `localStorage.__peaDevHooks='1'` 并刷新（`CanvasEditor` 仅 DEV 或该 flag 时暴露 `window.__canvas`/`window.__ui`）。
 
-## ⚠️ Docker 持久卷 DDL 陷阱（关键，2026-07-24 已根治）
-- named volume 启动**不**重跑 `initdb.d/*.sql`；源码 DDL 变更（新枚举/列）不会自动生效 → 运行库与期望 schema 漂移。
-- **典型故障**：`ledger_entries.type` 缺 `'grant'` → 注册插 `type='grant'` 开户赠金流水时 500 "internal error"。
-- **根治（T-OBS-04 已落地，2026-07-24）**：新增 `infra/mysql/assert-migrated.sh`（幂等自检，等待 MySQL→断言 `ledger_entries.type` 含 `'grant'`→缺失则 `ALTER TABLE ... MODIFY COLUMN type ENUM('grant','preauth','confirm','refund') NOT NULL`），并在 `docker-compose.yml` 加 `dbmigrate` 一次性服务（mysql:8.0 跑脚本后退出），`bff`/`generation-orchestrator` 的 `depends_on` 加 `dbmigrate: condition: service_completed_successfully`。**每次 `docker compose up` 自动自愈**。
-- 后续引入 DDL 变更：① 更新 `01-schema.sql`；② 在 `assert-migrated.sh` 追加对应断言；③ 合并人无需再手动 ALTER。
+## 节点媒体按钮约定（勿擅自改）
+- 收藏星标：仅 AI 生成图(`resultUrl/resultUrls` 存在)显示；上传图不显示。
+- 替换按钮：仅用户上传图(`!isGenerated`)有；AI 生成图不要替换。
+- 保存到素材库：仅 AI 图。多图有角标+抽屉。
 
-## 设计令牌
-- `:root`/`.dark` CSS 变量 + Tailwind 调色板 + antd `ConfigProvider.token` 三方绑定单一源；主色 `#1fa2dc`，深色 `#0a0a0a`，logo `from-pea-purple via-pea-brand to-pea-lime`。改色只动 `web/src/styles/index.css`。
+## ⚠️ 参考图 URL 约定（关键，2026-07-27 晚确认）
+- 参考图要发给**外部模型**(Agnes)，必须是模型可下载的真实地址（`http(s):` 或 `data:`）。
+- 上传图存的是 `fileKey`，前端 `getFileUrl` 返回的是 **`blob:` 地址**（仅浏览器内 `<img>` 显示用），**绝不能**当作参考图 URL 发给后端——编排器 `param_adapters._normalize_refs` 会静默丢弃 `blob:`/`相对` 路径，导致"参考图没上传"。
+- 正确做法：上传图作参考图时用 `getPresignedUrl(fileKey)`（调 `GET /files/url?key=`，返回 1h 有效真实可外传签名 URL）。`NodePromptInput.resolveNodeMediaUrl` 与 `NodeChatPrompt.resolveUpstreamMediaUrl` 已优先走 presigned。
+- 多图提示词编排：在 `NodeChatPrompt.submit()` 用 `buildReferenceBlock()` 把参考图按上传顺序编号 + 角色（主体/风格背景）+ 文件名为一段【参考图 N】说明，拼到 prompt 最前，降低模型混淆；编号顺序须与 `reference_images` 数组一致。
+- 线上验证参考图是否真上传：查 orchestrator worker 日志 `[adapter] agnes image refs=N ...` 与 `[agnes] image ... payload=...` 是否含 `extra_body.image`。
+- 模型能力限制：Agnes 2.1 Flash `extra_body.image` 是"风格/内容参考"，非像素级复刻；"一模一样"需求靠 prompt 强化不保证 100%，真要像素级一致需 img2img/inpainting 路径（未做）。
 
-## 真机 E2E 闭环
-- `verify/verify_e{5,7,8,9,12}.py` Playwright 跑 `http://localhost:8088`（web 8088，bff 宿主 **4100**），0 console error 为硬标准。
-- 改导航/路由须同步更新脚本选择器（E7 用 `e{ts}@pea.ai` 时间戳邮箱；E8 经 `.pea-user-trigger` → "AI Provider 设置"/"账户中心"）。
-- 节点 hit-test：选节点用 `.pea-node[data-kind="X"]`；菜单用真实鼠标 `page.mouse.click` 中心坐标（DOM `.click()` 在 React18 被事件代理吞）。
+## 画布关键坑
+- 选区自管：用 zustand `selectedIds[]`+`selectedId`，`PeaNode.selected` 读 `includes(id)`；勿用 `.react-flow__node.selected`。
+- Shift 框选：`panOnDrag={[1,2]}`；浮动浮层(`NodeChatPrompt`/`TextNodeToolbar`)必须 `position:fixed`+rAF 读 `getBoundingClientRect` 重定位。
+- 连接手柄：用 `PeaNode` 内 `useState` 控 `.hover` 类，勿用 `.react-flow__node:hover .pea-handle`(Tailwind purge 剥离)。
+- 节点点击命中：菜单/选择用真实鼠标 `page.mouse.click` 中心坐标（DOM `.click()` 被 React 事件代理吞）。
+- `window.__canvas`：注入节点=`loadGraph(nodes,edges,version)`+`select(id)`；注入边=`onConnect({source,target})`（非 `addEdge`）。
 
-## 画布关键坑（2026-07-23，已验证）
-- **选区自管**：ReactFlow 受控节点内部 `.selected` 不持久 → 用 zustand `selectedIds[]`+主 `selectedId`，`PeaNode.selected` 读 `includes(id)`；勿用 `.react-flow__node.selected`/`NodeProps.selected`。
-- **Shift 框选**：`panOnDrag={[1,2]}`（右/中键平移，左键框选）；容器 `onMouseDownCapture` 监听 shift+左键，屏幕坐标 `.react-flow__node` 的 `getBoundingClientRect` **相交**判定（非全包含）调 `setSelection`；矩形 `.pea-sel-box`(fixed)。
-- **浮动浮层**：`NodeChatPrompt`/`TextNodeToolbar` 必须 `position:fixed`+视口坐标+`requestAnimationFrame` 实时读 `getBoundingClientRect` 重定位，勿放 ReactFlow viewport 内。
-- **连接手柄**：默认 `opacity:0` 隐藏，hover/selected 显示；**勿**用 `.react-flow__node:hover .pea-handle`（Tailwind purge 剥离 `:hover`）→ 改用 `PeaNode` 内 `useState` 控 `.hover` 类。全部 Left/Right。
-- **AI 聊天**：`AgentPanel` 升到 `Workspace` 层级固定最右 380px；默认只显 `.pea-agent-bubble`，展开为 `.pea-agent-panel`。已删 `Inspector.tsx`。
-- **Escape**：`CanvasEditor` 监听 `Escape`→`clearSelection()`，否则手柄常显。
+## 视图模型（三态路由）
+- `useUi().active`：`home`(占位)/`workspace`(项目列表)/`canvas`(画布，隐藏 TopNav，头部下拉返回)。`PageKey` 须含 `'workspace'`；画布回项目列表走头部下拉，勿用 TopNav「工作空间」。
 
-## 视图模型（2026-07-24 起，重大重构）
-- **三态路由**：`useUi().active ∈ {'home','workspace','canvas',…}`，默认 `'workspace'`。
-  - `home` → 占位页（"主页规划中"，等用户后续规划）；
-  - `workspace` → 项目列表（`ProjectList`，原 `Home.tsx` 内容已抽到 `web/src/components/ProjectList.tsx`）；
-  - `canvas` → 画布编辑器，**TopNav 隐藏**，画布自带头部（`CanvasHeader` 左上 + `CanvasActions` 右上 + `BottomPrompt` 右下）。
-- **`PageKey` 必须含 `'workspace'`**；`TopNav` 中"工作空间"标签的 nav-key 是 `'workspace'`（曾被误写成 `'canvas'`，导致点工作空间反而跳画布，已修）。
-- **画布头部下拉（`.pea-canvas-dropdown`）**：返回工作空间 / 探索 / TapTV / 竞技场 / 项目[重命名/新建项目] / 删除（红色）。返回工作空间 = `useUi.getState().setActive('workspace')`。
-- **画布模式下无 TopNav**：从画布回项目列表只能走头部下拉，**不要**用 `get_by_role("button", name="工作空间")`。
-- **`Node` 类型冲突**：ReactFlow `Node` 与 DOM `Node` 同名 → `import type { Node } from 'reactflow'` + 用 `instanceof Node` 时不能用 value-import 形式。
+## Bug 修复记录（2026-07-27）
+- **文本节点拖动失效**（深层原因）：contentEditable 在 mousedown 时自动获得焦点（browser default），这会导致 ReactFlow 的 drag handler 不识别这次 mousedown 为有效 node drag 起点（目标被视为 input-like 元素）。同时外层 downXY 也无法记录坐标。解决方案：在 `PeaNode.tsx` text edit div 的 onMouseDown 中，编辑态下 `stopPropagation()` 防止触发拖动；非编辑态下 `e.preventDefault()` 阻止浏览器自动聚焦 contentEditable，但**不阻止事件冒泡**，使 ReactFlow 和外层节点都能接收事件。双击进入编辑态后锁定，避免误拖。
+- **编辑框（输入栏）闪烁消失**：点击选中节点时，NodeChatPrompt 下方的输入栏会瞬间消失后重现。原因是在 render 阶段通过 DOM 查询 `.pea-node-editor-anchor`，React 更新期间新选中的节点锚点尚未挂载，查询返回 null 导致组件 unmount。解决方案：改用 `useRef` + `useEffect` 缓存 anchorElement，只在 single 变化时重新查询，渲染阶段直接使用缓存值避免中途返回 null。
+- **节点 Hover 光标异常显示箭头/I-beam**：文本区域显示 I 型光标而非预期的抓手光标。方案：在 CSS 中添加 `.pea-node * { cursor: inherit !important; }` 强制所有子元素继承节点的 grab 光标；编辑态特殊保留 `.pea-node-text-edit.is-editing { cursor: text }` 以维持文本编辑体验。
+- **节点悬停视觉反馈增强**：添加 `.pea-node:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1); transition: transform 0.15s ease, box-shadow 0.15s ease; }` 带来轻微上浮磁吸效果，提升交互质感。

@@ -61,16 +61,26 @@ body {
   font-size: 12px;
   color: #fff;
   box-sizing: border-box;
-  /* 统一手型光标：鼠标移到任意节点上都显示“抓手”(grab)，提示可拖动；
+  /* 统一手型光标：鼠标移到任意节点上都显示"抓手"(grab)，提示可拖动；
      按下拖动时变 grabbing，编辑文本态单独用 text 光标（见 .pea-node-text-edit.is-editing）。 */
   cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.pea-node:hover {
+  /* 轻微上浮效果，增强交互反馈 */
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 .pea-node:active {
   cursor: grabbing;
 }
+/* 确保所有子元素继承节点的 cursor 设置，避免文字区域显示 I 型或箭头光标 */
+.pea-node * {
+  cursor: inherit !important;
+}
 /* 编辑中的文本节点：光标回到文本输入态（I 型），不与拖动抓手冲突 */
 .pea-node-text-edit.is-editing {
-  cursor: text;
+  cursor: text !important;
 }
 /* 节点内可点击元素保持 pointer，不被外层 grab 覆盖 */
 .pea-node-media-upload,
@@ -102,9 +112,17 @@ body {
   overflow: hidden; /* 图片节点需要让图片完全贴合 body-card 圆角 */
 }
 .pea-node.selected .pea-node-body-card {
-  border-color: rgba(255, 255, 255, 0.18);
-  box-shadow: 0 22px 50px rgba(0, 0, 0, 0.55), 0 0 0 2px rgba(31, 162, 220, 0.35);
+  /* 选中时直接用品牌色边框，更清晰明确 */
+  border-color: var(--pea-brand-strong, #0b86bd);
+  border-width: 2px;
+  box-shadow: 
+    0 22px 50px rgba(0, 0, 0, 0.55),      /* 原有深投影 */
+    0 0 0 4px rgba(31, 162, 220, 0.25),   /* 外层蓝色光晕（无物理边框，不产生缝隙） */
+    inset 0 0 0 1px rgba(255, 255, 255, 0.15); /* 内层微弱高光增加层次 */
+  transition: all 0.2s ease;
 }
+
+/* 选中外层光晕 - 已在 .pea-node.selected .pea-node-body-card 中通过 box-shadow 实现 */
 /* 节点顶部标签：透明小字（参考截图1），紧贴 body-card 上方居中浮起 */
 .pea-node-tag-pill {
   display: inline-flex;
@@ -165,7 +183,7 @@ body {
   background: rgba(0, 0, 0, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
-  min-height: auto;
+  min-height: 140px;
   border-radius: 16px;
   /* 显式覆盖通则 .pea-node-body-card { overflow:hidden }——
      功能条 .pea-node-result-toolbar 是这个卡片的后代，translateY(-100%) 浮在卡片顶外，
@@ -920,6 +938,12 @@ body {
 .react-flow { background: var(--pea-bg-deep); }
 .react-flow__pane { background: var(--pea-bg-deep); }
 
+/* 右键拖拽平移画布时的抓取光标（与左键框选的 crosshair 区分） */
+.pea-canvas-flow.pea-panning,
+.pea-canvas-flow.pea-panning .react-flow__pane {
+  cursor: grabbing !important;
+}
+
 /* ===== React Flow 容器：确保画线/拖动时节点不被裁切 ===== */
 /* 关键：根容器 .react-flow 默认 overflow:hidden 会把靠近边缘/偏下的节点
    下半部直接裁掉（截图中“节点只露出标签”的根因）。改为 visible 让节点完整显示。 */
@@ -941,9 +965,18 @@ body {
   z-index: 5 !important;
 }
 
+/* 抵消画布缩放的全局变量：1/zoom，由 CanvasEditor 的 ZoomVarSync 实时更新。
+   节点上的编辑框/功能条用 transform: scale(var(--pea-inv-zoom)) 抵消缩放，
+   达到「随节点平移、但屏幕大小恒定」的效果。 */
+:root { --pea-inv-zoom: 1; }
+
 /* 确保节点始终在手柄和连接线之上 */
 .react-flow__node {
   z-index: 10;
+}
+/* 选中节点的层级抬到最高，确保编辑框/功能条不被其它节点遮挡 */
+.react-flow__node.selected {
+  z-index: 1000 !important;
 }
 
 /* ===== React Flow 边颜色 ===== */
@@ -2135,8 +2168,8 @@ body {
   animation: node-input-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes node-input-in {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .node-input-tools {
   display: flex;
@@ -2751,8 +2784,35 @@ body {
 }
 
 /* ===== 截图 #2：节点输入栏使用 fixed 视口定位，避免受画布缩放影响 ===== */
+/* 编辑框锚点：位于节点内部，编辑框 portal 进此容器，随节点平移无缝贴合。 */
+.pea-node-editor-anchor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 20;
+}
+
+/* 编辑框：锚定到节点内部容器，随节点平移；counter-scale(var(--pea-inv-zoom))
+   抵消画布缩放，保持屏幕恒定大小（节点可放大缩小，编辑框不变）。 */
 .node-input-bar {
-  position: fixed;
+  position: absolute;
+  left: 50%;
+  width: 520px;
+  max-width: calc(100vw - 24px);
+  z-index: 40;
+  /* 锚点容器设了 pointer-events:none，pointer-events 可继承，这里必须显式打开，
+     否则编辑框（及输入框）点不动，点击会穿透到画布 pane。 */
+  pointer-events: auto;
+  transform: translateX(-50%) scale(var(--pea-inv-zoom, 1));
+  transform-origin: top center;
+}
+/* 编辑框恒在节点正下方（相对节点固定，不翻转到上方） */
+.node-input-bar.placed-below {
+  top: calc(100% + 16px * var(--pea-inv-zoom, 1));
+  transform-origin: top center;
 }
 
 /* ============================================================================
@@ -3407,10 +3467,12 @@ body {
  * ═════════════════════════════════════════════════════════════════════════════ */
 
 /* 结果图容器：仅作为内部 star/badge 定位参考，不自带边框/圆角/overflow——
-   这些由 body-card 承担（统一圆角、统一裁切）。图片完全填满容器。 */
+   这些由 body-card 承担（统一圆角、统一裁切）。图片完全填满容器。
+   min-height 确保生成完成→图片加载期间节点不塌陷。 */
 .pea-node-result-image-wrap {
   position: relative;
   width: 100%;
+  min-height: 120px;
   border-radius: 0;
   overflow: visible;
   background: transparent;
@@ -3422,11 +3484,14 @@ body {
   width: 100%;
   max-height: 420px;
   height: auto;
+  min-height: 120px;
   object-fit: cover;
   border-radius: 0;
   cursor: default;
-  transition: filter 0.2s ease;
+  transition: filter 0.2s ease, opacity 0.25s ease;
   background: #000;
+  /* 图片未加载时保持占位，避免高度骤降 */
+  aspect-ratio: auto;
 }
 .pea-node-result-image-wrap:hover .pea-node-media-preview {
   filter: brightness(1.04);
@@ -3459,33 +3524,39 @@ body {
   color: #fbbf24;
 }
 
-/* 右上角多图数字角标（被 .pea-node-result-overlay-tr 包住，自身相对定位） */
+/* 右上角多图数字角标（截图1：深色圆角胶囊 + 数字 + ∨ 箭头；截图2：hover 时 ∨ 变 >） */
 .pea-node-image-badge {
   position: relative;
 }
 .pea-node-image-badge-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   height: 24px;
-  padding: 0 8px;
-  border-radius: 8px;
+  padding: 0 9px;
+  border-radius: 10px;
   border: none;
-  background: rgba(0, 0, 0, 0.45);
-  color: rgba(255, 255, 255, 0.9);
-  font-size: 11px;
-  font-weight: 600;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 650;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.18s ease;
+  backdrop-filter: blur(8px);
 }
 .pea-node-image-badge-btn:hover {
-  background: rgba(0, 0, 0, 0.65);
+  background: rgba(40, 40, 48, 0.85);
 }
-/* hover 时箭头向右旋转 */
-.pea-node-image-badge-btn-hover-right .pea-badge-arrow {
-  transition: transform 0.2s ease;
+.pea-badge-count {
+  line-height: 1;
 }
-.pea-node-image-badge-btn-hover-right:hover .pea-badge-arrow {
+/* 箭头：默认 ∨ (chevron down)，hover 时顺时针旋转 90° 变为 < (chevron left) */
+.pea-badge-arrow {
+  transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.pea-node-image-badge-btn:hover .pea-badge-arrow {
   transform: rotate(-90deg);
 }
 /* 多图选择器：并排展示 */
@@ -3601,21 +3672,23 @@ body {
   position: absolute;
   top: 0;
   left: 50%;
-  transform: translate(-50%, calc(-100% - 12px));
+  /* 抵消画布缩放：常驻节点上方、恒定屏幕大小，与下方编辑框视觉语言一致 */
+  transform: translate(-50%, calc(-100% - 12px * var(--pea-inv-zoom, 1))) scale(var(--pea-inv-zoom, 1));
+  transform-origin: bottom center;
   /* 必须高于连接手柄(z-index:10)，否则在矮节点上手柄会盖住工具栏按钮、拦截点击 */
   z-index: 30;
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
   padding: 6px 8px;
-  border-radius: 999px;
-  background: rgba(30, 30, 36, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.5);
+  border-radius: 14px;
+  background: rgba(28, 28, 34, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(14px) saturate(140%);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity 0.18s ease;
   white-space: nowrap;
 }
 /* hover 触发：节点 hover / 节点选中 / 工具条自身 hover（:has 兼容） */
@@ -3626,12 +3699,12 @@ body {
   pointer-events: auto;
 }
 .pea-node-toolbar-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   border: none;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.78);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3704,6 +3777,44 @@ body {
   border-color: rgba(255, 255, 255, 0.3);
 }
 
+/* 顶部工具条：收藏、替换、下载（参考截图3） */
+.pea-node-lightbox-topbar {
+  position: fixed;
+  top: 18px;
+  left: 22px;
+  z-index: 10001;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: rgba(34, 34, 40, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px);
+}
+.pea-node-lightbox-topbtn {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.12s ease;
+}
+.pea-node-lightbox-topbtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  transform: translateY(-1px);
+}
+.pea-node-lightbox-topbtn.saved {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+}
+
 /* 左侧大图区 */
 .pea-node-lightbox-left {
   position: relative;
@@ -3714,6 +3825,14 @@ body {
   padding: 40px 60px 110px;
   min-width: 0;
 }
+.pea-node-lightbox-img-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 100%;
+}
 .pea-node-lightbox-img {
   max-width: 100%;
   max-height: calc(100vh - 140px);
@@ -3721,6 +3840,24 @@ body {
   border-radius: 10px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
   background: rgba(0, 0, 0, 0.35);
+}
+.pea-node-lightbox-setmain {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease;
+  backdrop-filter: blur(6px);
+}
+.pea-node-lightbox-setmain:hover {
+  background: rgba(31, 162, 220, 0.9);
 }
 .pea-node-lightbox-arrow {
   position: absolute;
@@ -3875,4 +4012,571 @@ body {
   .pea-node-lightbox-left {
     padding: 40px 20px 90px;
   }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 多图并排网格抽屉（截图3/4）：替代原来的单图 lightbox，并排展示所有结果
+ * ═════════════════════════════════════════════════════════════════════════════ */
+.pea-grid-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.88);
+  backdrop-filter: blur(8px);
+  animation: pea-grid-lb-in 0.2s ease;
+}
+@keyframes pea-grid-lb-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.pea-grid-lb-close {
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  z-index: 10001;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(34, 34, 40, 0.92);
+  color: #fff;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease;
+}
+.pea-grid-lb-close:hover {
+  background: rgba(60, 60, 70, 0.98);
+}
+.pea-grid-lb-content {
+  width: min(92vw, 920px);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  border-radius: 18px;
+  background: rgba(22, 22, 28, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.65);
+  animation: pea-grid-lb-content-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pea-grid-lb-content-in {
+  from { opacity: 0; transform: scale(0.96) translateY(16px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.pea-grid-lb-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  letter-spacing: 0.3px;
+}
+/* 网格：自适应列数，每张图固定宽高比 */
+.pea-grid-lb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  overflow-y: auto;
+  padding: 4px;
+}
+/* 单张图片卡片 */
+.pea-grid-lb-item {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.4);
+  cursor: default;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.pea-grid-lb-item:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+.pea-grid-lb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: filter 0.25s ease;
+}
+/* hover 浮层（截图4） */
+.pea-grid-lb-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px;
+  /* 渐变遮罩 + 毛玻璃 */
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.45) 0%,
+    transparent 30%,
+    transparent 60%,
+    rgba(0, 0, 0, 0.65) 100%
+  );
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+.pea-grid-lb-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* 顶部操作按钮行：收藏 / 复制 / 下载 */
+.pea-grid-lb-actions-top {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.pea-grid-lb-actbtn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: none;
+  background: rgba(0, 0, 0, 0.5);
+  color: rgba(255, 255, 255, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+  backdrop-filter: blur(6px);
+}
+.pea-grid-lb-actbtn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  transform: scale(1.08);
+}
+/* 底部："设为主图" / "当前主图" */
+.pea-grid-lb-setmain {
+  align-self: flex-end;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: none;
+  background: var(--pea-brand, #1fa2dc);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.pea-grid-lb-setmain:hover {
+  background: var(--pea-brand-strong, #0b86bd);
+  transform: scale(1.04);
+}
+.pea-grid-lb-primary-tag {
+  align-self: flex-end;
+  padding: 5px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 11px;
+  font-weight: 500;
+  backdrop-filter: blur(4px);
+}
+/* 主图左边框指示（蓝色高亮） */
+.pea-grid-lb-primary-border {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--pea-brand, #1fa2dc);
+  border-radius: 12px 0 0 12px;
+  box-shadow: 0 0 10px rgba(31, 162, 220, 0.4);
+}
+/* 主图卡片微调 */
+.pea-grid-lb-item.is-primary {
+  outline: 2px solid rgba(31, 162, 220, 0.35);
+  outline-offset: -2px;
+}
+
+/* 响应式：小屏时网格变单列 */
+@media (max-width: 600px) {
+  .pea-grid-lb-grid {
+    grid-template-columns: 1fr;
+  }
+  .pea-grid-lb-content {
+    width: 94vw;
+    padding: 16px;
+  }
+}
+
+/* ============================================================================
+ * 节点生成提示词富文本输入框（@ 引用上游节点）
+ * ============================================================================ */
+.node-prompt-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.node-prompt-editor {
+  width: 100%;
+  min-height: 52px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 4px 0;
+  font-family: inherit;
+  cursor: text;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.node-prompt-editor:empty::before {
+  content: attr(data-placeholder);
+  color: rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+  display: block;
+}
+.node-prompt-editor .pea-ref {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin: 0 2px;
+  border-radius: 8px;
+  background: rgba(31, 162, 220, 0.18);
+  border: 1px solid rgba(31, 162, 220, 0.28);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+  max-width: 140px;
+}
+.node-prompt-editor .pea-ref-inner {
+  display: inline-flex;
+  align-items: center;
+  pointer-events: none;
+}
+.node-prompt-editor .pea-ref-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #000;
+  display: block;
+}
+.node-prompt-editor .pea-ref-text {
+  padding: 5px 8px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+/* 快捷引用条 */
+.node-prompt-quick-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.node-prompt-quick-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  max-width: 160px;
+}
+.node-prompt-quick-ref:hover {
+  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.node-prompt-quick-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #000;
+  flex-shrink: 0;
+}
+.node-prompt-quick-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.node-prompt-quick-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* @ 选择浮层 */
+.pea-ref-picker {
+  background: rgba(30, 30, 38, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(24px) saturate(180%);
+  padding: 8px;
+  min-width: 220px;
+  max-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  animation: drawer-slide-out 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+}
+.pea-ref-picker-head {
+  padding: 6px 8px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.pea-ref-picker-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  text-align: center;
+}
+.pea-ref-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 10px;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+  text-align: left;
+}
+.pea-ref-picker-item:hover,
+.pea-ref-picker-item.active {
+  background: rgba(255, 255, 255, 0.08);
+}
+.pea-ref-picker-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #000;
+  flex-shrink: 0;
+}
+.pea-ref-picker-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.pea-ref-picker-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pea-ref-picker-kind {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+/* 节点左侧输入状态小点 */
+.pea-node-input-badge {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--pea-brand, #1fa2dc);
+  box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.25);
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* ============================================================================
+ * 节点输入栏引用条：✦ + 图片缩略图 + +
+ * ============================================================================ */
+.node-ref-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.node-ref-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.node-ref-tool:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+.node-ref-tool.active {
+  background: rgba(31, 162, 220, 0.22);
+  border-color: rgba(31, 162, 220, 0.45);
+  color: #1fa2dc;
+}
+.node-ref-thumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: calc(100% - 80px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+  scrollbar-width: none;
+}
+.node-ref-thumbs::-webkit-scrollbar {
+  display: none;
+}
+.node-ref-thumb {
+  flex-shrink: 0;
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.node-ref-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* 文本节点引用：显示文本图标（区别于图片缩略图） */
+.node-ref-thumb-text {
+  background: linear-gradient(135deg, rgba(31, 162, 220, 0.18), rgba(31, 162, 220, 0.08));
+  border-color: rgba(31, 162, 220, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.node-ref-text-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: #1fa2dc;
+}
+/* 引用项右上角移除按钮：默认隐藏，hover 时显示 */
+.node-ref-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.12s ease, background 0.12s ease;
+  z-index: 2;
+  backdrop-filter: blur(4px);
+}
+.node-ref-thumb:hover .node-ref-remove,
+.node-ref-thumb:focus-within .node-ref-remove {
+  opacity: 1;
+}
+.node-ref-remove:hover {
+  background: #e23636;
+  transform: scale(1.08);
+}
+
+/* ============================================================================
+ * 「从画布选择参考」顶部提示条
+ * ============================================================================ */
+.node-canvas-pick-bar {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.node-canvas-pick-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(31, 162, 220, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(16px) saturate(180%);
+  pointer-events: auto;
+}
+.node-canvas-pick-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.node-canvas-pick-title svg {
+  flex-shrink: 0;
+}
+.node-canvas-pick-exit {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.node-canvas-pick-exit:hover {
+  background: rgba(255, 255, 255, 0.28);
 }

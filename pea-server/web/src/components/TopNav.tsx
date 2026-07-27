@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { App, Button, Select, Tooltip } from 'antd';
 import { ShareAltOutlined, WalletOutlined } from '@ant-design/icons';
 import { api } from '../api/client';
@@ -19,23 +18,12 @@ const NAV: { key: PageKey; label: string }[] = [
 
 /** 顶部全局导航 (FR-G1)：Logo + 导航项 + 积分/分享/通知/主题/用户。 */
 export default function TopNav() {
-  const { balance, setBalance, refreshMe } = useAuth();
+  const { balance, setBalance } = useAuth();
   const { mode, setMode } = useTheme();
   const { active, setActive } = useUi();
   const { message } = App.useApp();
 
-  // 拉取 /users/me 同步余额 + 角色(isAdmin) + 权益等级；失败回退到仅取余额。
-  useEffect(() => {
-    refreshMe().then((ok) => {
-      if (!ok) {
-        api
-          .get('/billing/balance')
-          .then((r) => setBalance(r.data.balance))
-          .catch(() => {});
-      }
-    });
-  }, [refreshMe, setBalance]);
-
+  // 余额由常驻的 Workspace 通过 refreshMe 同步（Workspace 已含静默续期 + 30 分钟保活）。
   const onShare = async () => {
     const url = window.location.href;
     try {

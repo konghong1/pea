@@ -39,9 +39,15 @@ export class AdminProvidersController {
     return this.providers.deleteProvider(id);
   }
 
-  /** 拉取该提供商远端可用模型列表 (不落库, 供管理员挑选)。 */
+  /** 拉取该提供商远端可用模型列表, 按类型持久化后返回 (供模型配置下拉选择)。 */
   @Post(':id/fetch-models')
   fetchModels(@Param('id') id: string) {
     return this.providers.fetchRemoteModels(id);
+  }
+
+  /** 列出该提供商已持久化的远端模型 (按类型, 供下拉选择)。 */
+  @Get(':id/remote-models')
+  listRemoteModels(@Param('id') id: string) {
+    return this.providers.listRemoteModels(id);
   }
 }

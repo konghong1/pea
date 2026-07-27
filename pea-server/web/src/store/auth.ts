@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { api } from '../api/client';
 import { getMe } from '../api/catalog';
 import { clearFileCache } from '../api/files';
 
@@ -23,6 +24,8 @@ interface AuthState {
   setBalance: (b: number) => void;
   /** 拉取 /users/me 同步余额 + 角色 + 权益。返回是否成功。 */
   refreshMe: () => Promise<boolean>;
+  /** 静默续期：用当前有效 token 换发新 token（延长会话）。失败返回 false（不动 user）。 */
+  refreshToken: () => Promise<boolean>;
   logout: () => void;
 }
 
@@ -60,6 +63,19 @@ export const useAuth = create<AuthState>((set) => ({
     } catch {
       return false;
     }
+  },
+  refreshToken: async () => {
+    try {
+      const { data } = await api.post<{ token: string }>('/auth/refresh');
+      if (data?.token) {
+        localStorage.setItem('pea_token', data.token);
+        set({ token: data.token });
+        return true;
+      }
+    } catch {
+      /* token 失效或网络异常：返回 false，由 401 拦截器决定是否登出 */
+    }
+    return false;
   },
   logout: () => {
     clearFileCache();

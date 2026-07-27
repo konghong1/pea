@@ -15,7 +15,7 @@ export default () => {
     port: parseInt(process.env.PEA_PORT ?? '4000', 10),
     jwt: {
       secret: jwtSecret ?? 'dev-insecure-secret-do-not-use-in-prod',
-      expiresIn: process.env.PEA_JWT_EXPIRES_IN ?? '7d',
+      expiresIn: process.env.PEA_JWT_EXPIRES_IN ?? '30d',
     },
     db: {
       host: process.env.PEA_DB_HOST ?? 'mysql',

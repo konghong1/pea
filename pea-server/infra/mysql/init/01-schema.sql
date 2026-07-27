@@ -361,6 +361,23 @@ CREATE TABLE IF NOT EXISTS ai_models (
     CONSTRAINT fk_models_provider FOREIGN KEY (provider_id) REFERENCES ai_providers (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
+-- 从 AI 提供商拉取的远端模型清单 (按类型持久化, 供「模型 & 定价」配置下拉选择)。
+-- 与 ai_models 解耦: 此处是"提供商那边有哪些模型", ai_models 是"平台上架并计价的模型"。
+-- model_type 词汇比 ai_models 更宽, 以反映提供商实际返回的各类模型。
+CREATE TABLE IF NOT EXISTS provider_remote_models (
+    id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    provider_id      VARCHAR(64)  NOT NULL,
+    remote_model_id  VARCHAR(255) NOT NULL,                 -- 传给 provider 的真实模型名
+    owned_by         VARCHAR(255) NULL,
+    model_type       ENUM('image','video','text','audio','embedding') NOT NULL DEFAULT 'text',
+    created_at       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_provider_remote (provider_id, remote_model_id),
+    KEY idx_remote_provider (provider_id),
+    CONSTRAINT fk_remote_provider FOREIGN KEY (provider_id) REFERENCES ai_providers (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 -- 售卖套餐: 购买后到账 tapies + 赋予 plan_level, 有效期 duration_days。
 CREATE TABLE IF NOT EXISTS billing_plans (
     id            VARCHAR(64) NOT NULL,
@@ -399,7 +416,7 @@ CREATE TABLE IF NOT EXISTS user_plans (
 -- 管理员账号: admin@pea.ai / admin12345 (bcrypt hash, cost=10)。首启即可登录管理后台。
 INSERT INTO users (email, password_hash, display_name, role, plan_level)
 VALUES ('admin@pea.ai', '$2a$10$gjL30swN9Kg2.2mV7GmVBOCoe8XgHnLuVKSC.YkfjfqGZgEzlfemi', '平台管理员', 'admin', 999)
-ON DUPLICATE KEY UPDATE role='admin', plan_level=999;
+ON DUPLICATE KEY UPDATE role='admin', plan_level=999, display_name='平台管理员';
 
 -- 管理员钱包 + 开户赠金流水 (对账基准), 幂等。
 INSERT INTO accounts (user_id, balance, version)
