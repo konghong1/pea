@@ -57,7 +57,7 @@ body {
  */
 .pea-node {
   position: relative;
-  width: 280px !important;  /* !important 防止 audio/video 元素的 UA 默认宽度反向撑小 .pea-node 父容器 */
+  width: 340px !important;  /* 放大节点；!important 防止 audio/video 元素的 UA 默认宽度反向撑小 .pea-node 父容器 */
   font-size: 12px;
   color: #fff;
   box-sizing: border-box;
@@ -91,7 +91,7 @@ body {
   cursor: pointer;
 }
 .pea-node-text {
-  width: 280px;
+  width: 340px;
 }
 /* 节点主体卡片（节点下方深色圆角框） */
 .pea-node-body-card {
@@ -123,6 +123,23 @@ body {
 }
 
 /* 选中外层光晕 - 已在 .pea-node.selected .pea-node-body-card 中通过 box-shadow 实现 */
+/* 节点框比例：
+   - 图片/视频：由 PeaNode.tsx 根据 data.aspectRatio 写入 inline style（如 "9/16"），
+     新建时从编辑框比例选择器读取，有内容后取消（aspect-ratio:auto 按实际媒体包裹）
+   - 文本：始终 1:1 正方形
+   - 下方 .pea-node-has-media 的规则会覆盖这些值 */
+.pea-node-text .pea-node-body-card {
+  aspect-ratio: 1 / 1;
+}
+/* fallback：旧数据或无 aspectRatio 字段的图片/视频空白节点用默认比例
+   （正常流程不会走到这里，因为新建节点一定会写入 aspectRatio） */
+.pea-node-image:not(.pea-node-has-media) .pea-node-body-card {
+  aspect-ratio: 9 / 16;
+}
+.pea-node-video:not(.pea-node-has-media) .pea-node-body-card {
+  aspect-ratio: 16 / 9;
+}
+
 /* 节点顶部标签：透明小字（参考截图1），紧贴 body-card 上方居中浮起 */
 .pea-node-tag-pill {
   display: inline-flex;
@@ -175,7 +192,7 @@ body {
 }
 /* image 节点有图片结果时：节点宽度与外壳统一（280px），不再单独放宽/缩窄 */
 .pea-node.pea-node-image.pea-node-has-media {
-  width: 280px;
+  width: 340px;
 }
 /* 图片节点 body-card：去内边距、去掉冗余外框，让图片直接填满节点内容区（不留缝） */
 .pea-node-image.pea-node-has-media .pea-node-body-card {
@@ -184,6 +201,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
   min-height: 140px;
+  aspect-ratio: auto;  /* 有图后取消固定 9:16，按图片原始比例完整包裹（不裁切） */
   border-radius: 16px;
   /* 显式覆盖通则 .pea-node-body-card { overflow:hidden }——
      功能条 .pea-node-result-toolbar 是这个卡片的后代，translateY(-100%) 浮在卡片顶外，
@@ -201,18 +219,40 @@ body {
 .pea-node-image.pea-node-has-media .pea-node-media-label {
   display: none;
 }
-/* 图片完整展示：完全填满 body-card（不留上下左右缝），用 cover 避免容器留黑边。
-   border-radius:16px 替代 body-card 的 overflow:hidden 圆角裁切（让功能条不被裁掉） */
+/* 图片完整展示：有图后按图片原始比例完整包裹（object-fit:contain 不裁切），
+   节点高度由图片比例决定；极端高图用 max-height 保护画布，超出时整体等比缩小 */
 .pea-node-image.pea-node-has-media .pea-node-media-preview,
 .pea-node-image.pea-node-has-media .pea-node-result-image-wrap .pea-node-media-preview {
   display: block;
   width: 100%;
-  max-width: 100%;
-  max-height: 420px;
   height: auto;
-  object-fit: cover;
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
   border-radius: 16px;
   background: #000;
+}
+
+/* 有图时媒体卡片与图片容器回到正常文档流：节点尺寸由图片原始比例决定（完整包裹，不裁切）。
+   注意：必须取消上一版的 position:absolute; inset:0 —— 否则 aspect-ratio:auto 时高度塌陷为 0 */
+.pea-node-image.pea-node-has-media .pea-node-media-card {
+  position: relative;
+  padding-top: 0;
+  gap: 0;
+}
+.pea-node-image.pea-node-has-media .pea-node-result-image-wrap {
+  position: relative;
+  width: 100%;
+}
+
+/* 视频节点有内容：与空白态保持一致的 280px 最小高度，避免横屏视频（16:9/21:9）被压成一条线。
+   视频用 object-fit:contain 完整显示（不裁切），max-height 放宽到 252px 以填充盒子。 */
+.pea-node-video.pea-node-has-media .pea-node-body-card {
+  min-height: 280px;
+}
+.pea-node-video.pea-node-has-media .pea-node-media-preview {
+  max-height: 252px;
+  width: 100%;
 }
 
 .pea-node-media-card {
@@ -232,26 +272,53 @@ body {
   gap: 5px;
   align-self: flex-start;
 }
+/* 空白图片节点占位：纯展示图标，不可点击（只有顶部上传按钮可上传） */
 .pea-node-media-placeholder {
   flex: 1;
-  min-height: 120px;
+  min-height: 160px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  color: rgba(255, 255, 255, 0.4);
-  cursor: pointer;
+  color: rgba(255, 255, 255, 0.2);
   border-radius: 12px;
-  transition: background 0.15s ease, color 0.15s ease;
 }
-.pea-node-media-placeholder:hover {
-  background: rgba(255, 255, 255, 0.045);
-  color: rgba(255, 255, 255, 0.6);
+
+/* ===== 图片节点空白态上传悬浮条：与 ResultToolbar 完全同一浮空位置（节点外部上方），互斥 =====
+   仅空白图片节点显示；有图后消失，ResultToolbar 接管同一位置 */
+.pea-node-top-upload-bar {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  /* 与 ResultToolbar 完全一致：浮在节点顶外、恒定屏幕大小、随缩放 counter-scale */
+  transform: translate(-50%, calc(-100% - 12px * var(--pea-inv-zoom, 1))) scale(var(--pea-inv-zoom, 1));
+  transform-origin: bottom center;
+  z-index: 30; /* 同 ResultToolbar，高于连接手柄 */
+  display: inline-flex;
+  align-items: center;
 }
-.pea-node-media-placeholder:hover .pea-node-media-placeholder-icon {
-  color: rgba(255, 255, 255, 0.6);
+.pea-node-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: rgba(28, 28, 34, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px) saturate(140%);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
 }
+.pea-node-upload-btn:hover {
+  background: rgba(45, 45, 54, 0.98);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: #fff;
+}
+
 .pea-node-media-preview {
   width: 100%;
   max-height: 200px;
@@ -2569,7 +2636,7 @@ body {
   backdrop-filter: blur(24px) saturate(180%);
   padding: 12px 14px;
   width: 200px;
-  max-height: 320px;
+  max-height: 480px;
   overflow-y: auto;
   animation: drawer-slide-out 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   transform-origin: bottom center;
@@ -2648,6 +2715,50 @@ body {
   transition: opacity 0.15s;
 }
 .aspect-ratio-btn.active svg { opacity: 1; }
+
+/* ── 视频 6 列比例网格（16:9/4:3/1:1/3:4/9:16/21:9） ── */
+.aspect-grid-6col {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+}
+
+/* ── 视频时长选择网格 ── */
+.aspect-duration-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.aspect-duration-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-width: 32px;
+  text-align: center;
+}
+.aspect-duration-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+}
+.aspect-duration-btn.active {
+  background: rgba(31, 162, 220, 0.15);
+  border-color: rgba(31, 162, 220, 0.35);
+  color: #fff;
+}
+
+/* ── 提示图标 ── */
+.aspect-hint {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.3);
+  cursor: help;
+  margin-left: 2px;
+}
 
 /* ===== 倍率下拉（1x~4x）===== */
 .node-count-wrapper {
@@ -4269,6 +4380,27 @@ body {
   background: #000;
   display: block;
 }
+/* 缩略图 URL 尚未解析完成时的占位态（避免显示浏览器默认裂图图标） */
+.node-prompt-editor .pea-ref-thumb[data-pea-pending="1"] {
+  background: linear-gradient(135deg, #2a2a3e, #1e1e2e);
+  position: relative;
+}
+.node-prompt-editor .pea-ref-thumb[data-pea-pending="1"]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Crect x='3' y='3' width='18' height='18' rx='2'/%3E%3Ccircle cx='9' cy='9' r='2'/%3E%3Cpath d='M21 15l-3.086-3.086a2 2 0 00-2.828 0L6 21'/%3E%3C/svg%3E") center/14px no-repeat;
+}
+/* 占位图标：未解析或 URL 加载失败时显示，避免浏览器默认裂图 */
+.node-prompt-editor .pea-ref-thumb.pea-ref-thumb-fallback-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #2a2a3e, #1e1e2e);
+  font-size: 15px;
+  line-height: 1;
+  pointer-events: none;
+}
 .node-prompt-editor .pea-ref-text {
   padding: 5px 8px;
   max-width: 120px;
@@ -4349,6 +4481,18 @@ body {
   font-size: 12px;
   color: rgba(255, 255, 255, 0.45);
   text-align: center;
+}
+/* Picker 缩略图降级：当 resolveNodeMediaUrl 无法获取 URL 时，用图标替代黑方块 */
+.pea-ref-picker-thumb-fallback {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+  font-size: 16px;
+  opacity: 0.6;
 }
 .pea-ref-picker-item {
   display: flex;

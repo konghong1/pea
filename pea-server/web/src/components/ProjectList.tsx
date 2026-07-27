@@ -92,7 +92,20 @@ export default function ProjectList() {
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>('grid');
   const [q, setQ] = useState('');
-  const [sortBy, setSortBy] = useState<'updated_at' | 'created_at' | 'name'>('updated_at');
+  // 默认按「最近创建」排序：顺序稳定，不会因为编辑某个项目导致它跳到列表最前，
+  // 造成"点第一个卡片进去显示的却是刚编辑的项目"的错觉（2026-07-27 用户反馈的严重 bug）。
+  // 用户手动切换排序后持久化到 localStorage。
+  const [sortBy, setSortBy] = useState<'updated_at' | 'created_at' | 'name'>(() => {
+    try {
+      const v = localStorage.getItem('pea_projects_sort');
+      if (v === 'updated_at' || v === 'created_at' || v === 'name') return v;
+    } catch { /* ignore */ }
+    return 'created_at';
+  });
+  const changeSortBy = (v: 'updated_at' | 'created_at' | 'name') => {
+    setSortBy(v);
+    try { localStorage.setItem('pea_projects_sort', v); } catch { /* ignore */ }
+  };
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
@@ -434,7 +447,7 @@ export default function ProjectList() {
             />
             <Select
               value={sortBy}
-              onChange={setSortBy}
+              onChange={changeSortBy}
               suffixIcon={<FilterOutlined />}
               style={{ width: 130 }}
               options={[

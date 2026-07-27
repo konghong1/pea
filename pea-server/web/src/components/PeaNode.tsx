@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Handle, Position, NodeProps } from 'reactflow';
 import { useCanvas, PeaNodeData } from '../store/canvas';
@@ -35,8 +35,29 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const isText = kind === 'text';
   const isMedia = kind === 'image' || kind === 'video' || kind === 'audio';
   const hasImage = kind === 'image' && !!(data.resultUrl || data.resultUrls?.length || data.url || data.fileKey);
+  // 媒体节点是否有可展示内容（空态上传浮条互斥判断：image 用 hasImage，video/audio 用 url/fileKey/result）
+  const hasMediaContent = kind === 'image'
+    ? hasImage
+    : !!(data.url || data.fileKey || data.resultUrl || data.resultUrls?.length);
+  // 用户上传的图片（非 AI 生成结果）——不需要接收其他节点输入，隐藏左手柄
+  const isUserUploadedImage = kind === 'image' && !!(data.fileKey || data.url) && !(data.resultUrl || data.resultUrls?.length);
   const def = NODE_DEF_OF(kind);
   const tagLabel = tagLabelOf(kind);
+
+  // 将 data.aspectRatio（如 "9:16"）映射为 CSS 样式
+  // 仅空白节点使用；有内容后由 CSS aspect-ratio:auto 接管（按实际媒体比例包裹）
+  // 宽度固定 340px，横屏比例（16:9/21:9）会导致高度过小，需加 minHeight 保证节点框不会太矮
+  const NODE_WIDTH = 340;
+  const MIN_HEIGHT = 280; // 最小高度：确保即使 21:9 超宽屏也不会缩成一条线
+  const nodeStyle = useMemo(() => {
+    if (!data.aspectRatio || hasMediaContent) return undefined;
+    const [w, h] = data.aspectRatio.split(':').map(Number);
+    if (!w || !h) return undefined;
+    const naturalHeight = Math.round(NODE_WIDTH * (h / w));
+    const style: React.CSSProperties = { aspectRatio: `${w}/${h}` };
+    if (naturalHeight < MIN_HEIGHT) style.minHeight = MIN_HEIGHT;
+    return style;
+  }, [data.aspectRatio, hasMediaContent]);
 
   // text 节点：把 store 的 html 同步进可编辑区。
   useEffect(() => {
@@ -114,7 +135,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
 
   return (
     <div
-      className={`pea-node ${selected ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasImage ? 'pea-node-has-media' : ''}`}
+      className={`pea-node ${selected ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''}`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onMouseDown={(e) => {
@@ -129,12 +150,15 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       onDoubleClick={onNodeDoubleClick}
       data-kind={kind}
     >
-      <Handle
-        type="target"
-        position={Position.Left}
-        className="pea-handle"
-        style={{ left: -10, top: '50%', transform: 'translateY(-50%)' }}
-      />
+      {/* 左手柄：用户上传的图片不需要接收其他节点输入，隐藏 */}
+      {!isUserUploadedImage && (
+        <Handle
+          type="target"
+          position={Position.Left}
+          className="pea-handle"
+          style={{ left: -10, top: '50%', transform: 'translateY(-50%)' }}
+        />
+      )}
       <Handle
         type="source"
         position={Position.Right}
@@ -142,8 +166,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
         style={{ right: -10, top: '50%', transform: 'translateY(-50%)' }}
       />
 
-      {/* 顶部统一标签：所有节点、所有状态一致（透明小字，悬浮在卡片上方）。
-          空媒体节点不再显示悬浮大黑“上传”药丸，改为卡片内安静的上传区，消除突兀感。 */}
+      {/* 顶部标签：所有节点始终显示 */}
       <div className="pea-node-tag-pill">
         <span className="pea-node-tag-icon" aria-hidden>
           {def.icon}
@@ -162,12 +185,15 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       )}
 
       {/* 节点主体 */}
-      <div className={`pea-node-body-card ${hasImage ? 'pea-node-body-image-result' : ''}`}>
+      <div
+        className={`pea-node-body-card ${hasImage ? 'pea-node-body-image-result' : ''}`}
+        style={nodeStyle}
+      >
         {isText ? (
           <div className="pea-node-text-wrap">
             <div
               ref={editRef}
-              className={`pea-node-text-edit nodrag ${editing ? 'is-editing' : ''}`}
+              className={`pea-node-text-edit ${editing ? 'is-editing nodrag' : ''}`}
               contentEditable={editing}
               suppressContentEditableWarning
               data-placeholder={editing ? '' : '双击开始编辑…'}
@@ -176,7 +202,8 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
               onMouseDown={(e) => {
                 // 编辑态下：阻止冒泡，避免触发节点拖动
                 // 非编辑态下：preventDefault() 阻止 contentEditable 自动获取焦点，
-                // 但不阻止事件冒泡，这样 ReactFlow 和父节点的 onMouseDown 都能收到事件
+                // 但不阻止事件冒泡，这样 ReactFlow 和父节点的 onMouseDown 都能收到事件；
+                // 同时本 div 不带 nodrag，ReactFlow 才能正常发起节点拖动。
                 if (editing) {
                   e.stopPropagation();
                 } else {
@@ -191,6 +218,32 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
           <GenericNodeBody id={id} data={data} tagLabel={tagLabel} def={def} />
         )}
       </div>
+
+      {/* 媒体节点空白态：上传悬浮条（与 ResultToolbar 完全同一浮空位置，互斥）
+          仅在所有媒体无内容时显示，浮在节点外部上方；有内容后消失 */}
+      {isMedia && !hasMediaContent && !data.generating && (
+        <div className="pea-node-top-upload-bar" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className="pea-node-upload-btn"
+            onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}
+            aria-label="上传图片"
+            title="上传图片"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+              <path d="M12 3v12" />
+              <path d="M7 8l5-5 5 5" />
+              <path d="M5 21h14" />
+            </svg>
+            <span>上传</span>
+          </button>
+        </div>
+      )}
+
+      {/* 编辑框锚点：NodeChatPrompt 会把节点输入栏 portal 进这个容器
+          （data-pea-anchor 用于按选中节点精确匹配）。该元素缺失会导致点击节点后
+          输入栏（边框框）永不弹出——这是反复回归的根因，务必保留。 */}
+      <div className="pea-node-editor-anchor" data-pea-anchor={id} />
     </div>
   );
 }
@@ -231,8 +284,8 @@ function MediaNodeBody({
     }
     return () => { alive = false; };
   }, [data.fileKey, data.url]);
-  // image 节点有图片结果时不重复显示 media-label，由 PeaNode 顶部的 "Image" 标签承担
-  const showMediaLabel = !(kind === 'image' && hasImage);
+  // image/video 节点统一不显示内部 media-label：顶部 tag-pill 已承载类型标识，内部不再重复
+  const showMediaLabel = !(kind === 'image' || kind === 'video');
 
   return (
     <div className="pea-node-media-card">
@@ -256,6 +309,7 @@ function MediaNodeBody({
               index={index}
               onIndexChange={(i) => update(id, { resultIndex: i })}
               onReplace={onRequestUpload}
+              canReplace={false}
             />
           )}
           {kind === 'video' && (
@@ -305,7 +359,7 @@ function MediaNodeBody({
         </>
       ) : data.url || data.fileKey ? (
         kind === 'image' ? (
-          // 上传图也走 ResultImageView（带功能条 + 保存/全屏）
+          // 上传图也走 ResultImageView（带功能条 + 保存/全屏 + 右上角替换）
           <ResultImageView
             id={id}
             data={data}
@@ -313,6 +367,7 @@ function MediaNodeBody({
             index={0}
             onIndexChange={() => {}}
             onReplace={onRequestUpload}
+            canReplace={true}
           />
         ) : kind === 'video' ? (
           <video src={resolvedUrl} controls className="pea-node-media-preview" />
@@ -320,50 +375,27 @@ function MediaNodeBody({
           <audio src={resolvedUrl} controls className="pea-node-audio" />
         )
       ) : (
-        <div
-          className="pea-node-media-placeholder"
-          role="button"
-          tabIndex={0}
-          onClick={onRequestUpload}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              onRequestUpload();
-            }
-          }}
-          aria-label={`上传${tagLabel}`}
-        >
+        <div className="pea-node-media-placeholder">
           <span className="pea-node-media-placeholder-icon" aria-hidden>
             {kind === 'image' ? (
-              <svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
                 <rect x="3" y="4" width="18" height="16" rx="2" />
                 <circle cx="8.5" cy="9.5" r="1.5" />
                 <path d="M3 16l5-5 4 4 3-3 6 6" />
               </svg>
             ) : kind === 'video' ? (
-              <svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
                 <rect x="3" y="5" width="18" height="14" rx="2" />
                 <path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none" />
               </svg>
             ) : (
-              <svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
                 <path d="M9 18V5l12-2v13" />
                 <circle cx="6" cy="18" r="3" />
                 <circle cx="18" cy="16" r="3" />
               </svg>
             )}
           </span>
-          <button
-            type="button"
-            className="pea-node-media-upload"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRequestUpload();
-            }}
-          >
-            <span aria-hidden>↑</span>
-            <span>上传{tagLabel}</span>
-          </button>
         </div>
       )}
     </div>
@@ -380,6 +412,7 @@ function ResultImageView({
   index,
   onIndexChange,
   onReplace,
+  canReplace,
 }: {
   id: string;
   data: PeaNodeData;
@@ -387,6 +420,8 @@ function ResultImageView({
   index: number;
   onIndexChange: (i: number) => void;
   onReplace: () => void;
+  /** 仅用户上传图显示"替换"按钮；AI 生成图按约定不显示替换 */
+  canReplace: boolean;
 }) {
   const update = useCanvas((s) => s.updateNodeData);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -425,9 +460,25 @@ function ResultImageView({
           </svg>
         </button>
 
-        {/* 右上角：仅多张图时显示数量角标（hover 箭头向右，点击展开并排缩略图） */}
-        {urls.length > 1 && (
-          <div className="pea-node-result-overlay-tr">
+        {/* 右上角：上传图显示"替换"按钮（始终可见）；多图时追加数量角标 */}
+        <div className="pea-node-result-overlay-tr">
+          {canReplace && (
+            <button
+              type="button"
+              className="pea-node-result-replace"
+              onClick={handleReplace}
+              aria-label="替换"
+              title="替换"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                <path d="M12 3v12" />
+                <path d="M7 8l5-5 5 5" />
+                <path d="M5 21h14" />
+              </svg>
+              <span>替换</span>
+            </button>
+          )}
+          {urls.length > 1 && (
             <div className="pea-node-image-badge">
               <button
                 type="button"
@@ -462,8 +513,8 @@ function ResultImageView({
                 </div>
               )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* 主图：点击不再放大（避免误触全屏）；如需全屏请用功能条"全屏查看" */}
         <img

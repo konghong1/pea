@@ -25,6 +25,9 @@ export type PeaNodeData = {
   resultIndex?: number;   // 当前展示 resultUrls 中的第几张
   savedToLibrary?: boolean; // 是否已保存到素材库
   generating?: boolean;   // 是否正在生成中
+  /** 新建节点时的画幅比例（如 "9:16"、"16:9"），用于空白节点框比例。
+      有内容后节点按实际媒体比例包裹，此字段不再影响显示。 */
+  aspectRatio?: string;
   params?: Record<string, unknown>; // 生成参数（模型、分辨率、比例等，供 lightbox 信息面板展示）
   meta?: Record<string, unknown>;
 };
@@ -41,6 +44,11 @@ interface CanvasState {
   lastSavedAt: number | null;
   saveCount: number;
   clipboard: Node<PeaNodeData> | null;
+  /** 新建节点时的默认画幅比例（由编辑框比例选择器同步）。
+      图片节点默认 "9:16"，视频节点默认 "16:9"。 */
+  defaultAspectRatio: string;
+  /** 更新默认画幅比例（编辑框切换比例时调用）。 */
+  setDefaultAspectRatio: (ratio: string) => void;
   /** 生成任务 jobId -> 触发节点 id，用于把异步生成结果回写到对应节点。 */
   jobNodeMap: Record<string, string>;
   /** 登记一次生成任务与其触发节点，供 WS job.updated 事件回写结果。 */
@@ -97,6 +105,9 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   saveCount: 0,
   clipboard: null,
   jobNodeMap: {},
+  defaultAspectRatio: '9:16',   // 图片节点默认竖海报比例
+
+  setDefaultAspectRatio: (ratio) => set({ defaultAspectRatio: ratio }),
 
   setCanvasMeta: (id, version, title) =>
     set({ canvasId: id, version, ...(title !== undefined ? { title } : {}) }),
@@ -182,6 +193,9 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       dirty: false,
     }),
   openCanvas: async (id) => {
+    // 打开前先清空上一个画布的残留状态（nodes/edges/选中），
+    // 防止切换项目时旧画布内容闪现，或请求失败时旧内容被误当作新画布展示。
+    set({ nodes: [], edges: [], selectedId: null, selectedIds: [], dirty: false, jobNodeMap: {} });
     const g = await api.get(`/canvases/${id}`);
     const raw = g.data.graph_json;
     const graph =

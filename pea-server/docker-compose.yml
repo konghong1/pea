@@ -92,6 +92,10 @@ services:
       PEA_ORCHESTRATOR_URL: "http://generation-orchestrator:8000"
       PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
       PEA_FREE_TAPIES: "1000"
+      # 管理员账户: BFF 启动时把该账户密码幂等同步为下面的值 (bcrypt 入库)。
+      # 改密码只需改 PEA_ADMIN_PASSWORD 后 docker compose up -d bff 重启即可。
+      PEA_ADMIN_EMAIL: "admin@pea.ai"
+      PEA_ADMIN_PASSWORD: "${PEA_ADMIN_PASSWORD:-admin12345}"
     ports:
       - "4100:4000"   # 宿主机 4000 被 WorkBuddy 自带 node 占用, 改用 4100 映射到容器内 4000; web 走内网 bff:4000 不受影响
     depends_on:

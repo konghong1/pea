@@ -38,6 +38,13 @@ export default () => {
       // 预签名 URL 返回给浏览器时使用的可达 host（dev 下 minio:9000 容器别名浏览器不可达，需改 localhost:9000）。
       publicEndpoint: process.env.PEA_MINIO_PUBLIC_ENDPOINT ?? (process.env.PEA_MINIO_ENDPOINT ?? 'minio:9000'),
     },
+    // 管理员账户 (启动时由 AuthService 幂等同步到 users 表):
+    // - PEA_ADMIN_PASSWORD 设置后, 每次启动都会把该账户密码重置为此值 (bcrypt 加密后入库),
+    //   即"密码以环境变量为准"; 未设置则不动库里已有密码 (沿用 SQL 种子)。
+    admin: {
+      email: process.env.PEA_ADMIN_EMAIL ?? 'admin@pea.ai',
+      password: process.env.PEA_ADMIN_PASSWORD ?? '',
+    },
     orchestratorUrl: process.env.PEA_ORCHESTRATOR_URL ?? 'http://generation-orchestrator:8000',
     internalToken: internalToken ?? 'dev-insecure-token-do-not-use-in-prod',
     freeTapies: parseInt(process.env.PEA_FREE_TAPIES ?? '1000', 10),

@@ -1009,13 +1009,44 @@ function Flow() {
       pos = screenToFlowPosition({ x: anchor.x + step * 40, y: anchor.y + step * 30 });
       if (step > 10) break;
     }
-    addNode({ kind, label, prompt: opts?.prompt, meta: { error: false } } as PeaNodeData, pos);
+    // 新建节点时根据类型写入默认画幅比例（空白节点框按此比例展示）
+    const store = useCanvas.getState();
+    const ratio = kind === 'image'
+      ? store.defaultAspectRatio   // 图片：跟随编辑框比例选择器（默认 9:16）
+      : kind === 'video'
+        ? '16:9'                   // 视频：固定横屏（无比例选择器）
+        : undefined;               // 文本/音频：不设比例
+    addNode({
+      kind,
+      label,
+      prompt: opts?.prompt,
+      aspectRatio: ratio,
+      meta: {
+        error: false,
+        // 图片节点同步写入 genParams.aspectRatio，使重新选中编辑器时还原到同一比例（而非 1:1）
+        ...(kind === 'image' ? { genParams: { aspectRatio: ratio, resolution: '2k' } } : {}),
+      },
+    } as PeaNodeData, pos);
   };
 
   const addConnectedAt = (kind: PeaNodeKind, sourceId: string, screenPos: { x: number; y: number }) => {
     const pos = screenToFlowPosition({ x: screenPos.x, y: screenPos.y });
     const label = kind === 'text' ? '文本生成' : kind === 'image' ? '图片生成' : kind === 'video' ? '视频生成' : kind === 'audio' ? '音频' : '3D 世界';
-    const newId = addNode({ kind, label, meta: { error: false } } as PeaNodeData, pos);
+    const store = useCanvas.getState();
+    const ratio = kind === 'image'
+      ? store.defaultAspectRatio
+      : kind === 'video'
+        ? '16:9'
+        : undefined;
+    const newId = addNode({
+      kind,
+      label,
+      aspectRatio: ratio,
+      meta: {
+        error: false,
+        ...(kind === 'image' ? { genParams: { aspectRatio: ratio, resolution: '2k' } } : {}),
+      },
+    } as PeaNodeData, pos);
     if (newId) {
       onConnect({ source: sourceId, target: newId, sourceHandle: null, targetHandle: null });
     }
@@ -1032,7 +1063,18 @@ function Flow() {
         saveNow();
         return;
       }
-      if ((e.key === 'Delete' || e.key === 'Backspace') && !editing) {
+      // 特例: 选中节点后 NodeChatPrompt 会自动聚焦其 contentEditable 输入栏,
+      // 导致 editing 恒为 true, Delete 永远删不掉节点 (用户反复报障)。
+      // 规则: 焦点在节点输入栏内且输入栏为空 → Delete 键仍视为「删除节点」;
+      // Backspace 不放行 (留给文本编辑, 防连按退格误删节点)。
+      const inEmptyPromptEditor =
+        editing &&
+        e.key === 'Delete' &&
+        !!(el.closest && el.closest('.node-prompt-input-wrap')) &&
+        (el.textContent ?? '').trim() === '' &&
+        !el.querySelector?.('[data-pea-ref]');
+
+      if ((e.key === 'Delete' || e.key === 'Backspace') && (!editing || inEmptyPromptEditor)) {
         // 在输入框/文本域/可编辑元素内时, 退格/删除只用于编辑文本, 不删图元 (修复: 输入框退格误删节点)
         // 优先删除选中的边，再删除选中的节点
         // 注: ReactFlow v11 的连线 <g> 元素没有 data-id 属性, 直接读 DOM 取不到 id。

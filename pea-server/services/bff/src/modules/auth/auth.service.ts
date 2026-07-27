@@ -2,6 +2,8 @@ import {
   Injectable,
   ConflictException,
   UnauthorizedException,
+  Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
@@ -16,12 +18,53 @@ export interface AuthUser {
 }
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleInit {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly db: DatabaseService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
   ) {}
+
+  /**
+   * 启动时同步管理员密码 (幂等):
+   * - 未设置 PEA_ADMIN_PASSWORD → 不动库 (沿用 SQL 种子密码)。
+   * - 设置了 → 将 PEA_ADMIN_EMAIL(默认 admin@pea.ai) 的密码重置为该值, 密码以环境变量为准。
+   *   账户不存在时自动创建 (role=admin, plan_level=999)。
+   * 失败仅告警不阻断启动 (登录仍可用旧密码)。
+   */
+  async onModuleInit(): Promise<void> {
+    const email = this.config.get<string>('admin.email') ?? 'admin@pea.ai';
+    const password = this.config.get<string>('admin.password') ?? '';
+    if (!password) return; // 环境未配置, 保持现状
+    try {
+      const hash = await bcrypt.hash(password, 10);
+      const rows = await this.db.query<any[]>(
+        'SELECT id, password_hash FROM users WHERE email = ?',
+        [email],
+      );
+      if (rows.length) {
+        const same = await bcrypt.compare(password, rows[0].password_hash);
+        if (!same) {
+          await this.db.query(
+            "UPDATE users SET password_hash = ?, role = 'admin' WHERE id = ?",
+            [hash, rows[0].id],
+          );
+          this.logger.log(`[admin-sync] password for ${email} synced from env (PEA_ADMIN_PASSWORD)`);
+        }
+      } else {
+        await this.db.query(
+          `INSERT INTO users (email, password_hash, display_name, role, plan_level)
+           VALUES (?, ?, '平台管理员', 'admin', 999)`,
+          [email, hash],
+        );
+        this.logger.log(`[admin-sync] admin account ${email} created from env`);
+      }
+    } catch (e) {
+      this.logger.warn(`[admin-sync] failed (non-fatal): ${(e as Error).message}`);
+    }
+  }
 
   async register(dto: RegisterDto): Promise<{ user: AuthUser; token: string }> {
     const exists = await this.db.query<any[]>(

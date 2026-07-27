@@ -87,6 +87,21 @@ const RESOLUTIONS = [
 /** 倍率选项 */
 const COUNT_OPTIONS = [1, 2, 3, 4].map((n) => ({ label: `${n}x`, value: n }));
 
+/** 视频清晰度档位 */
+const VIDEO_RESOLUTIONS = [
+  { label: '480p', value: '480p', scale: 480 },
+  { label: '720p', value: '720p', scale: 720 },
+];
+
+/** 视频生成时长选项（秒） */
+const DURATIONS = ['4s', '5s', '6s', '7s', '8s', '9s', '10s', '11s', '12s'];
+
+/** 视频生成方式 */
+const GEN_MODES = [
+  { label: '首尾帧', value: 'first_last', desc: '首尾帧模式' },
+  { label: '全能参考', value: 'full_ref', desc: '全能参考模式' },
+];
+
 /**
  * 节点下方全宽输入栏（对齐参考截图 2~5）。
  * 选中单个节点时在节点正下方浮现与节点同宽的输入栏。
@@ -443,43 +458,69 @@ const ModelPickerPopup = forwardRef<HTMLDivElement, ModelPickerPopupProps>((prop
 });
 ModelPickerPopup.displayName = 'ModelPickerPopup';
 
-/* ──────────────── 比例/分辨率弹出层（视口感知） ──────────────── */
+/* ──────────────── 比例/分辨率/视频参数弹出层（视口感知） ──────────────── */
 
 interface AspectPickerPopupProps {
   rect: { left: number; top: number; width: number; bottom?: number };
+  genType: 'image' | 'video';
   resolution: string;
   aspectRatio: string;
   onResolution: (v: string) => void;
   onAspectRatio: (v: string) => void;
   onClose: () => void;
+  // ── 视频特有 ──
+  duration?: string;
+  audioEnabled?: boolean;
+  genMode?: string;
+  onDuration?: (v: string) => void;
+  onAudio?: (v: boolean) => void;
+  onGenMode?: (v: string) => void;
 }
 
 const AspectPickerPopup = forwardRef<HTMLDivElement, AspectPickerPopupProps>((props, ref) => {
-  const { rect, resolution, aspectRatio, onResolution, onAspectRatio } = props;
+  const {
+    rect, genType, resolution, aspectRatio,
+    onResolution, onAspectRatio, onClose,
+    duration, audioEnabled, genMode,
+    onDuration, onAudio, onGenMode,
+  } = props;
 
-  // 弹出层固定宽度 200px，预估高度 ~240px
-  const popupWidth = 200;
-  const pos = usePopupPosition({ ...rect, bottom: (rect as any).bottom ?? rect.top + 160 }, 260, popupWidth);
+  const isVideo = genType === 'video';
+  // 视频面板更宽（5 个区域），图片面板保持紧凑
+  const popupWidth = isVideo ? 240 : 200;
+  const estimatedHeight = isVideo ? 420 : 260;
+  const pos = usePopupPosition({ ...rect, bottom: (rect as any).bottom ?? rect.top + 160 }, estimatedHeight, popupWidth);
+
+  // 视频比例选项：截图中顺序为 16:9 / 4:3 / 1:1 / 3:4 / 9:16 / 21:9
+  const videoAspectRatios = ASPECT_RATIOS.filter((a) =>
+    ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'].includes(a.value),
+  );
+  const displayedRatios = isVideo ? videoAspectRatios : ASPECT_RATIOS;
 
   return (
       <div ref={ref} className="node-aspect-picker" style={{
         position: 'fixed', left: pos.left, top: pos.top, bottom: pos.bottom, width: popupWidth,
-      }} role="dialog" aria-label="画幅设置">
-      <div className="aspect-section">
-        <div className="aspect-label">画质</div>
-        <div className="aspect-res-btns">
-          {RESOLUTIONS.map((r) => (
-            <button key={r.value} type="button"
-              className={`aspect-res-btn${resolution === r.value ? ' active' : ''}`}
-              onClick={() => onResolution(r.value)}
-            >{r.label}</button>
-          ))}
+      }} role="dialog" aria-label={isVideo ? '视频参数设置' : '画幅设置'}>
+      {/* ── 视频：生成方式 ── */}
+      {isVideo && (
+        <div className="aspect-section">
+          <div className="aspect-label">生成方式</div>
+          <div className="aspect-res-btns">
+            {GEN_MODES.map((m) => (
+              <button key={m.value} type="button"
+                className={`aspect-res-btn${genMode === m.value ? ' active' : ''}`}
+                onClick={() => onGenMode?.(m.value)}
+                title={m.desc}
+              >{m.label}</button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
+      {/* ── 比例（图片/视频共用） ── */}
       <div className="aspect-section">
         <div className="aspect-label">比例</div>
-        <div className="aspect-grid">
-          {ASPECT_RATIOS.map((ar) => (
+        <div className={`aspect-grid${isVideo ? ' aspect-grid-6col' : ''}`}>
+          {displayedRatios.map((ar) => (
             <button key={ar.value} type="button"
               className={`aspect-ratio-btn${aspectRatio === ar.value ? ' active' : ''}`}
               onClick={() => onAspectRatio(ar.value)}
@@ -497,6 +538,48 @@ const AspectPickerPopup = forwardRef<HTMLDivElement, AspectPickerPopupProps>((pr
           ))}
         </div>
       </div>
+      {/* ── 清晰度（视频用 480p/720p，图片用 1K/2K/3K） ── */}
+      <div className="aspect-section">
+        <div className="aspect-label">{isVideo ? '清晰度' : '画质'}</div>
+        <div className="aspect-res-btns">
+          {(isVideo ? VIDEO_RESOLUTIONS : RESOLUTIONS).map((r) => (
+            <button key={r.value} type="button"
+              className={`aspect-res-btn${resolution === r.value ? ' active' : ''}`}
+              onClick={() => onResolution(r.value)}
+            >{r.label}</button>
+          ))}
+        </div>
+      </div>
+      {/* ── 视频：生成时长 ── */}
+      {isVideo && (
+        <div className="aspect-section">
+          <div className="aspect-label">生成时长</div>
+          <div className="aspect-duration-grid">
+            {DURATIONS.map((d) => (
+              <button key={d} type="button"
+                className={`aspect-duration-btn${duration === d ? ' active' : ''}`}
+                onClick={() => onDuration?.(d)}
+              >{d}</button>
+            ))}
+          </div>
+        </div>
+      )}
+      {/* ── 视频：生成音频 ── */}
+      {isVideo && (
+        <div className="aspect-section">
+          <div className="aspect-label">生成音频 <span className="aspect-hint" title="是否为视频生成背景音乐/音效">ⓘ</span></div>
+          <div className="aspect-res-btns">
+            <button type="button"
+              className={`aspect-res-btn${audioEnabled ? ' active' : ''}`}
+              onClick={() => onAudio?.(true)}
+            >开启</button>
+            <button type="button"
+              className={`aspect-res-btn${!audioEnabled ? ' active' : ''}`}
+              onClick={() => onAudio?.(false)}
+            >关闭</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -539,10 +622,17 @@ export default function NodeChatPrompt() {
   // 触发按钮的位置（用于弹出层定位）
   const [triggerRect, setTriggerRect] = useState<{ left: number; top: number; width: number; bottom: number } | null>(null);
 
-  // 图片节点特有：比例 / 分辨率 / 倍率浮层
+  // 图片/视频节点：比例 / 分辨率 / 倍率浮层
   const [aspectOpen, setAspectOpen] = useState(false);
-  const [aspectRatio, setAspectRatio] = useState('1:1');
+  // 默认画幅比例：跟随 store（默认 9:16），与新建节点框保持一致
+  const [aspectRatio, setAspectRatio] = useState<string>(
+    () => useCanvas.getState().defaultAspectRatio || '9:16',
+  );
   const [resolution, setResolution] = useState('1k');
+  // ── 视频特有参数 ──
+  const [duration, setDuration] = useState('5s');
+  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [genMode, setGenMode] = useState('full_ref');
   const [countOpen, setCountOpen] = useState(false);
   const aspectRef = useRef<HTMLDivElement>(null);
   const countRef = useRef<HTMLDivElement>(null);
@@ -575,8 +665,8 @@ export default function NodeChatPrompt() {
     params[multiplier] = count;
   }
 
-  // 图片节点：把比例和分辨率映射为 width/height
-  if (genType === 'image') {
+  // 图片/视频节点：把比例和分辨率映射为 width/height
+  if (genType === 'image' || genType === 'video') {
     const ar = ASPECT_RATIOS.find((a) => a.value === aspectRatio) ?? ASPECT_RATIOS[0];
     const res = RESOLUTIONS.find((r) => r.value === resolution) ?? RESOLUTIONS[1];
     // 以长边对齐分辨率档位，短边按比例缩放
@@ -736,10 +826,17 @@ export default function NodeChatPrompt() {
         setTierVals(init);
         const mult = (pick?.pricing as PricingRule | null)?.multiplier ?? null;
         setCount(mult && gp[mult] != null ? Number(gp[mult]) || 1 : 1);
-        // 图片节点：还原比例/分辨率
-        if (genType === 'image') {
-          setAspectRatio((gp.aspectRatio as string) || '1:1');
-          setResolution((gp.resolution as string) || '2k');
+        // 图片/视频节点：还原比例/分辨率
+        if (genType === 'image' || genType === 'video') {
+          const fallbackRatio = genType === 'video' ? '16:9' : (useCanvas.getState().defaultAspectRatio || '9:16');
+          setAspectRatio((gp.aspectRatio as string) || fallbackRatio);
+          setResolution((gp.resolution as string) || (genType === 'video' ? '480p' : '2k'));
+        }
+        // 视频节点：还原时长/音频/生成方式
+        if (genType === 'video') {
+          setDuration((gp.duration as string) || '5s');
+          setAudioEnabled(gp.audioEnabled === true || gp.audioEnabled === 'true');
+          setGenMode((gp.genMode as string) || 'full_ref');
         }
       })
       .catch(() => {
@@ -751,6 +848,34 @@ export default function NodeChatPrompt() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [genType, single]);
+
+  // ── 节点类型切换时同步默认参数（图片↔视频切换时 resolution/duration 等需重置）──
+  useEffect(() => {
+    if (!single) return;
+    if (genType === 'video') {
+      setResolution((prev) => {
+        const meta = (sel?.data.meta ?? {}) as Record<string, unknown>;
+        const gp = (meta.genParams ?? {}) as Record<string, unknown>;
+        return (gp.resolution as string) || '480p';
+      });
+      setDuration((prev) => {
+        const meta = (sel?.data.meta ?? {}) as Record<string, unknown>;
+        const gp = (meta.genParams ?? {}) as Record<string, unknown>;
+        return (gp.duration as string) || '5s';
+      });
+      setAudioEnabled((prev) => {
+        const meta = (sel?.data.meta ?? {}) as Record<string, unknown>;
+        const gp = (meta.genParams ?? {}) as Record<string, unknown>;
+        return gp.audioEnabled === true || gp.audioEnabled === 'true';
+      });
+      setGenMode((prev) => {
+        const meta = (sel?.data.meta ?? {}) as Record<string, unknown>;
+        const gp = (meta.genParams ?? {}) as Record<string, unknown>;
+        return (gp.genMode as string) || 'full_ref';
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [genType, single]);
 
@@ -797,12 +922,12 @@ export default function NodeChatPrompt() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { setPickerOpen(false); setAspectOpen(false); setCountOpen(false); }
     };
-    window.addEventListener('mousedown', onDoc);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', onDoc);
-      window.removeEventListener('keydown', onKey);
-    };
+  window.addEventListener('mousedown', onDoc, true);   // 捕获阶段：在 ReactFlow Pane 的 stopPropagation 之前触发
+  window.addEventListener('keydown', onKey);
+  return () => {
+    window.removeEventListener('mousedown', onDoc, true);
+    window.removeEventListener('keydown', onKey);
+  };
   }, [pickerOpen, aspectOpen, countOpen]);
 
   // 编辑器不再用 rAF + getBoundingClientRect 做视口定位：它会被 portal 进选中节点内部的
@@ -825,20 +950,57 @@ export default function NodeChatPrompt() {
   // 比例/分辨率变更时立即持久化到节点 meta（修复 #26：重新选中节点不回退默认值）
   const persistAspect = useCallback((ar: string) => {
     setAspectRatio(ar);
-    if (single && genType === 'image') {
+    // 同步到 store：新建节点时读取此值作为默认画幅比例
+    useCanvas.getState().setDefaultAspectRatio(ar);
+    // 同步到当前选中节点：① 写 data.aspectRatio 让空白节点框实时按新比例变化
+    //                      ② 写 meta.genParams 供重新选中时还原
+    if (single && (genType === 'image' || genType === 'video')) {
       const meta = { ...(sel?.data.meta ?? {}) } as Record<string, unknown>;
       const gp = { ...(meta.genParams as Record<string, unknown> ?? {}) };
       gp.aspectRatio = ar;
-      update(single, { meta: { ...meta, genParams: gp } });
+      update(single, { aspectRatio: ar, meta: { ...meta, genParams: gp } });
     }
+    // 选中后自动关闭比例浮层
+    setAspectOpen(false);
   }, [single, sel?.data.meta, genType, update]);
 
   const persistResolution = useCallback((res: string) => {
     setResolution(res);
-    if (single && genType === 'image') {
+    if (single && (genType === 'image' || genType === 'video')) {
       const meta = { ...(sel?.data.meta ?? {}) } as Record<string, unknown>;
       const gp = { ...(meta.genParams as Record<string, unknown> ?? {}) };
       gp.resolution = res;
+      update(single, { meta: { ...meta, genParams: gp } });
+    }
+  }, [single, sel?.data.meta, genType, update]);
+
+  // ── 视频特有参数持久化 ──
+  const persistDuration = useCallback((d: string) => {
+    setDuration(d);
+    if (single && genType === 'video') {
+      const meta = { ...(sel?.data.meta ?? {}) } as Record<string, unknown>;
+      const gp = { ...(meta.genParams as Record<string, unknown> ?? {}) };
+      gp.duration = d;
+      update(single, { meta: { ...meta, genParams: gp } });
+    }
+  }, [single, sel?.data.meta, genType, update]);
+
+  const persistAudio = useCallback((enabled: boolean) => {
+    setAudioEnabled(enabled);
+    if (single && genType === 'video') {
+      const meta = { ...(sel?.data.meta ?? {}) } as Record<string, unknown>;
+      const gp = { ...(meta.genParams as Record<string, unknown> ?? {}) };
+      gp.audioEnabled = enabled;
+      update(single, { meta: { ...meta, genParams: gp } });
+    }
+  }, [single, sel?.data.meta, genType, update]);
+
+  const persistGenMode = useCallback((mode: string) => {
+    setGenMode(mode);
+    if (single && genType === 'video') {
+      const meta = { ...(sel?.data.meta ?? {}) } as Record<string, unknown>;
+      const gp = { ...(meta.genParams as Record<string, unknown> ?? {}) };
+      gp.genMode = mode;
       update(single, { meta: { ...meta, genParams: gp } });
     }
   }, [single, sel?.data.meta, genType, update]);
@@ -909,20 +1071,21 @@ export default function NodeChatPrompt() {
 
   // 锚定到选中节点的 DOM 容器（.pea-node-editor-anchor 由 PeaNode 渲染），
 // 编辑框作为该节点的子元素随其平移，无需 rAF，零抖动。
-// 使用 ref 缓存 anchorElement，避免在 DOM 未完全更新时查询导致消失。
-const anchorElRef = useRef<Element | null>(null);
-useEffect(() => {
-  if (single && typeof document !== 'undefined') {
-    const el = Array.from(document.querySelectorAll<HTMLElement>('.pea-node-editor-anchor')).find(
+// 每次渲染同步尝试定位 anchor：一旦锚点挂载，effect 即 setAnchorEl 触发重渲染补全 portal；
+// 切换节点时若新锚点尚未挂载，保留上一帧的 anchorEl（不强制清空），避免编辑框闪烁/消失。
+const [anchorEl, setAnchorEl] = useState<Element | null>(null);
+const liveAnchor = single && typeof document !== 'undefined'
+  ? (Array.from(document.querySelectorAll<HTMLElement>('.pea-node-editor-anchor')).find(
       (item) => item.getAttribute('data-pea-anchor') === single,
-    ) ?? null;
-    anchorElRef.current = el;
-  } else {
-    anchorElRef.current = null;
+    ) ?? null)
+  : null;
+useEffect(() => {
+  if (liveAnchor) {
+    setAnchorEl(liveAnchor);
+  } else if (!single) {
+    setAnchorEl(null);
   }
-}, [single]);
-
-const anchorEl = anchorElRef.current;
+}, [liveAnchor, single]);
 
   // 编辑框始终锚定在节点正下方（相对节点固定），不再根据视口落点翻转到节点上方。
   // 这样「上方功能条」（恒在节点上方）与「下方编辑框」（恒在节点下方）都相对节点固定、行为一致。
@@ -1030,9 +1193,16 @@ const anchorEl = anchorElRef.current;
     // 该步骤与「能否发起生成」无关——即使套餐不可用，用户的引用关系也已正确落库，
     // 选好模型/升级套餐后即可直接重试，不会丢失已拼接的多图引用与文本输入。
     const extraMeta: Record<string, unknown> = {};
-    if (genType === 'image') { extraMeta.aspectRatio = aspectRatio; extraMeta.resolution = resolution; }
+    if (genType === 'image' || genType === 'video') { extraMeta.aspectRatio = aspectRatio; extraMeta.resolution = resolution; }
+    if (genType === 'video') { extraMeta.duration = duration; extraMeta.audioEnabled = audioEnabled; extraMeta.genMode = genMode; }
     const mergedParams = { ...params };
     if (referenceImages.length) mergedParams.reference_images = referenceImages;
+    // 视频特有参数写入提交参数
+    if (genType === 'video') {
+      if (duration) mergedParams.duration = duration;
+      mergedParams.audio_enabled = audioEnabled;
+      if (genMode) mergedParams.gen_mode = genMode;
+    }
     const metaPatch: Record<string, unknown> = { genParams: mergedParams, ...extraMeta };
     if (modelId) metaPatch.modelId = modelId;
     // 持久化「用户自己的编辑框内容」(完整 HTML，含 @ 引用 token)，独立于合并后的 prompt。
@@ -1274,14 +1444,18 @@ const anchorEl = anchorElRef.current;
             </span>
           )}
 
-          {/* 图片节点：比例·分辨率 选择器（参考截图5 "1:1 · 2K"） */}
-          {genType === 'image' && (
+          {/* 图片/视频节点：比例·分辨率 选择器（图片 "9:16 · 2K" / 视频 "全能参考 · 16:9 · 480p · 5s · 🎵"） */}
+          {(genType === 'image' || genType === 'video') && (
             <>
               <button
                 ref={aspectBtnRef}
                 type="button"
                 className="node-input-aspect-chip"
-                title={`比例 ${aspectRatio} · 分辨率 ${resolution.toUpperCase()}`}
+                title={
+                  genType === 'video'
+                    ? `${GEN_MODES.find(m => m.value === genMode)?.label ?? genMode} · ${aspectRatio} · ${resolution.toUpperCase()} · ${duration}${audioEnabled ? ' · 音频开启' : ''}`
+                    : `比例 ${aspectRatio} · 分辨率 ${resolution.toUpperCase()}`
+                }
                 aria-haspopup="dialog"
                 aria-expanded={aspectOpen}
                 onClick={() => {
@@ -1298,7 +1472,12 @@ const anchorEl = anchorElRef.current;
                 }}
               >
                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1.5" y="2.5" width="11" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><line x1="1.5" y1="5.5" x2="12.5" y2="5.5" stroke="currentColor" strokeWidth="1.3"/></svg>
-                <span>{aspectRatio} · {resolution.toUpperCase()}</span>
+                <span>
+                  {genType === 'video'
+                    ? `${GEN_MODES.find(m => m.value === genMode)?.label ?? genMode} · ${aspectRatio} · ${resolution.toUpperCase()} · ${duration}${audioEnabled ? ' · 🎵' : ''}`
+                    : `${aspectRatio} · ${resolution.toUpperCase()}`
+                  }
+                </span>
                 <svg className="node-model-chip-arrow" width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
 
@@ -1306,8 +1485,8 @@ const anchorEl = anchorElRef.current;
             </>
           )}
 
-          {/* 通用 tier 参数（仅非图片节点展示；图片节点的参数已通过比例·分辨率芯片表达） */}
-          {genType !== 'image' && dimKeys.map((d) => (
+          {/* 通用 tier 参数（仅非图片/视频节点展示；图片/视频节点的参数已通过比例·分辨率芯片表达） */}
+          {(genType !== 'image' && genType !== 'video') && dimKeys.map((d) => (
             <span key={d} className="node-input-param" title={d}>
               <span className="node-input-param-icon" aria-hidden>⚙</span>
               <span>{tierVals[d] ?? '—'}</span>
@@ -1379,16 +1558,24 @@ const anchorEl = anchorElRef.current;
         document.body
       )}
 
-      {/* ═════════ 图片比例/分辨率浮层（参考截图5/6）═════════════ */}
-      {aspectOpen && genType === 'image' && aspectTriggerRect && createPortal(
+      {/* ═════════ 图片/视频比例/参数浮层 ══════════════ */}
+      {aspectOpen && (genType === 'image' || genType === 'video') && aspectTriggerRect && createPortal(
         <AspectPickerPopup
           ref={aspectRef}
           rect={aspectTriggerRect}
+          genType={genType as 'image' | 'video'}
           resolution={resolution}
           aspectRatio={aspectRatio}
           onResolution={persistResolution}
           onAspectRatio={persistAspect}
           onClose={() => setAspectOpen(false)}
+          // ── 视频特有 ──
+          duration={duration}
+          audioEnabled={audioEnabled}
+          genMode={genMode}
+          onDuration={persistDuration}
+          onAudio={persistAudio}
+          onGenMode={persistGenMode}
         />,
         document.body
       )}

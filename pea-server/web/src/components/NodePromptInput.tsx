@@ -58,20 +58,26 @@ async function resolveNodeMediaUrl(node: FlowNode<PeaNodeData>): Promise<string 
   const d = node.data;
   const urls = d.resultUrls?.length ? d.resultUrls : d.resultUrl ? [d.resultUrl] : [];
   const firstUrl = urls[0] || d.url;
-  if (firstUrl) return firstUrl;
+  // blob: URL 仅当前会话有效，刷新后失效；如果被持久化到 DB 重新加载后就是废链接。
+  // 检测到 blob: 时跳过，继续尝试 fileKey → 签名 URL 路径。
+  if (firstUrl && !firstUrl.startsWith('blob:')) return firstUrl;
   if (d.fileKey) {
     // 优先返回可外传的真实签名 URL（参考图需发给外部模型）；失败再退化为 blob 仅作显示。
     try {
       const pu = await getPresignedUrl(d.fileKey);
       if (pu) return pu;
-    } catch {
-      /* fallthrough */
+    } catch (e) {
+      console.warn('[resolveNodeMediaUrl] getPresignedUrl failed', { nodeId: node.id, fileKey: d.fileKey, error: e });
     }
     try {
       return await getFileUrl(d.fileKey);
-    } catch {
+    } catch (e) {
+      console.warn('[resolveNodeMediaUrl] getFileUrl also failed', { nodeId: node.id, fileKey: d.fileKey, error: e });
       return undefined;
     }
+  }
+  if (!firstUrl && !d.fileKey) {
+    console.warn('[resolveNodeMediaUrl] no resolvable media source', { nodeId: node.id, keys: Object.keys(d) });
   }
   return undefined;
 }
@@ -112,19 +118,74 @@ function canReference(k: PeaNodeKind): boolean {
   return isMediaKind(k) || isTextKind(k);
 }
 
-/** 在光标处插入一个不可编辑 token。 */
-function insertRefToken(editor: HTMLElement, nodeId: string, kind: PeaNodeKind, label: React.ReactNode) {
+/** 在光标处插入一个不可编辑 token。
+ *  kind=image 时 label 应为合法图片 URL（http(s)/data:/blob:）；
+ *  若尚未解析完成，渲染为占位图标，后续由 resolvedThumbs sync effect 替换为真实图片。
+ *  禁止直接用 <img src="">，否则部分浏览器会显示裂图/alt 文本，破坏视觉。
+ */
+function replaceWithImagePlaceholder(target: HTMLElement) {
+  const fallback = document.createElement('span');
+  fallback.className = 'pea-ref-thumb pea-ref-thumb-fallback-inline';
+  fallback.textContent = '\u{1F5BC}';
+  fallback.setAttribute('data-pea-pending', '1');
+  target.replaceWith(fallback);
+}
+
+function createImageRefThumb(url: string, fileKey?: string | null): HTMLElement {
+  const img = document.createElement('img');
+  img.className = 'pea-ref-thumb';
+  img.src = url;
+  img.alt = '';
+  img.loading = 'lazy';
+  img.onerror = () => {
+    // 真实 URL（如过期 presigned / MinIO 直连失败）加载失败时，
+    // 优先尝试用 blob URL（走 BFF 代理）回显，仍失败再降级为占位图标。
+    if (fileKey) {
+      getFileUrl(fileKey)
+        .then((blobUrl) => {
+          if (blobUrl) {
+            img.src = blobUrl;
+            img.removeAttribute('data-pea-pending');
+          } else {
+            replaceWithImagePlaceholder(img);
+          }
+        })
+        .catch(() => replaceWithImagePlaceholder(img));
+    } else {
+      replaceWithImagePlaceholder(img);
+    }
+  };
+  return img;
+}
+
+function createImageRefPlaceholder(): HTMLElement {
+  const span = document.createElement('span');
+  span.className = 'pea-ref-thumb pea-ref-thumb-fallback-inline';
+  span.textContent = '\u{1F5BC}';
+  span.setAttribute('data-pea-pending', '1');
+  return span;
+}
+
+function insertRefToken(
+  editor: HTMLElement,
+  nodeId: string,
+  kind: PeaNodeKind,
+  label: React.ReactNode,
+  fileKey?: string | null,
+) {
   const span = document.createElement('span');
   span.className = 'pea-ref';
   span.contentEditable = 'false';
   span.setAttribute('data-node-id', nodeId);
   span.setAttribute('data-kind', kind);
   span.setAttribute('data-pea-ref', '1');
+  if (fileKey) span.setAttribute('data-file-key', fileKey);
   const inner = document.createElement('span');
   inner.className = 'pea-ref-inner';
   inner.contentEditable = 'false';
   if (kind === 'image') {
-    inner.innerHTML = `<img class="pea-ref-thumb" src="${label}" alt="" />`;
+    const imgUrl = typeof label === 'string' && (label.startsWith('http') || label.startsWith('data:') || label.startsWith('blob:')) ? label : '';
+    inner.appendChild(imgUrl ? createImageRefThumb(imgUrl, fileKey) : createImageRefPlaceholder());
   } else {
     inner.innerHTML = `<span class="pea-ref-text">${label}</span>`;
   }
@@ -226,7 +287,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
   }, [upstream]);
 
   // 引用 token 缩略图同步：当 resolvedThumbs 重新解析（如刷新后、上传图签名 URL 过期）时，
-  // 把编辑器中已存在的 @ token <img> 的 src 指向最新 URL，避免显示陈旧/失效图片。
+  // 把编辑器中已存在的 @ token 的缩略图指向最新 URL；若当前是占位图标则替换为真实 <img>。
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -236,8 +297,22 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
       if (!id || !isMediaKind(kind)) return;
       const url = resolvedThumbs[id];
       if (!url) return;
+
+      // 情况 1：当前是占位图标 -> 直接替换为真实图片
+      const placeholder = span.querySelector('span.pea-ref-thumb-fallback-inline');
+      if (placeholder) {
+        const fileKey = span.getAttribute('data-file-key');
+        placeholder.replaceWith(createImageRefThumb(url, fileKey));
+        return;
+      }
+
+      // 情况 2：当前已有 <img> -> 仅当 URL 真正变化时才更新 src
       const img = span.querySelector('img.pea-ref-thumb');
-      if (img && img.getAttribute('src') !== url) img.setAttribute('src', url);
+      if (!img) return;
+      if (img.getAttribute('src') !== url) {
+        img.setAttribute('src', url);
+        img.removeAttribute('data-pea-pending');
+      }
     });
   }, [resolvedThumbs]);
 
@@ -377,7 +452,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
         /* 选区异常时退化为直接插入 */
       }
     }
-    insertRefToken(editor, item.node.id, item.kind, display);
+    insertRefToken(editor, item.node.id, item.kind, display, item.node.data.fileKey);
     if (isMediaKind(item.kind)) {
       onInsertReference?.(item.node.id);
     }
@@ -625,13 +700,15 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
             >
               {isTextKind(item.kind) ? (
                 <span className="pea-ref-picker-icon">📝</span>
-              ) : (
+              ) : resolvedThumbs[item.node.id] ? (
                 <img
                   className="pea-ref-picker-thumb"
-                  src={resolvedThumbs[item.node.id] || ''}
+                  src={resolvedThumbs[item.node.id]}
                   alt=""
                   loading="lazy"
                 />
+              ) : (
+                <span className="pea-ref-picker-icon pea-ref-picker-thumb-fallback">🖼️</span>
               )}
               <span className="pea-ref-picker-label">{item.label}</span>
               <span className="pea-ref-picker-kind">{item.kind}</span>
