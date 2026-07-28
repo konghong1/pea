@@ -32,6 +32,7 @@ from fastapi import FastAPI
 from app.api import router
 from app.async_core import webhook as webhook_module
 from app.async_core import completer as completer_module
+from app.async_core import engine as engine_module
 from app.config import settings
 from app.worker import start as start_worker
 
@@ -42,6 +43,7 @@ app.include_router(webhook_module.router)  # 异步完成层: 第三方回调端
 if settings.worker_enabled:
     start_worker()
     completer_module.start()  # 异步完成层: 后台轮询回路 (视频状态维护)
+    engine_module.ensure_started()  # 异步生成引擎: 预热事件循环 + httpx 客户端
 
 
 @app.on_event("startup")

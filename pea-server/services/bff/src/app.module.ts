@@ -10,6 +10,7 @@ import { PlatformConfigsModule } from './modules/platform-configs/platform-confi
 import { UsageModule } from './modules/usage/usage.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { FilesModule } from './modules/files/files.module';
+import { AssetsModule } from './modules/assets/assets.module';
 import { CanvasesModule } from './modules/canvases/canvases.module';
 import { ProvidersModule } from './modules/providers/providers.module';
 import { PlansModule } from './modules/plans/plans.module';
@@ -30,6 +31,7 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
     UsageModule,
     ChatModule,
     FilesModule,
+    AssetsModule,
     CanvasesModule,
     ProvidersModule,
     PlansModule,

@@ -77,16 +77,18 @@ class AgnesAdapter(BaseProviderAdapter):
             status_query_template="/agnesapi?video_id={video_id}",
         )
 
-    def submit(self, req: dict) -> SubmitOutcome:
+    async def submit(self, req: dict) -> "SubmitOutcome":
         kind = req.get("type", "image")
         if kind == "image":
-            res = self._real._generate_image(req)
+            res = await self._real._generate_image_async(req)
             return SubmitOutcome(sync=True, result=res)
         if kind == "text":
-            res = self._real._generate_text(req)
+            res = await self._real._generate_text_async(req)
             return SubmitOutcome(sync=True, result=res)
-        # video: 仅提交, 不轮询 (轮询交给 Completer)
-        sub = self._real._submit_video_only(req)
+        # video: 仅提交(快操作), 不轮询; 在收尾线程池跑同步实现, 不卡事件循环
+        from app.async_core.engine import run_finalize
+
+        sub = await run_finalize(self._real._submit_video_only, req)
         if sub.get("direct_url"):
             return SubmitOutcome(sync=True, result=GenerationResult(
                 url=sub["direct_url"], provider=self.provider_name,
@@ -145,7 +147,7 @@ class MockAdapter(BaseProviderAdapter):
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(completion_mode=CompletionMode.SYNC, accepts_callback=False)
 
-    def submit(self, req: dict) -> SubmitOutcome:
+    async def submit(self, req: dict) -> "SubmitOutcome":
         res = self._mock.generate(req)
         return SubmitOutcome(sync=True, result=res)
 

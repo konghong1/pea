@@ -387,4 +387,109 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), presets_json=VALUES(presets_json), ex
 "
 echo "[assert-migrated] platform_configs seeded."
 
+# -----------------------------------------------------------------------------
+# 断言 8: 素材库表 (asset_folders / assets) —— 左侧「文件/素材库」功能依赖
+# -----------------------------------------------------------------------------
+echo "[assert-migrated] checking asset library schema..."
+AF_EXISTS=$($MYSQL_BIN -N -e \
+  "SELECT COUNT(*) FROM information_schema.TABLES \
+   WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME='asset_folders'" 2>/dev/null || echo 0)
+if [[ "$AF_EXISTS" == "0" ]]; then
+  echo "[assert-migrated] FIX: asset_folders missing -> CREATE"
+  $MYSQL_BIN -e "
+    CREATE TABLE $DB.asset_folders (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      owner_id BIGINT UNSIGNED NOT NULL,
+      name VARCHAR(120) NOT NULL DEFAULT '新建文件夹',
+      scope ENUM('personal','team') NOT NULL DEFAULT 'personal',
+      parent_id BIGINT UNSIGNED NULL,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (id),
+      KEY idx_af_owner (owner_id, scope),
+      KEY idx_af_parent (parent_id),
+      CONSTRAINT fk_af_owner FOREIGN KEY (owner_id) REFERENCES $DB.users (id),
+      CONSTRAINT fk_af_parent FOREIGN KEY (parent_id) REFERENCES $DB.asset_folders (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  "
+fi
+
+AS_EXISTS=$($MYSQL_BIN -N -e \
+  "SELECT COUNT(*) FROM information_schema.TABLES \
+   WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME='assets'" 2>/dev/null || echo 0)
+if [[ "$AS_EXISTS" == "0" ]]; then
+  echo "[assert-migrated] FIX: assets missing -> CREATE"
+  $MYSQL_BIN -e "
+    CREATE TABLE $DB.assets (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      owner_id BIGINT UNSIGNED NOT NULL,
+      folder_id BIGINT UNSIGNED NULL,
+      name VARCHAR(255) NOT NULL,
+      object_key VARCHAR(1024) NOT NULL,
+      content_type VARCHAR(120) NOT NULL DEFAULT '',
+      size BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      scope ENUM('personal','team') NOT NULL DEFAULT 'personal',
+      source ENUM('upload','generated') NOT NULL DEFAULT 'upload',
+      is_favorite TINYINT NOT NULL DEFAULT 0,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (id),
+      KEY idx_assets_owner (owner_id, scope, folder_id),
+      KEY idx_assets_folder (folder_id),
+      CONSTRAINT fk_assets_owner FOREIGN KEY (owner_id) REFERENCES $DB.users (id),
+      CONSTRAINT fk_assets_folder FOREIGN KEY (folder_id) REFERENCES $DB.asset_folders (id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  "
+fi
+
+# -----------------------------------------------------------------------------
+# 断言 9: 异步完成层 schema (迁移 002_async_handles / 003_job_error)
+# 背景: async_core 引入 generation_task_handles 表 + ai_providers 完成模式列
+#        (completion_mode/accepts_callback/webhook_secret) + generation_jobs.error 列;
+#        这些迁移此前未纳入本自愈脚本, 导致运行库漂移 —— 典型症状:
+#        - 视频 completer 每 tick 崩 (1146 Table 'generation_task_handles' doesn't exist)
+#        - 图片 finalize 失败路径崩 (1054 Unknown column 'error' in field list) -> 图出不来
+# 此处幂等自愈, 与 002/003 迁移保持一致。
+# -----------------------------------------------------------------------------
+echo "[assert-migrated] checking async completion layer schema..."
+add_col_if_missing ai_providers completion_mode "completion_mode VARCHAR(16) NOT NULL DEFAULT 'poll' AFTER api_key"
+add_col_if_missing ai_providers accepts_callback "accepts_callback TINYINT NOT NULL DEFAULT 0 AFTER completion_mode"
+add_col_if_missing ai_providers webhook_secret  "webhook_secret VARCHAR(255) NOT NULL DEFAULT '' AFTER accepts_callback"
+
+HT_EXISTS=$($MYSQL_BIN -N -e \
+  "SELECT COUNT(*) FROM information_schema.TABLES \
+   WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME='generation_task_handles'" 2>/dev/null || echo 0)
+if [[ "$HT_EXISTS" == "0" ]]; then
+  echo "[assert-migrated] FIX: generation_task_handles missing -> CREATE"
+  $MYSQL_BIN -e "
+    CREATE TABLE $DB.generation_task_handles (
+      id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+      job_id            VARCHAR(36)  NOT NULL,
+      user_id           BIGINT       NOT NULL,
+      provider          VARCHAR(64)  NOT NULL,
+      completion_mode   VARCHAR(16)  NOT NULL,
+      provider_task_id  VARCHAR(128) NULL,
+      provider_video_id VARCHAR(128) NULL,
+      status_query      VARCHAR(512) NULL,
+      phase             VARCHAR(16)  NOT NULL DEFAULT 'processing',
+      raw_status        VARCHAR(32)  NULL,
+      progress          INT          NULL,
+      poll_attempts     INT          NOT NULL DEFAULT 0,
+      last_poll_at      DATETIME(3)  NULL,
+      next_poll_at      DATETIME(3)  NOT NULL,
+      webhook_received_at DATETIME(3) NULL,
+      claimed_by        VARCHAR(64)  NULL,
+      error             VARCHAR(512) NULL,
+      created_at        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at        DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      UNIQUE KEY uq_job (job_id),
+      KEY idx_due (phase, next_poll_at),
+      KEY idx_webhook (completion_mode, webhook_received_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  "
+fi
+
+add_col_if_missing generation_jobs error "error TEXT NULL AFTER result_json"
+echo "[assert-migrated] async completion layer schema ready."
+
 echo "[assert-migrated] all assertions passed."

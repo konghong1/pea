@@ -17,10 +17,12 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
 
+import httpx
 import requests
 
 from app.config import settings
@@ -79,6 +81,42 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
                 wait = min(backoff_base * (2 ** (attempt - 1)), 20)
                 print(f"[agnes] attempt {attempt} got HTTP {resp.status_code} (transient), retry in {wait}s")
                 time.sleep(wait)
+                continue
+            return resp
+        return resp
+    raise last_err or RuntimeError("provider call failed after retries")
+
+
+async def _apost_with_retry(client, url, payload, headers, timeout,
+                            max_attempts: int = 3, backoff_base: int = 4):
+    """异步版 POST (httpx): 仅对连接级错误与瞬时 5xx 重试, 不对读取超时重试。
+
+    语义与 _post_with_retry 完全一致, 区别仅在用 ``await client.post(...)`` ——
+    等待外部响应期间让出事件循环, 不占 OS 线程 (见 async_core/engine.py)。
+    """
+    transient_5xx = frozenset({
+        429, 500, 502, 503, 504,
+        520, 521, 522, 523, 524, 525, 526, 527, 530,
+    })
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
+        except (httpx.ConnectError, httpx.TimeoutException) as e:  # 连接级 + 各类超时(含 ReadTimeout) -> 重试
+            last_err = e
+            if attempt < max_attempts:
+                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                continue
+            # 兜底: httpx 部分超时异常(如空 message 的 ReadTimeout) str() 为空,
+            # 直接 raise 会导致终态 error 字段空白 -> 用户看到"失败但无原因".
+            # 包装成含类型与端点的可读错误, 便于诊断.
+            raise RuntimeError(
+                f"provider connection/timeout failed ({type(e).__name__}): {url}"
+            ) from e
+        if resp.status_code in transient_5xx:  # 瞬时过载 / Cloudflare 源站异常 -> 重试
+            last_err = RuntimeError(f"provider HTTP {resp.status_code}")
+            if attempt < max_attempts:
+                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
                 continue
             return resp
         return resp
@@ -171,16 +209,39 @@ class OpenAICompatibleProvider:
         resp = _post_with_retry(
             url, payload, self._headers(),
             timeout=(settings.provider_http_connect_timeout_s, settings.provider_image_timeout_s),
-            max_attempts=2,
+            max_attempts=settings.provider_image_retry_attempts,
         )
         _raise_for_provider(resp, "image")
-        data = resp.json()
+        return self._build_image_result(resp.json(), self.provider_name)
 
+    async def _generate_image_async(self, req: dict) -> "GenerationResult":
+        """异步版图像生成: 用 httpx 异步客户端, 等待外部响应期间让出事件循环, 不占 OS 线程。"""
+        from app.async_core.engine import get_client
+
+        norm = normalize_image_params(req)
+        adapter = get_image_adapter(self.base_url)
+        payload: dict[str, Any] = adapter.build(norm, self)
+
+        url = _api_base(self.base_url, "/v1/images/generations")
+        logger.info("[agnes] image model=%s payload=%s", self.model_name, _short(payload))
+        client = get_client()
+        timeout = httpx.Timeout(
+            settings.provider_image_timeout_s,
+            connect=settings.provider_http_connect_timeout_s,
+        )
+        resp = await _apost_with_retry(
+            client, url, payload, self._headers(), timeout,
+            max_attempts=settings.provider_image_retry_attempts,
+        )
+        _raise_for_provider(resp, "image")
+        return self._build_image_result(resp.json(), self.provider_name)
+
+    @staticmethod
+    def _build_image_result(data: dict, provider: str) -> "GenerationResult":
+        """从响应 JSON 收齐图片 URL (支持 n>1), 归一为 GenerationResult。"""
         items = data.get("data") or []
         if not items:
             raise RuntimeError(f"image response has no data: {_short(data)}")
-
-        # 收集所有图片 URL（支持 n > 1）
         urls: list[str] = []
         for item in items:
             img_url = item.get("url")
@@ -188,17 +249,14 @@ class OpenAICompatibleProvider:
                 urls.append(img_url)
             elif item.get("b64_json"):
                 urls.append(f"data:image/png;base64,{item['b64_json']}")
-
         if not urls:
             raise RuntimeError(f"image response missing url/b64_json: {_short(items[0] if items else {})}")
-
-        # 返回所有图片 URL，url 是主图（兼容），urls 是完整数组
         return GenerationResult(
             url=urls[0],
             urls=urls,
-            provider=self.provider_name,
+            provider=provider,
             raw={"count": len(urls)},
-            usage=data.get("usage") or {}
+            usage=data.get("usage") or {},
         )
 
     # ── 视频 (异步提交 + 轮询) ───────────────────────────────────────
@@ -347,9 +405,38 @@ class OpenAICompatibleProvider:
         return GenerationResult(url="", provider=self.provider_name, raw={}, text=content,
                                  usage=data.get("usage") or {})
 
+    async def _generate_text_async(self, req: dict) -> "GenerationResult":
+        """异步版文本生成: 用 httpx 异步客户端, 不占 OS 线程。"""
+        from app.async_core.engine import get_client
 
-def _raise_for_provider(resp: requests.Response, what: str) -> None:
+        url = _api_base(self.base_url, "/v1/chat/completions")
+        payload = {
+            "model": self.model_name,
+            "messages": [{"role": "user", "content": req["prompt"]}],
+        }
+        client = get_client()
+        timeout = httpx.Timeout(
+            110,
+            connect=settings.provider_http_connect_timeout_s,
+        )
+        resp = await _apost_with_retry(
+            client, url, payload, self._headers(), timeout,
+            max_attempts=2,
+        )
+        _raise_for_provider(resp, "text")
+        data = resp.json()
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(f"text response malformed: {_short(data)}") from exc
+        return GenerationResult(url="", provider=self.provider_name, raw={}, text=content,
+                                 usage=data.get("usage") or {})
+
+
+def _raise_for_provider(resp, what: str) -> None:
     """把非 2xx 转成带截断响应体的异常, 便于定位提供商侧报错。
+
+    同时兼容 requests.Response 与 httpx.Response (reason / reason_phrase 字段名不同)。
 
     响应体只截前 160 字符 (避免 500 字符 HTML 把错误信息撑爆),
     且检测到 HTML 头 (`<!DOCTYPE` / `<html`) 时只保留状态码 + 标题, 不让 HTML
@@ -362,9 +449,10 @@ def _raise_for_provider(resp: requests.Response, what: str) -> None:
         body = resp.text[:160]
     except Exception:  # noqa: BLE001
         pass
+    reason = getattr(resp, "reason_phrase", None) or getattr(resp, "reason", "") or "upstream error"
     # HTML 错误页 (Cloudflare 5xx/网关) — 只保留状态码, 不让 <!DOCTYPE ...> 露在错误里
     if body.lstrip().startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML")):
-        raise RuntimeError(f"{what} HTTP {resp.status_code}: {resp.reason or 'upstream error'}")
+        raise RuntimeError(f"{what} HTTP {resp.status_code}: {reason}")
     raise RuntimeError(f"{what} HTTP {resp.status_code}: {body}")
 
 

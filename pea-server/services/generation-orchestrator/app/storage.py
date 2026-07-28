@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 _client: Minio | None = None
 _init_lock = threading.Lock()
 _bucket_ready = False
+_policy_ok = False  # gen/ 公开读策略是否已确认生效 (决策①稳定性护栏)
 
 # MinIO 客户端必须有超时: 历史上因缺省无超时, 在某些 MinIO 服务端组合下
 # bucket_exists/put_object/set_bucket_policy 会无限挂死, 直接拖垮生成链路
@@ -98,12 +99,30 @@ def _ensure_bucket() -> None:
         _bucket_ready = True
 
 
+def _apply_policy_now(client, bucket: str, policy: str) -> bool:
+    """单次尝试设置公开读策略, 10s 护栏. 返回是否成功."""
+    box: dict = {}
+
+    def _run() -> None:
+        try:
+            client.set_bucket_policy(bucket, policy)
+            box["ok"] = True
+        except Exception as e:  # noqa: BLE001
+            box["e"] = e
+
+    th = threading.Thread(target=_run, daemon=True)
+    th.start()
+    th.join(10)
+    return bool(box.get("ok"))
+
+
 def ensure_public_policy(max_retries: int = 8, retry_gap_s: float = 3.0) -> None:
     """后台尽力设置 `gen/` 前缀公开读策略(幂等, 持久化在桶上, 只需成功一次)。
 
-    set_bucket_policy 在 MinIO 冷启动/部分部署下偶发缓慢(无内置超时), 若放在生成热路径
-    会卡死整条链路。故放到 worker 启动时独立守护线程, 多次重试 + 每次 10s 护栏,
-    成功即返回; 全部失败仅告警(此时 gen/ 对象可能私有, 前端裂图, 但生成本身不阻塞)。
+    【关键修复 2026-07-28】原实现直接 set_bucket_policy, 但 pea-media 桶是首次 store
+    时才由 _ensure_bucket 懒创建 -> worker 启动瞬间桶还不存在 -> set_bucket_policy 全部
+    重试失败 -> 策略从未生效 -> gen/ 对象永远私有 -> 浏览器 403 裂图。现改为: 每次重试前
+    先 ensure_bucket 建桶, 成功即置 _policy_ok, 首图也能匿名访问。
     """
     import time
 
@@ -112,28 +131,43 @@ def ensure_public_policy(max_retries: int = 8, retry_gap_s: float = 3.0) -> None
     prefix = settings.media_public_prefix
     policy = _public_policy(bucket, prefix)
     for attempt in range(1, max_retries + 1):
-        box: dict = {}
-
-        def _run() -> None:
-            try:
-                client.set_bucket_policy(bucket, policy)
-                box["ok"] = True
-            except Exception as e:  # noqa: BLE001
-                box["e"] = e
-
-        th = threading.Thread(target=_run, daemon=True)
-        th.start()
-        th.join(10)
-        if box.get("ok"):
+        # 关键修复: 每次尝试前确保桶存在(首启时桶尚未懒创建)。
+        try:
+            _ensure_bucket()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("ensure bucket before policy failed: %s", e)
+        if _apply_policy_now(client, bucket, policy):
+            global _policy_ok
+            _policy_ok = True
             logger.info("bucket public policy applied (attempt %d)", attempt)
             return
-        logger.warning(
-            "set public policy attempt %d/%d failed: %s",
-            attempt, max_retries, box.get("e", "<timeout>"),
-        )
+        logger.warning("set public policy attempt %d/%d failed", attempt, max_retries)
         if attempt < max_retries:
             time.sleep(retry_gap_s)
     logger.warning("set public policy gave up after %d attempts; gen/ objects may be private", max_retries)
+
+
+def ensure_public_policy_once() -> None:
+    """热路径兜底: 若启动线程未能设上策略(如首启桶还不存在), 首次存图时再试一次。
+
+    仅在 _policy_ok 为 False 时执行(成功后置位, 之后所有 store 跳过)。命中后最多阻塞
+    10s(常态 <1s), 仅影响极个别首图, 换取"第一张图也必然可匿名访问"。
+    """
+    global _policy_ok
+    if _policy_ok:
+        return
+    client = _get_client()
+    bucket = settings.minio_bucket
+    prefix = settings.media_public_prefix
+    policy = _public_policy(bucket, prefix)
+    try:
+        _ensure_bucket()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("lazy ensure bucket failed: %s", e)
+    if _apply_policy_now(client, bucket, policy):
+        _policy_ok = True
+    else:
+        logger.warning("lazy set public policy failed; gen/ object may be private")
 
 
 def _guess_ext(url: str, content_type: str | None, media_type: str) -> str:
@@ -162,6 +196,9 @@ def store_bytes(
 ) -> str:
     """上传字节到公开前缀, 返回可直接访问的 CDN URL。失败抛出 (由上层转失败+退款)。"""
     _ensure_bucket()
+    # 兜底: 若启动线程未设上公开策略(首启桶还不存在), 首次存图时补设一次,
+    # 确保 gen/ 对象匿名可读(否则浏览器 403 裂图)。成功后 _policy_ok 置位, 后续跳过。
+    ensure_public_policy_once()
     ct = content_type or ("video/mp4" if media_type == "video" else "image/png")
     ext = mimetypes.guess_extension(ct.split(";")[0].strip(), strict=False) or (
         ".mp4" if media_type == "video" else ".png"
@@ -193,6 +230,8 @@ def store_from_url(
     if not external_url or not external_url.startswith("http"):
         raise ValueError(f"invalid external media url: {external_url!r}")
     _ensure_bucket()
+    # 兜底: 同 store_bytes, 首图前确保 gen/ 公开读策略已生效。
+    ensure_public_policy_once()
     dl_timeout = timeout or settings.provider_image_timeout_s
     resp = requests.get(
         external_url,

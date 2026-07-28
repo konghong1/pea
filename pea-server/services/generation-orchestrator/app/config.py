@@ -72,8 +72,17 @@ class Settings(BaseSettings):
     completer_batch: int = 50          # 每批并发查询数
     completer_tick_s: int = 2          # 扫描周期
     completer_stale_s: int = 180       # 句柄被"已死实例"占住的回收阈值
-    # Dispatcher 提交执行线程池 (同步出图在此进行, 不占消费线程)
+    # Dispatcher 提交执行线程池 —— 已废弃: 同步出图改为异步事件循环 (见 async_core/engine.py),
+    # 不再用固定线程池, 故该值不再被消费。保留字段仅为兼容既有 compose/env 覆盖, 勿依赖。
     dispatch_executor_workers: int = 16
+    # ── 异步生成引擎 (替代 16 线程池, 见 async_core/engine.py) ──────
+    # 单一事件循环 + 共享 httpx 客户端并发承载在途请求, 不再受 OS 线程数上限束缚。
+    async_max_connections: int = 200            # httpx 总并发连接上限 (并发在途生成数硬上限)
+    async_keepalive_connections: int = 50       # 常驻 keep-alive 连接数
+    async_finalize_workers: int = 32            # 收尾线程池大小 (转存下载 + 写库 + 发事件), 不卡事件循环
+    # 图像生成对瞬时 5xx 的重试次数: 调大=更稳但晚高峰慢(503 会翻倍等待), 调小(=1)=峰值更快但失败率略升。
+    # 默认值 2 与原行为一致 (保持"图不出"不恶化)。若想压晚高峰延迟可临时置 1。
+    provider_image_retry_attempts: int = 2
     # 决策③: 失败告警滑动窗口
     failure_alert_window_s: int = 300
     failure_alert_threshold: int = 5

@@ -283,8 +283,8 @@ function MediaNodeBody({
   const tagLabel = tagLabelOf(kind);
   const resultUrls = data.resultUrls?.length ? data.resultUrls : data.resultUrl ? [data.resultUrl] : [];
   const index = Math.max(0, Math.min(data.resultIndex ?? 0, resultUrls.length - 1));
-  const currentUrl = resultUrls[index] || data.resultUrl;
-  const hasResult = Boolean(currentUrl);
+  // 是否有 AI 生成结果（与"用户上传"互斥）
+  const hasResult = Boolean(resultUrls[index] || data.resultUrl);
   // 上传态：fileKey 是 MinIO 持久化 key，渲染时再换签名下载 URL（刷新后仍可加载）。
   const [resolvedUrl, setResolvedUrl] = useState(data.url ?? '');
   useEffect(() => {
@@ -298,9 +298,76 @@ function MediaNodeBody({
     }
     return () => { alive = false; };
   }, [data.fileKey, data.url]);
-  // image/video 节点统一不显示内部 media-label：顶部 tag-pill 已承载类型标识，内部不再重复
-  const showMediaLabel = !(kind === 'image' || kind === 'video');
+  // image/video 节点统一不显示内部 media-label：顶部 tag-pill 已承载类型标识，内部不再重复。
+  // 仅 audio 在内部保留类型标识。
+  const showMediaLabel = kind === 'audio';
+  // 「替换」按钮约定：仅用户上传的媒体才显示（与图片节点一致）；AI 生成结果不显示替换。
+  const isUserUploaded = !!(data.fileKey || data.url) && !hasResult;
+  const canReplace = isUserUploaded;
 
+  if (data.generating) {
+    return (
+      <div className="pea-node-media-card">
+        {showMediaLabel && (
+          <span className="pea-node-media-label">
+            {def.icon} {tagLabel}
+          </span>
+        )}
+        <div className="pea-node-generating" aria-label="生成中">
+          <TechLoader label="生成中…" />
+        </div>
+      </div>
+    );
+  }
+
+  if (data.error && !hasResult && !resolvedUrl) {
+    return (
+      <div className="pea-node-media-card">
+        {showMediaLabel && (
+          <span className="pea-node-media-label">
+            {def.icon} {tagLabel}
+          </span>
+        )}
+        <NodeGenFailure id={id} error={data.error} />
+      </div>
+    );
+  }
+
+  // AI 生成结果：统一走 ResultMediaView（与图片节点完全一致的星标/替换/多结果/功能条/全屏）
+  if (hasResult) {
+    return (
+      <ResultMediaView
+        id={id}
+        kind={kind}
+        data={data}
+        urls={resultUrls}
+        index={index}
+        onIndexChange={(i) => update(id, { resultIndex: i })}
+        onReplace={onRequestUpload}
+        canReplace={false}
+        showMediaLabel={showMediaLabel}
+      />
+    );
+  }
+
+  // 用户上传的媒体：同样走 ResultMediaView，替换按钮可见
+  if (data.url || data.fileKey) {
+    return (
+      <ResultMediaView
+        id={id}
+        kind={kind}
+        data={data}
+        urls={[resolvedUrl].filter(Boolean)}
+        index={0}
+        onIndexChange={() => {}}
+        onReplace={onRequestUpload}
+        canReplace={true}
+        showMediaLabel={showMediaLabel}
+      />
+    );
+  }
+
+  // 空态占位
   return (
     <div className="pea-node-media-card">
       {showMediaLabel && (
@@ -308,145 +375,68 @@ function MediaNodeBody({
           {def.icon} {tagLabel}
         </span>
       )}
-      {data.generating ? (
-        <div className="pea-node-generating" aria-label="生成中">
-          <TechLoader label="生成中…" />
-        </div>
-      ) : data.error && !hasResult ? (
-        <NodeGenFailure id={id} error={data.error} />
-      ) : hasResult ? (
-        <>
-          {kind === 'image' && (
-            <ResultImageView
-              id={id}
-              data={data}
-              urls={resultUrls}
-              index={index}
-              onIndexChange={(i) => update(id, { resultIndex: i })}
-              onReplace={onRequestUpload}
-              canReplace={false}
-            />
+      <div className="pea-node-media-placeholder">
+        <span className="pea-node-media-placeholder-icon" aria-hidden>
+          {kind === 'image' ? (
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="8.5" cy="9.5" r="1.5" />
+              <path d="M3 16l5-5 4 4 3-3 6 6" />
+            </svg>
+          ) : kind === 'video' ? (
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <path d="M9 18V5l12-2v13" />
+              <circle cx="6" cy="18" r="3" />
+              <circle cx="18" cy="16" r="3" />
+            </svg>
           )}
-          {kind === 'video' && (
-            <div className="pea-node-result-media-wrap">
-              <video src={currentUrl} controls className="pea-node-media-preview pea-node-result-preview" />
-              <button
-                type="button"
-                className="pea-node-result-replace"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRequestUpload();
-                }}
-                aria-label="替换"
-                title="替换"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-                  <path d="M12 3v12" />
-                  <path d="M7 8l5-5 5 5" />
-                  <path d="M5 21h14" />
-                </svg>
-                <span>替换</span>
-              </button>
-            </div>
-          )}
-          {kind === 'audio' && (
-            <div className="pea-node-result-media-wrap">
-              <audio src={currentUrl} controls className="pea-node-audio" />
-              <button
-                type="button"
-                className="pea-node-result-replace"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onRequestUpload();
-                }}
-                aria-label="替换"
-                title="替换"
-              >
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-                  <path d="M12 3v12" />
-                  <path d="M7 8l5-5 5 5" />
-                  <path d="M5 21h14" />
-                </svg>
-                <span>替换</span>
-              </button>
-            </div>
-          )}
-        </>
-      ) : data.url || data.fileKey ? (
-        kind === 'image' ? (
-          // 上传图也走 ResultImageView（带功能条 + 保存/全屏 + 右上角替换）
-          <ResultImageView
-            id={id}
-            data={data}
-            urls={[resolvedUrl].filter(Boolean)}
-            index={0}
-            onIndexChange={() => {}}
-            onReplace={onRequestUpload}
-            canReplace={true}
-          />
-        ) : kind === 'video' ? (
-          <video src={resolvedUrl} controls className="pea-node-media-preview" />
-        ) : (
-          <audio src={resolvedUrl} controls className="pea-node-audio" />
-        )
-      ) : (
-        <div className="pea-node-media-placeholder">
-          <span className="pea-node-media-placeholder-icon" aria-hidden>
-            {kind === 'image' ? (
-              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <circle cx="8.5" cy="9.5" r="1.5" />
-                <path d="M3 16l5-5 4 4 3-3 6 6" />
-              </svg>
-            ) : kind === 'video' ? (
-              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
-                <rect x="3" y="5" width="18" height="14" rx="2" />
-                <path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none" />
-              </svg>
-            ) : (
-              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
-                <path d="M9 18V5l12-2v13" />
-                <circle cx="6" cy="18" r="3" />
-                <circle cx="18" cy="16" r="3" />
-              </svg>
-            )}
-          </span>
-        </div>
-      )}
+        </span>
+      </div>
     </div>
   );
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
- * 生成结果图片展示：单图/多图 + 工具条 + 角标
+ * 生成结果媒体展示（image / video / audio 通用）：单/多结果 + 工具条 + 角标
+ * 统一复用图片节点的交互：左上角收藏星标、右上角替换（仅上传）、多结果角标/选择、功能条、全屏。
+ * 视频节点此前是裸 <video> + 硬编码替换按钮，且与图片节点行为不一致；现统一到此组件。
  * ═════════════════════════════════════════════════════════════════════════════ */
-function ResultImageView({
+function ResultMediaView({
   id,
+  kind,
   data,
   urls,
   index,
   onIndexChange,
   onReplace,
   canReplace,
+  showMediaLabel,
 }: {
   id: string;
+  kind: PeaNodeKind;
   data: PeaNodeData;
   urls: string[];
   index: number;
   onIndexChange: (i: number) => void;
   onReplace: () => void;
-  /** 仅用户上传图显示"替换"按钮；AI 生成图按约定不显示替换 */
+  /** 仅用户上传媒体显示"替换"按钮；AI 生成结果按约定不显示替换 */
   canReplace: boolean;
+  showMediaLabel: boolean;
 }) {
   const update = useCanvas((s) => s.updateNodeData);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-  const [imgError, setImgError] = useState(false);
+  const [mediaError, setMediaError] = useState(false);
   const currentUrl = urls[index] || urls[0];
 
   // URL 变化时重置加载错误状态
   useEffect(() => {
-    setImgError(false);
+    setMediaError(false);
   }, [currentUrl]);
 
   const handleSaveToLibrary = (e: React.MouseEvent) => {
@@ -465,10 +455,22 @@ function ResultImageView({
     onReplace();
   };
 
+  // 不同媒体类型使用不同的结果容器类名（视频沿用图片一样的"占满节点框"布局）
+  const wrapClass =
+    kind === 'image' ? 'pea-node-result-image-wrap'
+    : kind === 'video' ? 'pea-node-result-video-wrap'
+    : 'pea-node-result-audio-wrap';
+
   return (
     <>
-      <div className="pea-node-result-image-wrap">
-        {/* 左上角收藏星标（装饰/状态） */}
+      <div className={wrapClass}>
+        {showMediaLabel && (
+          <span className="pea-node-media-label">
+            {NODE_DEF_OF(kind).icon} {tagLabelOf(kind)}
+          </span>
+        )}
+
+        {/* 左上角收藏星标（保存到素材库） */}
         <button
           type="button"
           className={`pea-node-result-star ${data.savedToLibrary ? 'saved' : ''}`}
@@ -481,7 +483,7 @@ function ResultImageView({
           </svg>
         </button>
 
-        {/* 右上角：上传图显示"替换"按钮（始终可见）；多图时追加数量角标 */}
+        {/* 右上角：上传媒体显示"替换"按钮（始终可见）；多结果时追加数量角标 */}
         <div className="pea-node-result-overlay-tr">
           {canReplace && (
             <button
@@ -508,7 +510,7 @@ function ResultImageView({
                   e.stopPropagation();
                   setShowPicker((v) => !v);
                 }}
-                aria-label={`共 ${urls.length} 张图`}
+                aria-label={`共 ${urls.length} 个`}
               >
                 {urls.length}
                 <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" className="pea-badge-arrow">
@@ -528,7 +530,13 @@ function ResultImageView({
                         setShowPicker(false);
                       }}
                     >
-                      <img src={url} alt={`结果 ${i + 1}`} />
+                      {kind === 'image' ? (
+                        <img src={url} alt={`结果 ${i + 1}`} />
+                      ) : (
+                        <span className="pea-node-media-picker-thumb" aria-hidden>
+                          {kind === 'video' ? '▶' : '♪'}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -537,17 +545,26 @@ function ResultImageView({
           )}
         </div>
 
-        {/* 主图：点击不再放大（避免误触全屏）；如需全屏请用功能条"全屏查看" */}
-        {imgError || !currentUrl ? (
-          <div className="pea-node-result-image-error" role="img" aria-label="图片加载失败">
+        {/* 主媒体：图片/视频/音频统一渲染 */}
+        {mediaError || !currentUrl ? (
+          <div className="pea-node-result-image-error" role="img" aria-label="媒体加载失败">
             <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.2">
               <rect x="3" y="4" width="18" height="16" rx="2" />
               <circle cx="8.5" cy="9.5" r="1.5" />
               <path d="M3 16l5-5 4 4 3-3 6 6" />
               <path d="M22 2L2 22" />
             </svg>
-            <span>图片加载失败</span>
+            <span>媒体加载失败</span>
           </div>
+        ) : kind === 'video' ? (
+          <video
+            src={currentUrl}
+            controls
+            className="pea-node-media-preview pea-node-result-preview"
+            onError={() => setMediaError(true)}
+          />
+        ) : kind === 'audio' ? (
+          <audio src={currentUrl} controls className="pea-node-media-preview" />
         ) : (
           <img
             src={currentUrl}
@@ -555,7 +572,7 @@ function ResultImageView({
             className="pea-node-media-preview pea-node-result-preview"
             loading="lazy"
             draggable={false}
-            onError={() => setImgError(true)}
+            onError={() => setMediaError(true)}
           />
         )}
       </div>
@@ -570,7 +587,8 @@ function ResultImageView({
 
       {/* 全屏查看 */}
       {lightboxOpen && typeof document !== 'undefined' && (
-        <ImageLightbox
+        <MediaLightbox
+          kind={kind}
           urls={urls}
           index={index}
           data={data}
@@ -706,14 +724,17 @@ function downloadCurrent(url: string) {
   a.href = url;
   a.target = '_blank';
   a.rel = 'noreferrer';
-  a.download = 'pea-generate.png';
+  const clean = url.split('?')[0];
+  const ext = clean.includes('.') ? clean.split('.').pop()! : 'png';
+  a.download = `pea-generate.${ext}`;
   a.click();
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
  * 全屏查看 Lightbox（截图10）：左侧大图 + 底部缩略图 + 右侧信息面板
  * ═════════════════════════════════════════════════════════════════════════════ */
-function ImageLightbox({
+function MediaLightbox({
+  kind,
   urls,
   index,
   data,
@@ -721,6 +742,7 @@ function ImageLightbox({
   onIndexChange,
   onSave,
 }: {
+  kind: PeaNodeKind;
   urls: string[];
   index: number;
   data: PeaNodeData;
@@ -755,13 +777,23 @@ function ImageLightbox({
     return () => { cancelled = true; };
   }, [currentUrl]);
 
+  // 主媒体与缩略图按类型渲染（图片用 <img>，视频/音频用对应控件）
+  const renderMain = (url: string) =>
+    kind === 'video' ? (
+      <video className="pea-node-lightbox-img" src={url} controls />
+    ) : kind === 'audio' ? (
+      <audio className="pea-node-lightbox-audio" src={url} controls />
+    ) : (
+      <img className="pea-node-lightbox-img" src={url} alt="生成结果" />
+    );
+
   return createPortal(
     <div className="pea-node-lightbox" onClick={onClose}>
       <button type="button" className="pea-node-lightbox-close" onClick={onClose} aria-label="关闭">
         ×
       </button>
 
-      {/* 左侧：大图 + 切换箭头 + 底部缩略图 */}
+      {/* 左侧：大媒体 + 切换箭头 + 底部缩略图 */}
       <div className="pea-node-lightbox-left" onClick={(e) => e.stopPropagation()}>
         {urls.length > 1 && (
           <button
@@ -774,7 +806,7 @@ function ImageLightbox({
             ‹
           </button>
         )}
-        <img className="pea-node-lightbox-img" src={currentUrl} alt="生成结果" />
+        {renderMain(currentUrl)}
         {urls.length > 1 && (
           <button
             type="button"
@@ -800,7 +832,13 @@ function ImageLightbox({
                 className={i === current ? 'active' : ''}
                 onClick={() => setCurrent(i)}
               >
-                <img src={url} alt={`缩略图 ${i + 1}`} />
+                {kind === 'image' ? (
+                  <img src={url} alt={`缩略图 ${i + 1}`} />
+                ) : (
+                  <span className="pea-node-media-picker-thumb" aria-hidden>
+                    {kind === 'video' ? '▶' : '♪'}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -822,7 +860,7 @@ function ImageLightbox({
 
         <div className="pea-node-lightbox-actions">
           <button type="button" className="pea-node-lightbox-action primary" onClick={onSave}>
-            设为主图
+            保存到素材库
           </button>
           <button type="button" className="pea-node-lightbox-action" onClick={() => { onIndexChange(current); onClose(); }}>
             Apply to canvas

@@ -24,6 +24,11 @@ import {
   EditOutlined,
   PlusOutlined,
   DeleteOutlined,
+  SearchOutlined,
+  FolderOutlined,
+  AppstoreOutlined,
+  CommentOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import { toast } from '../store/toast';
 import { api } from '../api/client';
@@ -46,6 +51,7 @@ if (typeof window !== 'undefined' && (import.meta.env.DEV || localStorage.getIte
 }
 import PeaEdge from './PeaEdge';
 import SidePanel from './SidePanel';
+import MaterialPanel from './MaterialPanel';
 import NodeChatPrompt from './NodeChatPrompt';
 import TextNodeToolbar from './TextNodeToolbar';
 import {
@@ -641,7 +647,13 @@ function EdgeNodeMenu({
   );
 }
 
-/** 画布左侧工具栏（对齐 pea-canvas-v12 .toolbar-left） */
+/** 画布左侧工具栏（对齐 pea-canvas-v12 .toolbar-left）
+ * 设计要点（taste-skill / anti-slop）：
+ * - 用 antd 图标替代 emoji，保证整应用图标家族一致；
+ * - 每个按钮有清晰的 hover/active 反馈，active 状态与对应面板开关联动；
+ * - 去掉无意义的装饰性小红点，减少视觉噪音；
+ * - 头像使用品牌色渐变，与整体 token 系统统一。
+ */
 function LeftToolbar({
   onAdd,
   onSearch,
@@ -650,6 +662,9 @@ function LeftToolbar({
   onHistory,
   onLibrary,
   onAvatar,
+  libraryOpen,
+  searchOpen,
+  filesOpen,
 }: {
   onAdd: () => void;
   onSearch: () => void;
@@ -658,56 +673,85 @@ function LeftToolbar({
   onHistory: () => void;
   onLibrary: () => void;
   onAvatar: () => void;
+  libraryOpen: boolean;
+  searchOpen: boolean;
+  filesOpen: boolean;
 }) {
   return (
     <aside className="pea-toolbar" aria-label="画布工具栏">
-      <TooltipLite title="添加节点（双击画布也可打开）" onClick={onAdd}>
-        <span aria-hidden>➕</span>
-        <span className="pea-tlb-dot" />
-      </TooltipLite>
-      <TooltipLite title="搜索" onClick={onSearch}>
-        <span aria-hidden>🔍</span>
-      </TooltipLite>
-      <TooltipLite title="文件" onClick={onFiles}>
-        <span aria-hidden>📁</span>
-        <span className="pea-tlb-dot" />
-      </TooltipLite>
-      <TooltipLite title="节点库" onClick={onLibrary}>
-        <span aria-hidden>⊞</span>
-      </TooltipLite>
-      <TooltipLite title="评论" onClick={onComments}>
-        <span aria-hidden>💬</span>
-      </TooltipLite>
-      <TooltipLite title="历史记录" onClick={onHistory}>
-        <span aria-hidden>🕐</span>
-      </TooltipLite>
-      <div className="pea-toolbar-bottom">
+      <Tooltip title="添加节点（双击画布也可打开）" placement="right">
         <button
-          className="pea-tlb-avatar"
-          title="账户"
-          aria-label="打开账户菜单"
-          onClick={onAvatar}
+          type="button"
+          className={`pea-tlb-btn${libraryOpen ? ' active' : ''}`}
+          aria-label="添加节点"
+          onClick={onAdd}
         >
-          W
+          <PlusOutlined aria-hidden />
         </button>
+      </Tooltip>
+      <Tooltip title="搜索" placement="right">
+        <button
+          type="button"
+          className={`pea-tlb-btn${searchOpen ? ' active' : ''}`}
+          aria-label="搜索"
+          onClick={onSearch}
+        >
+          <SearchOutlined aria-hidden />
+        </button>
+      </Tooltip>
+      <Tooltip title="文件" placement="right">
+        <button
+          type="button"
+          className={`pea-tlb-btn${filesOpen ? ' active' : ''}`}
+          aria-label="文件"
+          onClick={onFiles}
+        >
+          <FolderOutlined aria-hidden />
+        </button>
+      </Tooltip>
+      <Tooltip title="节点库" placement="right">
+        <button
+          type="button"
+          className={`pea-tlb-btn${libraryOpen ? ' active' : ''}`}
+          aria-label="节点库"
+          onClick={onLibrary}
+        >
+          <AppstoreOutlined aria-hidden />
+        </button>
+      </Tooltip>
+      <Tooltip title="评论" placement="right">
+        <button
+          type="button"
+          className="pea-tlb-btn"
+          aria-label="评论"
+          onClick={onComments}
+        >
+          <CommentOutlined aria-hidden />
+        </button>
+      </Tooltip>
+      <Tooltip title="历史记录" placement="right">
+        <button
+          type="button"
+          className="pea-tlb-btn"
+          aria-label="历史记录"
+          onClick={onHistory}
+        >
+          <HistoryOutlined aria-hidden />
+        </button>
+      </Tooltip>
+      <div className="pea-toolbar-bottom">
+        <Tooltip title="账户" placement="right">
+          <button
+            type="button"
+            className="pea-tlb-avatar"
+            aria-label="打开账户菜单"
+            onClick={onAvatar}
+          >
+            W
+          </button>
+        </Tooltip>
       </div>
     </aside>
-  );
-}
-
-function TooltipLite({
-  title,
-  onClick,
-  children,
-}: {
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button className="pea-tlb-btn" title={title} aria-label={title} onClick={onClick}>
-      {children}
-    </button>
   );
 }
 
@@ -926,6 +970,7 @@ function Flow() {
   const { message } = App.useApp();
   const saveTimer = useRef<number>();
   const [sideOpen, setSideOpen] = useState(false);
+  const [materialOpen, setMaterialOpen] = useState(false);
   const [libAt, setLibAt] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number; sourceId: string } | null>(null);
@@ -1180,6 +1225,24 @@ function Flow() {
     (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
   };
 
+  // 修复：Ctrl/⌘ + 滚轮会触发浏览器整页缩放，而非画布缩放。
+  // 浏览器会在事件冒泡到画布逻辑前，于页面层级捕获 Ctrl+wheel 并放大整页。
+  // 这里挂一个非 passive 的 wheel 监听：当按住 Ctrl/⌘ 时 preventDefault()，
+  // 阻止浏览器默认缩放；但【不】 stopPropagation，所以 ReactFlow 内部的 wheel
+  // 监听仍能收到该事件、继续完成画布缩放。两者互不干扰。
+  // 普通滚轮（无 Ctrl）不拦截，保留 panOnScroll 的画布平移手势。
+  useEffect(() => {
+    const el = flowRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
   return (
     <div
       className="pea-canvas-host"
@@ -1204,8 +1267,8 @@ function Flow() {
 
       <LeftToolbar
         onAdd={() => setLibAt({ x: (window.innerWidth - 300) / 2, y: window.innerHeight / 2 - 220 })}
-        onSearch={() => setSideOpen(true)}
-        onFiles={() => setSideOpen(true)}
+        onSearch={() => setSideOpen((s) => !s)}
+        onFiles={() => setMaterialOpen((s) => !s)}
         onComments={() => toast.info('评论功能即将开放')}
         onHistory={() => toast.info('历史记录功能即将开放')}
         onLibrary={() => setLibAt({ x: (window.innerWidth - 300) / 2, y: window.innerHeight / 2 - 220 })}
@@ -1213,6 +1276,9 @@ function Flow() {
           const av = document.querySelector<HTMLElement>('.pea-user-trigger');
           av?.click();
         }}
+        libraryOpen={!!libAt}
+        searchOpen={sideOpen}
+        filesOpen={materialOpen}
       />
 
       {canvasId == null && (
@@ -1224,6 +1290,7 @@ function Flow() {
       )}
 
       {sideOpen && <SidePanel onClose={() => setSideOpen(false)} />}
+      {materialOpen && <MaterialPanel onClose={() => setMaterialOpen(false)} />}
       {libAt && (
         <NodeLibrary
           at={libAt}

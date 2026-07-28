@@ -622,6 +622,10 @@ export default function NodeChatPrompt() {
   const [countOpen, setCountOpen] = useState(false);
   const aspectRef = useRef<HTMLDivElement>(null);
   const countRef = useRef<HTMLDivElement>(null);
+  // 弹窗单独持有 ref：不能和触发按钮共用 countRef，否则下拉挂载后 countRef.current
+  // 会被覆盖成弹窗自身，useAnchoredRect 每帧读到的变成"下拉自己"的坐标 → 定位反馈
+  // 循环、弹窗一路飞出屏幕（已修复：复用 countRef 导致的飞出 bug）。
+  const countDropdownRef = useRef<HTMLDivElement>(null);
   const aspectBtnRef = useRef<HTMLButtonElement>(null);
   const aspectTriggerRect = useAnchoredRect(aspectOpen, aspectBtnRef);
   // 出图数触发按钮位置（Portal 定位用）
@@ -909,7 +913,7 @@ export default function NodeChatPrompt() {
       // 浮层本身通过 Portal + useAnchoredRect 实时跟随触发按钮，关闭不影响其定位。
       if (pickerRef.current?.contains(t) || chipRef.current?.contains(t)) return;
       if (aspectRef.current?.contains(t) || aspectBtnRef.current?.contains(t)) return;
-      if (countRef.current?.contains(t)) return;
+      if (countRef.current?.contains(t) || countDropdownRef.current?.contains(t)) return;
       setPickerOpen(false);
       setAspectOpen(false);
       setCountOpen(false);
@@ -1571,7 +1575,7 @@ useEffect(() => {
       {/* ═════════ 出图数量下拉（Portal 渲染到 body，避免被父容器裁剪）═════════════ */}
       {countOpen && countTriggerRect && createPortal(
         <div
-          ref={countRef}
+          ref={countDropdownRef}
           className="node-count-btn-dropdown"
           style={{
             position: 'fixed',

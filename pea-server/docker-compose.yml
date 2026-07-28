@@ -88,7 +88,7 @@ services:
       PEA_MINIO_USE_SSL: "false"
       PEA_MINIO_BUCKET: pea-media
       PEA_MINIO_PUBLIC_ENDPOINT: "localhost:9000"
-      PEA_CDN_BASE_URL: "http://localhost:9000/pea-media"
+      PEA_CDN_BASE_URL: "/media"
       PEA_ORCHESTRATOR_URL: "http://generation-orchestrator:8000"
       PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
       PEA_FREE_TAPIES: "1000"
@@ -123,7 +123,7 @@ services:
       PEA_MINIO_ACCESS_KEY: minioadmin
       PEA_MINIO_SECRET_KEY: minioadmin
       PEA_MINIO_BUCKET: pea-media
-      PEA_CDN_BASE_URL: "http://localhost:9000/pea-media"
+      PEA_CDN_BASE_URL: "/media"
       PEA_BFF_INTERNAL_BASE_URL: "http://bff:4000"
       PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
       PEA_WORKER_ENABLED: "true"

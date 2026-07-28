@@ -148,6 +148,44 @@ SET @sql := IF(@fk_exists = 0,
   'SELECT 1');
 PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
 
+-- ---------------------------------------------------------------------------
+-- E4 素材库 (个人/团队双范围：图片、视频、音频、模型等生成资源与上传素材)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS asset_folders (
+    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    owner_id    BIGINT UNSIGNED NOT NULL,
+    name        VARCHAR(120) NOT NULL DEFAULT '新建文件夹',
+    scope       ENUM('personal','team') NOT NULL DEFAULT 'personal',
+    parent_id   BIGINT UNSIGNED NULL,
+    created_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_af_owner (owner_id, scope),
+    KEY idx_af_parent (parent_id),
+    CONSTRAINT fk_af_owner FOREIGN KEY (owner_id) REFERENCES users (id),
+    CONSTRAINT fk_af_parent FOREIGN KEY (parent_id) REFERENCES asset_folders (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE IF NOT EXISTS assets (
+    id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    owner_id     BIGINT UNSIGNED NOT NULL,
+    folder_id    BIGINT UNSIGNED NULL,
+    name         VARCHAR(255) NOT NULL,
+    object_key   VARCHAR(1024) NOT NULL,
+    content_type VARCHAR(120) NOT NULL DEFAULT '',
+    size         BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    scope        ENUM('personal','team') NOT NULL DEFAULT 'personal',
+    source       ENUM('upload','generated') NOT NULL DEFAULT 'upload',
+    is_favorite  TINYINT NOT NULL DEFAULT 0,
+    created_at   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_assets_owner (owner_id, scope, folder_id),
+    KEY idx_assets_folder (folder_id),
+    CONSTRAINT fk_assets_owner FOREIGN KEY (owner_id) REFERENCES users (id),
+    CONSTRAINT fk_assets_folder FOREIGN KEY (folder_id) REFERENCES asset_folders (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS canvas_versions (
     id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     canvas_id   BIGINT UNSIGNED NOT NULL,

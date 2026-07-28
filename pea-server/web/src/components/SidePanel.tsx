@@ -1,28 +1,22 @@
-import { useRef, useState } from 'react';
-import { App, Button, Input, Tabs, Tag, Tooltip } from 'antd';
+import { useState } from 'react';
+import { Button, Input, Tabs, Tag, Tooltip } from 'antd';
 import {
   CloseOutlined,
-  FileTextOutlined,
   HistoryOutlined,
   MessageOutlined,
   SearchOutlined,
-  UploadOutlined,
 } from '@ant-design/icons';
-import { api } from '../api/client';
 import { useCanvas } from '../store/canvas';
 
 /**
- * 侧边面板 (T-M1-Next-01, FR-M1-60~63)：搜索 / 评论 / 历史 / 文件。
- * 左停靠、可收起。文件走预签名直传真实链路。
+ * 侧边面板 (T-M1-Next-01, FR-M1-60~63)：搜索 / 评论 / 历史。
+ * 左停靠、可收起。文件功能已迁移到独立 MaterialPanel。
  */
 export default function SidePanel({ onClose }: { onClose: () => void }) {
   const { nodes, select, saveCount } = useCanvas();
-  const { message } = App.useApp();
   const [query, setQuery] = useState('');
   const [comments, setComments] = useState<{ who: string; text: string; ts: number }[]>([]);
   const [commentInput, setCommentInput] = useState('');
-  const [files, setFiles] = useState<{ key: string; status: string }[]>([]);
-  const fileInput = useRef<HTMLInputElement>(null);
 
   const filtered = query
     ? nodes.filter((n) => n.data.label.toLowerCase().includes(query.toLowerCase()))
@@ -33,19 +27,6 @@ export default function SidePanel({ onClose }: { onClose: () => void }) {
     if (!t) return;
     setComments((c) => [...c, { who: '我', text: t, ts: Date.now() }]);
     setCommentInput('');
-  };
-
-  const upload = async (file: File) => {
-    const key = `uploads/${Date.now()}-${file.name}`;
-    try {
-      const { data } = await api.post('/files/presign', { key, expiresSec: 600 });
-      await fetch(data.uploadUrl, { method: 'PUT', body: file });
-      setFiles((f) => [...f, { key, status: '已上传' }]);
-      message.success('文件已上传');
-    } catch (e: any) {
-      setFiles((f) => [...f, { key, status: '失败' }]);
-      message.warning('上传未完成（存储地址浏览器可能不可达）');
-    }
   };
 
   const tabItems = [
@@ -120,38 +101,6 @@ export default function SidePanel({ onClose }: { onClose: () => void }) {
           <div className="rounded-md bg-black/5 p-2 dark:bg-white/5">自动保存次数：{saveCount}</div>
           <div className="rounded-md bg-black/5 p-2 dark:bg-white/5">版本号：{useCanvas.getState().version}</div>
           <div className="text-xs text-gray-400">编辑后每 1s 自动保存（PRD 痛点：刷新不丢）</div>
-        </div>
-      ),
-    },
-    {
-      key: 'files',
-      label: (
-        <span>
-          <FileTextOutlined /> 文件
-        </span>
-      ),
-      children: (
-        <div className="space-y-2">
-          <input
-            ref={fileInput}
-            type="file"
-            hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) upload(f);
-            }}
-          />
-          <Button icon={<UploadOutlined />} block onClick={() => fileInput.current?.click()}>
-            上传文件
-          </Button>
-          <div className="space-y-1">
-            {files.map((f, i) => (
-              <div key={i} className="truncate rounded-md bg-black/5 p-2 text-xs dark:bg-white/5">
-                {f.key} <Tag color={f.status === '已上传' ? 'green' : 'red'}>{f.status}</Tag>
-              </div>
-            ))}
-            {files.length === 0 && <div className="text-xs text-gray-400">暂无文件</div>}
-          </div>
         </div>
       ),
     },

@@ -466,14 +466,47 @@ body {
   width: 100%;
 }
 
-/* 视频节点有内容：与空白态保持一致的 280px 最小高度，避免横屏视频（16:9/21:9）被压成一条线。
-   视频用 object-fit:contain 完整显示（不裁切），max-height 放宽到 252px 以填充盒子。 */
+/* 视频节点有内容：与图片节点保持一致——去内边距、按视频原始比例完整包裹（不裁切、占满节点框宽度）。
+   旧实现强制 280px 最小高度 + 14px 内边距 + 252px 小窗，是"生成的视频没占满节点框"的根因：
+   视频被缩在更小的盒子内、四周留白。现改为与图片结果一致，节点尺寸由视频原始比例决定。 */
 .pea-node-video.pea-node-has-media .pea-node-body-card {
-  min-height: 280px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  min-height: 140px;
+  aspect-ratio: auto;
+  border-radius: 16px;
+  /* 见图片节点说明：功能条浮在卡片顶外，overflow 必须 visible */
+  overflow: visible !important;
 }
-.pea-node-video.pea-node-has-media .pea-node-media-preview {
-  max-height: 252px;
+.pea-node-video.pea-node-has-media .pea-node-media-card {
+  position: relative;
+  padding-top: 0;
+  gap: 0;
+}
+/* 视频/音频结果容器：相对定位，承载右上角替换按钮 + 占满宽度 */
+.pea-node-result-video-wrap,
+.pea-node-result-audio-wrap {
+  position: relative;
   width: 100%;
+}
+/* 视频结果：占满节点框宽度、按原始比例包裹（与图片结果视觉一致），不再被 max-height 压成小窗 */
+.pea-node-video.pea-node-has-media .pea-node-result-video-wrap .pea-node-media-preview {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  height: auto;
+  min-height: 140px;
+  object-fit: cover;
+  border-radius: 16px;
+  cursor: default;
+  transition: filter 0.2s ease, opacity 0.25s ease;
+  background: #000;
+  aspect-ratio: auto;
+}
+.pea-node-video.pea-node-has-media .pea-node-result-video-wrap:hover .pea-node-media-preview {
+  filter: brightness(1.04);
 }
 
 .pea-node-media-card {
@@ -1236,64 +1269,414 @@ body {
   position: absolute;
   left: 14px;
   top: 72px;
-  width: 46px;
+  width: 48px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   padding: 10px 0;
-  border-radius: 14px;
+  border-radius: 16px;
   background: var(--pea-bg-panel);
   border: 1px solid var(--pea-border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
   z-index: 20;
+  /* 轻微毛玻璃：让浮在复杂画布上的工具栏更轻盈 */
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .pea-toolbar-bottom {
   margin-top: 8px;
 }
 .pea-tlb-btn {
   position: relative;
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
-  font-size: 17px;
+  border-radius: 10px;
+  font-size: 18px;
   color: var(--pea-text-secondary);
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.pea-tlb-btn svg {
+  width: 1em;
+  height: 1em;
+  display: block;
 }
 .pea-tlb-btn:hover {
   background: var(--pea-bg-elevated);
   color: var(--pea-text-primary);
+  transform: translateY(-1px);
+}
+.pea-tlb-btn:active {
+  transform: scale(0.94);
 }
 .pea-tlb-btn.active {
   background: rgba(31, 162, 220, 0.14);
   color: var(--pea-brand);
 }
-.pea-tlb-dot {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--pea-brand);
-}
 .pea-tlb-avatar {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #667eea, #764ba2);
+  background: linear-gradient(135deg, var(--pea-brand), #0ea5e9);
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   cursor: pointer;
+  border: 2px solid var(--pea-bg-panel);
+  box-shadow: 0 2px 8px rgba(31, 162, 220, 0.25);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+}
+.pea-tlb-avatar:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 14px rgba(31, 162, 220, 0.35);
+}
+.pea-tlb-avatar:active {
+  transform: scale(0.96);
+}
+
+/* ===== 素材库面板 (MaterialPanel) =====
+ * 设计原则（taste-skill / anti-slop，落在系统 token 上）：
+ * - 整面板用系统变量，自动适配 light/dark；
+ * - 无 emoji，全部 antd 图标；
+ * - 无意义装饰点/徽章清零；
+ * - 圆角一致（面板 16px，按钮 10px，搜索 12px）；
+ * - 悬停/激活反馈清晰，active 状态与 scope/view 联动。
+ */
+.pea-material-panel {
+  position: absolute;
+  left: 60px;
+  top: 64px;
+  height: calc(100% - 64px);
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--pea-bg-panel) 92%, transparent);
+  border-right: 1px solid var(--pea-border);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  z-index: 25;
+  color: var(--pea-text-primary);
+  user-select: none;
+}
+
+.pea-material-header {
+  flex-shrink: 0;
+  height: 56px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--pea-border);
+}
+
+.pea-material-header-left,
+.pea-material-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pea-material-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.pea-material-iconbtn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-secondary);
+  font-size: 15px;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pea-material-iconbtn:hover {
+  background: var(--pea-bg-elevated);
+  color: var(--pea-text-primary);
+}
+
+.pea-material-iconbtn:active {
+  transform: scale(0.94);
+}
+
+.pea-material-pillbtn {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--pea-border);
+  background: var(--pea-bg-elevated);
+  color: var(--pea-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.pea-material-pillbtn:hover {
+  background: var(--pea-bg-deep);
+  border-color: color-mix(in srgb, var(--pea-brand) 50%, transparent);
+}
+
+.pea-material-pillbtn:active {
+  transform: scale(0.96);
+}
+
+.pea-material-scope {
+  flex-shrink: 0;
+  margin: 12px 12px 0;
+  padding: 3px;
+  display: flex;
+  gap: 3px;
+  border-radius: 12px;
+  background: var(--pea-bg-elevated);
+  border: 1px solid var(--pea-border);
+}
+
+.pea-material-scope button {
+  flex: 1;
+  height: 30px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.pea-material-scope button.active {
+  background: color-mix(in srgb, var(--pea-text-primary) 10%, transparent);
+  color: var(--pea-text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.pea-material-search {
+  flex-shrink: 0;
+  margin: 10px 12px 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--pea-bg-elevated);
+  border: 1px solid var(--pea-border);
+  color: var(--pea-text-muted);
+  transition: border-color 0.18s ease;
+}
+
+.pea-material-search:focus-within {
+  border-color: color-mix(in srgb, var(--pea-brand) 60%, transparent);
+}
+
+.pea-material-search input {
+  flex: 1;
+  padding: 0;
+  font-size: 13px;
+  color: var(--pea-text-primary);
+  background: transparent;
+}
+
+.pea-material-search input::placeholder {
+  color: var(--pea-text-muted);
+}
+
+.pea-material-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 8px 16px;
+}
+
+.pea-material-section {
+  margin: 16px 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pea-text-muted);
+  letter-spacing: 0.4px;
+}
+
+.pea-material-row {
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.pea-material-row:hover {
+  background: var(--pea-bg-elevated);
+}
+
+.pea-material-row.active {
+  background: rgba(31, 162, 220, 0.12);
+  color: var(--pea-brand);
+}
+
+.pea-material-row-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  color: var(--pea-text-secondary);
+  flex-shrink: 0;
+}
+
+.pea-material-row.active .pea-material-row-icon {
+  color: var(--pea-brand);
+}
+
+.pea-material-row-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pea-material-row-arrow {
+  font-size: 12px;
+  color: var(--pea-text-muted);
+  flex-shrink: 0;
+}
+
+.pea-material-row-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pea-material-row-wrap .pea-material-row {
+  flex: 1;
+}
+
+.pea-material-more,
+.pea-material-asset-actions button {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pea-material-more:hover,
+.pea-material-asset-actions button:hover {
+  background: var(--pea-bg-elevated);
+  color: var(--pea-text-primary);
+}
+
+.pea-material-more:active,
+.pea-material-asset-actions button:active {
+  transform: scale(0.94);
+}
+
+.pea-material-empty {
+  margin: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--pea-text-muted);
+}
+
+.pea-material-asset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 0 2px;
+  border-radius: 10px;
+  cursor: default;
+  transition: background 0.15s ease;
+}
+
+.pea-material-asset:hover {
+  background: var(--pea-bg-elevated);
+}
+
+.pea-material-asset-thumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 9px;
+  overflow: hidden;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pea-bg-elevated);
+  border: 1px solid var(--pea-border);
+  color: var(--pea-text-muted);
+  font-size: 18px;
+}
+
+.pea-material-asset-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pea-material-asset-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.pea-material-asset-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--pea-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pea-material-asset-sub {
+  font-size: 11px;
+  color: var(--pea-text-muted);
+  margin-top: 2px;
+}
+
+.pea-material-asset-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pea-material-asset-actions button.favorite {
+  color: var(--pea-warn);
 }
 
 /* ===== 画布底部 Composer (add-pal) ===== */
@@ -4295,18 +4678,22 @@ body {
   display: block;
 }
 
-/* 视频/音频/纯上传图片的结果容器（带相对定位，让替换按钮浮在右上角） */
-.pea-node-result-media-wrap {
-  position: relative;
+/* 全屏 Lightbox 中的音频控件 */
+.pea-node-lightbox-audio {
   width: 100%;
+  max-width: 900px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.4);
 }
-.pea-node-result-media-wrap .pea-node-result-replace {
-  /* 媒体容器里的替换按钮常驻显示（因为 video/audio 没有 image-wrap 的 hover 继承） */
-  opacity: 1;
-  transform: translateY(0);
-  position: absolute;
-  top: 8px;
-  right: 8px;
+/* 非图片（视频/音频）结果的选择器/缩略图占位图标 */
+.pea-node-media-picker-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 20px;
+  color: rgba(255, 255, 255, 0.85);
 }
 
 /* 文本节点编辑态视觉：双击进入编辑时给一个克制的微亮描边，告诉用户可以开始输入 */
