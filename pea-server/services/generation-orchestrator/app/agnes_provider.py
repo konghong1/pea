@@ -41,7 +41,7 @@ def _api_base(base_url: str, path: str) -> str:
 
 
 def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
-                     max_attempts: int = 2, backoff_base: int = 4):
+                     max_attempts: int = 3, backoff_base: int = 4):
     """POST JSON 到外部提供商, 对瞬时错误自动重试。
 
     重试仅针对「真·瞬时错误」: HTTP 429/500/502/503 与连接错误 (ConnectionError)。
@@ -53,6 +53,14 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
 
     返回: 2xx 响应, 或最后一次仍 5xx 时返回该响应 (交由上层 _raise_for_provider 抛错)。
     """
+    # 5xx 但属于「瞬时 / 源站异常」的都重试：
+    #  - 429/500/502/503/504: 标准 HTTP 语义 (限流 / 服务端错 / 网关超时)
+    #  - 520/521/522/523/524/525/526/527/530: Cloudflare 5xx (Web server unknown error /
+    #    connection timeout / origin unreachable 等), 这些基本是源站暂时抽风, 重试常可恢复.
+    transient_5xx = frozenset({
+        429, 500, 502, 503, 504,
+        520, 521, 522, 523, 524, 525, 526, 527, 530,
+    })
     last_err: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
@@ -65,7 +73,7 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
                 time.sleep(wait)
                 continue
             raise
-        if resp.status_code in (429, 500, 502, 503):  # 瞬时过载 -> 重试
+        if resp.status_code in transient_5xx:  # 瞬时过载 / Cloudflare 源站异常 -> 重试
             last_err = RuntimeError(f"provider HTTP {resp.status_code}")
             if attempt < max_attempts:
                 wait = min(backoff_base * (2 ** (attempt - 1)), 20)
@@ -105,13 +113,28 @@ def _extract_video_url(data: dict) -> str | None:
     return None
 
 
+def _parse_video_status(data: dict):
+    """把第三方视频状态响应归一化为 (normalized, result_url, error).
+
+    normalized ∈ {'done','processing','failed'} (与 async_core NormalizedStatus 对齐).
+    供同步 _generate_video 与异步适配器 query_status 共用, 避免重复解析逻辑.
+    """
+    raw = (data.get("status") or data.get("state") or "").lower().strip()
+    url = _extract_video_url(data)
+    if raw in _VIDEO_DONE:
+        return ("done", url, None)
+    if raw in _VIDEO_FAIL:
+        return ("failed", None, data.get("error") or data.get("message") or raw)
+    return ("processing", None, None)
+
+
 class OpenAICompatibleProvider:
     """按 DB 中 ai_providers 行构造的真实适配器 (Agnes / OpenAI 兼容)。"""
 
     def __init__(self, cfg: dict):
-        self.base_url: str = cfg["base_url"]
-        self.api_key: str = cfg["api_key"]
-        self.model_name: str = cfg["model_name"]
+        self.base_url: str = cfg.get("base_url", "")
+        self.api_key: str = cfg.get("api_key", "")
+        self.model_name: str = cfg.get("model_name", "")
         self.provider_name: str = cfg.get("provider_name") or cfg.get("provider_id") or "provider"
         self.name = self.provider_name
 
@@ -179,17 +202,31 @@ class OpenAICompatibleProvider:
         )
 
     # ── 视频 (异步提交 + 轮询) ───────────────────────────────────────
-    def _generate_video(self, req: dict) -> GenerationResult:
+    def _build_video_payload(self, req: dict):
         params: dict = req.get("params") or {}
-        user_id = req.get("user_id")
+        # frame_rate: 1–60。必须是 8 的倍数才能保证 num_frames 满足 8n+1 (见下方归一化)。
         frame_rate = _clamp_int(params.get("frame_rate", 24), 1, 60, 24)
-        duration = _clamp_int(params.get("duration", 5), 1, 60, 5)
+        # duration: 前端传的是字符串 "5s"，先剥单位再转整秒；否则 int("5s") 抛错被 _clamp_int 兜底成默认 5s。
+        raw_dur = params.get("duration", 5)
+        if isinstance(raw_dur, str):
+            raw_dur = raw_dur.rstrip("sS")
+        duration = _clamp_int(raw_dur, 1, 60, 5)
+        # num_frames 必须 ≤ 441 且遵循 8n+1 (Agnes 硬性约束, 否则 400)。
+        # 先按秒数算, 再强制归一化到最近的合法值, 避免 frame_rate 非 8 倍数 / duration 过大导致越界。
         num_frames = duration * frame_rate + 1
+        num_frames = min(num_frames, 441)
+        rem = (num_frames - 1) % 8
+        if rem:
+            num_frames -= rem          # 向下取整到最近的 8n+1
+        if num_frames < 9:
+            num_frames = 9             # 至少 8*1+1
         width = _clamp_int(params.get("width", 1152), 64, 4096, 1152)
         height = _clamp_int(params.get("height", 768), 64, 4096, 768)
         seed = params.get("seed")
+        # 兼容前端可能显式传 gen_mode (ti2vid/keyframes); 缺省时按参考图数量推断。
+        # 注意: 旧实现完全忽略 gen_mode, 导致 UI 选择的生成模式无效。
+        gen_mode = (params.get("gen_mode") or params.get("mode") or "").lower()
         refs = _normalize_refs(params.get("reference_images"))
-
         payload: dict[str, Any] = {
             "model": self.model_name,
             "prompt": req["prompt"],
@@ -201,16 +238,28 @@ class OpenAICompatibleProvider:
         if seed is not None:
             payload["seed"] = seed
         if refs:
-            if _is_agnes(self.base_url):
+            if len(refs) == 1 and gen_mode != "keyframes":
+                # 图生视频: 单图走顶层 image (字符串) + mode=ti2vid (官方文档形态)。
+                # 旧实现错把单图塞进 extra_body.image=[url] 数组且无 mode -> 既非 img2vid 也非 keyframes。
+                payload["image"] = refs[0]
+                payload["mode"] = "ti2vid"
+            else:
+                # 关键帧动画: extra_body.image 数组 + extra_body.mode=keyframes (官方文档形态)。
                 extra = payload.setdefault("extra_body", {})
                 extra["image"] = refs
-                if len(refs) > 1:
-                    extra["mode"] = "keyframes"
-            else:
-                payload["image"] = refs[0] if len(refs) == 1 else refs
+                extra["mode"] = "keyframes"
+        elif gen_mode == "ti2vid":
+            payload["mode"] = "ti2vid"
+        return payload, num_frames, len(refs)
 
+    def _submit_video_only(self, req: dict) -> dict:
+        """仅提交视频任务, 不轮询. 返回 {'task_id','status_query'} 或 {'direct_url'}.
+
+        供异步完成层适配器调用 —— 提交是快操作(<提交超时), 真正的长轮询交给 Completer.
+        """
+        payload, num_frames, nrefs = self._build_video_payload(req)
         submit_url = _api_base(self.base_url, "/v1/videos")
-        logger.info("[agnes] video submit model=%s frames=%d refs=%d", self.model_name, num_frames, len(refs))
+        logger.info("[agnes] video submit model=%s frames=%d refs=%d", self.model_name, num_frames, nrefs)
         resp = _post_with_retry(
             submit_url, payload, self._headers(),
             timeout=(settings.provider_http_connect_timeout_s, settings.provider_video_submit_timeout_s),
@@ -218,43 +267,62 @@ class OpenAICompatibleProvider:
         )
         _raise_for_provider(resp, "video-submit")
         sub = resp.json()
-
-        # 有些实现同步就返回了成品 URL
         direct = _extract_video_url(sub)
         if direct:
-            # 直接透传公网 URL, 不走 MinIO 转存 (见 _generate_image 说明)。
-            return GenerationResult(url=direct, provider=self.provider_name, raw={"sync": True},
-                                    usage=sub.get("usage") or {})
-
+            return {"direct_url": direct}
+        # 文档: 提交同时返回 task_id 与 video_id; 新接入推荐用 video_id + /agnesapi?video_id= 查询。
+        # 旧版 /v1/videos/{task_id} 仅作兜底 (video_id 缺失时)。实测旧版接口对不存在任务返回
+        # HTTP 400 + 顶层 {code,message} 结构, 与文档标准 {status,metadata.url} 形态不一致,
+        # 故优先走 video_id 推荐接口, 避免解析不到 completed 导致一直轮询。
         task_id = sub.get("id") or sub.get("task_id") or (sub.get("data") or {}).get("id")
-        if not task_id:
-            raise RuntimeError(f"video submit returned no task id: {_short(sub)}")
+        video_id = sub.get("video_id") or (sub.get("data") or {}).get("video_id")
+        if not task_id and not video_id:
+            raise RuntimeError(f"video submit returned no task/video id: {_short(sub)}")
+        if video_id:
+            status_query = _api_base(self.base_url, f"/agnesapi?video_id={video_id}")
+        else:
+            status_query = _api_base(self.base_url, f"/v1/videos/{task_id}")
+        return {
+            "task_id": str(task_id) if task_id else None,
+            "video_id": str(video_id) if video_id else None,
+            "status_query": status_query,
+        }
 
-        return self._poll_video(str(task_id), user_id)
+    def _query_video_status_raw(self, status_query: str) -> dict:
+        """查询视频任务状态, 返回原始 JSON dict (异常上抛). 供异步适配器轮询.
 
-    def _poll_video(self, task_id: str, user_id: Any) -> GenerationResult:
-        status_url = _api_base(self.base_url, f"/v1/videos/{task_id}")
+        status_query 为提交时已渲染好的完整状态查询 URL:
+        推荐 /agnesapi?video_id=<VIDEO_ID>, 或兜底 /v1/videos/<TASK_ID>。
+        """
+        resp = requests.get(
+            status_query, headers=self._headers(),
+            timeout=(settings.provider_http_connect_timeout_s, 60),
+        )
+        _raise_for_provider(resp, "video-status")
+        return resp.json()
+
+    def _generate_video(self, req: dict) -> GenerationResult:
+        """同步全量路径 (提交 + 轮询). 保留给 route()/测试; 新消费链路走 _submit_video_only + Completer."""
+        sub = self._submit_video_only(req)
+        if sub.get("direct_url"):
+            # 直接透传公网 URL, 不走 MinIO 转存 (见 _generate_image 说明)。
+            return GenerationResult(url=sub["direct_url"], provider=self.provider_name,
+                                    raw={"sync": True}, usage={})
+        status_query = sub["status_query"]
         deadline = time.time() + settings.video_poll_max_s
         last_status = "queued"
         while time.time() < deadline:
             time.sleep(settings.video_poll_interval_s)
-            resp = requests.get(
-                status_url, headers=self._headers(),
-                timeout=(settings.provider_http_connect_timeout_s, 60),
-            )
-            _raise_for_provider(resp, "video-status")
-            data = resp.json()
+            data = self._query_video_status_raw(status_query)
             last_status = (data.get("status") or data.get("state") or "").lower().strip() or last_status
-            if last_status in _VIDEO_DONE:
-                raw_url = _extract_video_url(data)
-                if not raw_url:
+            norm, url, err = _parse_video_status(data)
+            if norm == "done":
+                if not url:
                     raise RuntimeError(f"video completed but no url: {_short(data)}")
-                # 直接透传公网 URL, 不走 MinIO 转存 (见 _generate_image 说明)。
-                return GenerationResult(url=raw_url, provider=self.provider_name, raw={"task_id": task_id},
-                                        usage=data.get("usage") or {})
-            if last_status in _VIDEO_FAIL:
-                reason = data.get("error") or data.get("message") or last_status
-                raise RuntimeError(f"video generation failed: {reason}")
+                return GenerationResult(url=url, provider=self.provider_name,
+                                        raw={"task_id": task_id}, usage=data.get("usage") or {})
+            if norm == "failed":
+                raise RuntimeError(f"video generation failed: {err}")
             # 其余状态 (queued/processing/running...) 继续轮询
         raise TimeoutError(f"video poll timeout after {settings.video_poll_max_s}s (last={last_status})")
 
@@ -281,14 +349,22 @@ class OpenAICompatibleProvider:
 
 
 def _raise_for_provider(resp: requests.Response, what: str) -> None:
-    """把非 2xx 转成带截断响应体的异常, 便于定位提供商侧报错。"""
+    """把非 2xx 转成带截断响应体的异常, 便于定位提供商侧报错。
+
+    响应体只截前 160 字符 (避免 500 字符 HTML 把错误信息撑爆),
+    且检测到 HTML 头 (`<!DOCTYPE` / `<html`) 时只保留状态码 + 标题, 不让 HTML
+    详情流入用户界面 (UI 那边会用更友好的归类展示).
+    """
     if resp.status_code // 100 == 2:
         return
     body = ""
     try:
-        body = resp.text[:500]
+        body = resp.text[:160]
     except Exception:  # noqa: BLE001
         pass
+    # HTML 错误页 (Cloudflare 5xx/网关) — 只保留状态码, 不让 <!DOCTYPE ...> 露在错误里
+    if body.lstrip().startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML")):
+        raise RuntimeError(f"{what} HTTP {resp.status_code}: {resp.reason or 'upstream error'}")
     raise RuntimeError(f"{what} HTTP {resp.status_code}: {body}")
 
 

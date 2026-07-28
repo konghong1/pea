@@ -7,6 +7,8 @@ import { useAuth } from '../store/auth';
 import { api } from '../api/client';
 import { getFileUrl } from '../api/files';
 import { NODE_DEF_OF, PeaNodeKind } from '../constants/nodeTypes';
+import TechLoader from './TechLoader';
+import { retryNodeGeneration } from '../lib/nodeGeneration';
 
 /**
  * 画布节点渲染：
@@ -146,7 +148,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
 
   return (
     <div
-      className={`pea-node ${selected ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''}`}
+      className={`pea-node ${selected ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''} ${data.generating ? 'is-generating' : ''}`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onMouseDown={(e) => {
@@ -308,9 +310,10 @@ function MediaNodeBody({
       )}
       {data.generating ? (
         <div className="pea-node-generating" aria-label="生成中">
-          <div className="pea-node-generate-spinner" />
-          <span className="pea-node-generate-text">生成中…</span>
+          <TechLoader label="生成中…" />
         </div>
+      ) : data.error && !hasResult ? (
+        <NodeGenFailure id={id} error={data.error} />
       ) : hasResult ? (
         <>
           {kind === 'image' && (
@@ -438,7 +441,13 @@ function ResultImageView({
   const update = useCanvas((s) => s.updateNodeData);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
+  const [imgError, setImgError] = useState(false);
   const currentUrl = urls[index] || urls[0];
+
+  // URL 变化时重置加载错误状态
+  useEffect(() => {
+    setImgError(false);
+  }, [currentUrl]);
 
   const handleSaveToLibrary = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -529,13 +538,26 @@ function ResultImageView({
         </div>
 
         {/* 主图：点击不再放大（避免误触全屏）；如需全屏请用功能条"全屏查看" */}
-        <img
-          src={currentUrl}
-          alt={data.prompt || '生成结果'}
-          className="pea-node-media-preview pea-node-result-preview"
-          loading="lazy"
-          draggable={false}
-        />
+        {imgError || !currentUrl ? (
+          <div className="pea-node-result-image-error" role="img" aria-label="图片加载失败">
+            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.2">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <circle cx="8.5" cy="9.5" r="1.5" />
+              <path d="M3 16l5-5 4 4 3-3 6 6" />
+              <path d="M22 2L2 22" />
+            </svg>
+            <span>图片加载失败</span>
+          </div>
+        ) : (
+          <img
+            src={currentUrl}
+            alt={data.prompt || '生成结果'}
+            className="pea-node-media-preview pea-node-result-preview"
+            loading="lazy"
+            draggable={false}
+            onError={() => setImgError(true)}
+          />
+        )}
       </div>
 
       {/* 功能条 */}
@@ -832,6 +854,110 @@ function formatBytes(n: number) {
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
+ * 节点生成失败卡：科技风任务终端状态卡
+ *
+ * 把后端原始错误 (e.g. "submit error: image HTTP 520: ...") 归类成用户友好的
+ * { title, hint, detail } 三段，避免把 HTML 错误页 / 堆栈直接糊到节点上。
+ * 视觉方向：深色玻璃底 + 顶部琥珀状态边 + 角括号脉冲指示 + 青蓝重试按钮，
+ * 让失败态成为画布「命令面板」的一部分，而非突兀的警告弹窗。
+ * ═════════════════════════════════════════════════════════════════════════════ */
+
+/** 把后端原始错误归类为 { title, hint, detail }. */
+function parseGenError(raw: string): { title: string; hint: string; detail: string | null } {
+  const s = String(raw || '').trim();
+  // HTTP 5xx / Cloudflare 5xx — 上游异常
+  const http = s.match(/HTTP\s*(\d{3})/i);
+  if (http) {
+    const code = +http[1];
+    if (code === 429) {
+      return { title: '请求过于频繁', hint: '请稍候片刻再试。', detail: s };
+    }
+    if (code === 408 || /timeout|timed out/i.test(s)) {
+      return { title: '生成超时', hint: '本次生成耗时过长，可点击重新生成。', detail: s };
+    }
+    if (code >= 500 && code < 600) {
+      return {
+        title: '生成服务暂不可用',
+        hint: '上游接口返回异常，已自动退款。可稍后再试。',
+        detail: s,
+      };
+    }
+  }
+  // 仅 timeout 字样, 无 HTTP
+  if (/timeout|timed out/i.test(s)) {
+    return { title: '生成超时', hint: '本次生成耗时过长，可点击重新生成。', detail: s };
+  }
+  // 模型不可用
+  if (/unavailable|disabled|not\s*enabled/i.test(s)) {
+    return { title: '模型暂不可用', hint: '请尝试更换模型后重试。', detail: s };
+  }
+  // 并发上限
+  if (s.includes('并发')) {
+    return { title: '已达并发上限', hint: '完成其他任务后再试。', detail: s };
+  }
+  // 退款 / 余额
+  if (/refund|退款|余额|tapies/i.test(s)) {
+    return { title: '本次生成未消耗次数', hint: '可点击重新生成继续尝试。', detail: s };
+  }
+  // 默认
+  return {
+    title: '生成失败',
+    hint: '可点击重新生成继续尝试。',
+    detail: s.length > 60 ? s : null,
+  };
+}
+
+function NodeGenFailure({ id, error }: { id: string; error: string }) {
+  const update = useCanvas((s) => s.updateNodeData);
+  const [expanded, setExpanded] = useState(false);
+  const parsed = useMemo(() => parseGenError(error), [error]);
+
+  return (
+    <div className="pea-node-failure" role="alert">
+      <div className="pea-node-failure-head">
+        <div className="pea-node-failure-mark" aria-hidden title="任务异常">
+          {/* 科技风状态指示：角括号 + 脉冲琥珀点，替代传统警告圆圈 */}
+          <span className="pea-node-failure-pulse" />
+        </div>
+        <div className="pea-node-failure-titles">
+          <div className="pea-node-failure-title">{parsed.title}</div>
+          <div className="pea-node-failure-hint">{parsed.hint}</div>
+        </div>
+      </div>
+      {parsed.detail && (
+        <>
+          <button
+            type="button"
+            className="pea-node-failure-detail-toggle"
+            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+            aria-expanded={expanded}
+          >
+            {expanded ? '收起详情' : '查看详情'}
+          </button>
+          {expanded && (
+            <pre className="pea-node-failure-detail" onClick={(e) => e.stopPropagation()}>
+              {parsed.detail}
+            </pre>
+          )}
+        </>
+      )}
+      <div className="pea-node-failure-actions">
+        <button
+          type="button"
+          className="pea-btn pea-btn--ghost pea-btn--sm"
+          onClick={(e) => { e.stopPropagation(); update(id, { error: undefined }); }}
+        >关闭</button>
+        <button
+          type="button"
+          className="pea-btn pea-btn--warn pea-btn--sm"
+          onClick={(e) => { e.stopPropagation(); retryNodeGeneration(id); }}
+        >重新生成</button>
+      </div>
+    </div>
+  );
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
  * 通用节点主体（generate / 其他）
  * ═════════════════════════════════════════════════════════════════════════════ */
 function GenericNodeBody({
@@ -853,9 +979,10 @@ function GenericNodeBody({
           <div className="pea-node-generic-label">{tagLabel}</div>
           {data.generating ? (
             <div className="pea-node-generating" aria-label="生成中">
-              <div className="pea-node-generate-spinner" />
-              <span className="pea-node-generate-text">生成中…</span>
+              <TechLoader label="生成中…" />
             </div>
+          ) : data.error && !data.resultUrl ? (
+            <NodeGenFailure id={id} error={data.error} />
           ) : data.resultUrl ? (
             <div className="pea-node-result-image-wrap">
               <img src={data.resultUrl} alt={data.prompt || tagLabel} className="pea-node-media-preview pea-node-result-preview" />

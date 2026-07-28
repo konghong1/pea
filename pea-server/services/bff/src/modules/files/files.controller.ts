@@ -47,7 +47,7 @@ export class FilesController {
   @Post('upload')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } }))
   async upload(
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile() file: any,
     @CurrentUser() u: { sub: number },
   ) {
     if (!file) throw new BadRequestException('file required');

@@ -33,7 +33,8 @@ class Settings(BaseSettings):
     cdn_base_url: str = "http://localhost:9000/pea-media"
 
     # 生成护栏
-    per_user_concurrency: int = 3
+    per_user_concurrency: int = 12  # 决策④: 每用户同时进行任务上限 (原 3)
+    per_user_concurrency_ttl_s: int = 3600  # 并发计数兜底 TTL, 防异常未释放永久泄漏
     default_cost_tapies: int = 10
     # 主/备 provider (LiteLLM 路由, 失败自动回退)
     provider_primary: str = "mock"
@@ -41,18 +42,41 @@ class Settings(BaseSettings):
 
     # 外部提供商调用 (Agnes 等 OpenAI 兼容)
     # 图像同步出图较慢, 用较长超时; 视频提交后异步轮询。
-    provider_image_timeout_s: int = 300
-    provider_video_submit_timeout_s: int = 120
+    # 2026-07-28 调整: 实际观测到 Agnes 在晚高峰 submit 阶段需要 5-10 分钟,
+    # 原 300s/120s 阈值过紧, 频繁误杀。放宽到 900s (15min) 覆盖峰值, 同时
+    # 仍受外部 nginx/上游进一步超时约束, 不会无限挂住线程。
+    provider_image_timeout_s: int = 900
+    provider_video_submit_timeout_s: int = 900
     provider_http_connect_timeout_s: int = 15
     # 视频轮询: 每 interval 秒查一次, 最多等 max 秒 (超时 -> 失败 -> 退款)。
+    # 2026-07-28 修正: Agnes 晚高峰真实出片常需 5-10 分钟 (见 provider_video_submit_timeout_s 注释),
+    # 原 300s 会把正常长任务误杀成 failed。与 submit 超时对齐放宽到 900s (15min)。
     video_poll_interval_s: int = 5
-    video_poll_max_s: int = 300
+    video_poll_max_s: int = 900
     # 真实提供商失败时是否回退到 Mock。
     # 生产必须为 False: 回退会给已扣费的用户返回假图并掩盖真实故障。
     # 仅离线联调 (无外网) 时可临时置 True。
     allow_mock_fallback: bool = False
     # 生成结果在对象存储中的公开前缀 (浏览器可直接读取 CDN URL)。
     media_public_prefix: str = "gen"
+
+    # ── 异步完成层 (async_core) ───────────────────────────────
+    # 决策①: 外部临时 URL 转存到自有对象存储, 给前端稳定地址
+    rehost_enabled: bool = True
+    # 决策②: 每厂商各一把 webhook 密钥 (落在 ai_providers.webhook_secret);
+    #   下方 webhook_base_url 为对外可达回调基址, webhook_secret 仅作兜底/测试占位.
+    webhook_base_url: str = ""
+    webhook_secret: str = ""
+    webhook_grace_s: int = 120  # webhook 多久没来就转轮询兜底
+    # Completer (后台轮询回路)
+    completer_batch: int = 50          # 每批并发查询数
+    completer_tick_s: int = 2          # 扫描周期
+    completer_stale_s: int = 180       # 句柄被"已死实例"占住的回收阈值
+    # Dispatcher 提交执行线程池 (同步出图在此进行, 不占消费线程)
+    dispatch_executor_workers: int = 16
+    # 决策③: 失败告警滑动窗口
+    failure_alert_window_s: int = 300
+    failure_alert_threshold: int = 5
 
     # 开发/联调极速开关: 逗号分隔的 type 列表 (如 "image,video") 强制走 MockProvider。
     # 真实图像/视频提供商 (Agnes 等) 单张出图 18~77s, 物理上无法达到 1~3s; 联调/演示期

@@ -32,6 +32,8 @@ export interface NodePromptInputRef {
   setHtml: (html: string) => void;
   focus: () => void;
   get plainText(): string;
+  /** 生成带「参考图N」编号的正文（媒体 @ token 替换为编号），N 由调用方按 reference_images 顺序给定 */
+  getBodyText: (refNumberById?: Map<string, number>) => string;
 }
 
 interface UpstreamItem {
@@ -228,6 +230,26 @@ function insertRefToken(
     editor.appendChild(document.createTextNode('\u200B'));
   }
   editor.focus();
+  renumberRefChips(editor);
+}
+
+/**
+ * 给编辑器内所有 @ token 按「文档顺序」标注 data-ref-index（供内部/调试使用）。
+ * 产品侧决定不在前端显示「参考图N」文本角标：用户只需看到图片/文本本身，
+ * 编号仅在发给模型的 prompt 中通过 getBodyText + buildReferenceBlock 体现。
+ */
+function renumberRefChips(editor: HTMLElement) {
+  const spans = Array.from(editor.querySelectorAll<HTMLElement>('[data-pea-ref="1"]'));
+  spans.forEach((span, i) => {
+    span.setAttribute('data-ref-index', String(i + 1));
+  });
+}
+
+/** 清理旧版持久化 HTML 中残留的「参考图N」角标，避免产品改版后仍显示旧文本。 */
+function stripLegacyRefBadges(editor: HTMLElement) {
+  editor.querySelectorAll('.pea-ref-badge').forEach((badge) => {
+    badge.parentNode?.removeChild(badge);
+  });
 }
 
 export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function NodePromptInput(
@@ -402,7 +424,9 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
     const init = initialHtml || '';
     if (editor.innerHTML !== init) {
       editor.innerHTML = init;
+      stripLegacyRefBadges(editor);
       syncFromEditor();
+      renumberRefChips(editor);
     }
   }, [initialHtml, syncFromEditor]);
 
@@ -463,11 +487,51 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
       text = text.replace(/\u200B/g, ' ').replace(/\s+/g, ' ').trim();
       return { text, referenceImages, referencedNodeIds, html: editor.innerHTML };
     },
+    /**
+     * 生成「带参考图编号」的正文文本，供拼装最终 prompt 使用。
+     * 遍历编辑器：媒体类 @ token 按其节点 id 映射为「参考图N」（N 由调用方按 reference_images
+     * 数组顺序给定，保证与参考图说明块编号一致）；文本类 @ token 仍展开为节点文本；其余正文原样保留。
+     * 这样模型拿到的用户指令里直接出现「参考图1/2/3」，与说明块一一对应，不会混淆。
+     */
+    getBodyText: (refNumberById?: Map<string, number>) => {
+      const editor = editorRef.current;
+      if (!editor) return '';
+      let text = '';
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
+        acceptNode: (n: globalThis.Node) => {
+          if ((n as HTMLElement).getAttribute?.('data-pea-ref') === '1') return NodeFilter.FILTER_ACCEPT;
+          if (n.nodeType === globalThis.Node.TEXT_NODE) return NodeFilter.FILTER_ACCEPT;
+          return NodeFilter.FILTER_SKIP;
+        },
+      } as any);
+      let node: globalThis.Node | null = walker.nextNode();
+      while (node) {
+        if ((node as HTMLElement).getAttribute?.('data-pea-ref') === '1') {
+          const id = (node as HTMLElement).getAttribute('data-node-id');
+          const k = (node as HTMLElement).getAttribute('data-kind') as PeaNodeKind;
+          if (id && isMediaKind(k)) {
+            const num = refNumberById?.get(id);
+            if (num) text += `参考图${num}`;
+          } else if (id && isTextKind(k)) {
+            const src = useCanvas.getState().nodes.find((n) => n.id === id);
+            const t = src ? getTextSummary(src, 10000) : '';
+            if (t) text += t;
+          }
+        } else {
+          text += node.textContent || '';
+        }
+        node = walker.nextNode();
+      }
+      text = text.replace(/\u200B/g, ' ').replace(/\s+/g, ' ').trim();
+      return text;
+    },
     setHtml: (h) => {
       const editor = editorRef.current;
       if (editor) {
         editor.innerHTML = h;
+        stripLegacyRefBadges(editor);
         syncFromEditor();
+        renumberRefChips(editor);
       }
     },
     focus: () => editorRef.current?.focus(),
@@ -678,6 +742,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
     syncFromEditor();
     const editor = editorRef.current;
     if (!editor) return;
+    renumberRefChips(editor);
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);

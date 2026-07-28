@@ -131,7 +131,10 @@ services:
       # allow_mock_fallback 仅离线联调用；线上=true 会把任何故障伪装成占位 SVG，掩盖真实错误。
       # 图片生成超时 300s：Agnes 图像模型实测 18~77s 且波动大，留足余量避免误判超时（须 < worker 硬超时）。
       PEA_ALLOW_MOCK_FALLBACK: "false"
-      PEA_PROVIDER_IMAGE_TIMEOUT_S: "300"
+      # 2026-07-28 调整: 晚高峰实测 submit 阶段可达 5-10 分钟, 原 300s 频繁误杀
+      # 失败. 放宽到 900s (15min) 覆盖峰值, 同时仍受外部 nginx 进一步超时约束.
+      PEA_PROVIDER_IMAGE_TIMEOUT_S: "900"
+      PEA_PROVIDER_VIDEO_SUBMIT_TIMEOUT_S: "900"
       PEA_PROVIDER_HTTP_CONNECT_TIMEOUT_S: "15"
       # 真实模型出图：不走 mock。图像/视频直接透传提供商公网 CDN URL，浏览器直显。
       # （之前 PEA_FORCE_MOCK_TYPES=image,video 仅用于联调占位，已移除——用户要求调用真实模型。）

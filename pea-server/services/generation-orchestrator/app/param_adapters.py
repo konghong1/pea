@@ -246,13 +246,17 @@ class AgnesImageAdapter(ImageParamAdapter):
                 logger.warning("[adapter] agnes 不支持的 ratio=%s, 已丢弃", norm.aspect_ratio)
         if norm.seed is not None:
             payload["seed"] = norm.seed
+        # 官方要求 response_format 必须放 extra_body 内 (顶层会 400)。
+        # 显式请求 url 输出, 避免上游默认返回 b64_json 巨块 -> 破坏 URL 直存/显示链路。
+        extra: dict[str, Any] = {"response_format": "url"}
         # 图生图: image 必须进 extra_body, 且不带 tags
         if norm.reference_images:
-            payload["extra_body"] = {"image": norm.reference_images}
+            extra["image"] = norm.reference_images
             logger.info(
                 "[adapter] agnes image refs=%d (order preserved, sent via extra_body.image)",
                 len(norm.reference_images),
             )
+        payload["extra_body"] = extra
         return payload
 
 

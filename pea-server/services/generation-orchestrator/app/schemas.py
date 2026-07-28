@@ -35,6 +35,7 @@ class JobStatusResponse(BaseModel):
     status: str
     cost_tapies: int
     resultUrl: str | None = None
+    resultUrls: list[str] | None = None
     error: str | None = None
     createdAt: str | None = None
 

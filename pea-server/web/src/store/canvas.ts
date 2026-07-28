@@ -25,6 +25,10 @@ export type PeaNodeData = {
   resultIndex?: number;   // 当前展示 resultUrls 中的第几张
   savedToLibrary?: boolean; // 是否已保存到素材库
   generating?: boolean;   // 是否正在生成中
+  /** 最近一次生成任务的 jobId（受理成功后写入）。
+   *  关键：用于加载画布时与后端核对真实状态，防止 WS 事件丢失后节点永远卡在 generating。 */
+  lastJobId?: string;
+  error?: string;         // 生成失败原因（终态写回节点，用于节点内失败卡展示）
   /** 新建节点时的画幅比例（如 "9:16"、"16:9"），用于空白节点框比例。
       有内容后节点按实际媒体比例包裹，此字段不再影响显示。 */
   aspectRatio?: string;
@@ -53,6 +57,8 @@ interface CanvasState {
   jobNodeMap: Record<string, string>;
   /** 登记一次生成任务与其触发节点，供 WS job.updated 事件回写结果。 */
   registerJob: (jobId: string, nodeId: string) => void;
+  /** 加载画布后异步核对：把 generating=true 的节点按后端真实状态回填。 */
+  reconcileGeneratingNodes: () => Promise<void>;
   /** 按 jobId 把生成结果/状态 patch 回写到对应节点（自动查 jobNodeMap）。 */
   applyJobResult: (jobId: string, patch: Partial<PeaNodeData>) => void;
   /** 任务终态后清理 jobNodeMap 登记。 */
@@ -229,6 +235,10 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       version: g.data.version,
       dirty: false,
     });
+    // 加载完成后异步核对：所有 generating=true 的节点拿 lastJobId 去后端查真实状态，
+    // 防止 WS 事件丢失/页面重开导致节点永远停「生成中」（stale state）。
+    // 没 lastJobId 的旧节点直接置 false（无法重建关联的 job）。
+    void get().reconcileGeneratingNodes();
   },
   removeNode: (id) =>
     set((s) => ({
@@ -313,16 +323,99 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   },
   registerJob: (jobId, nodeId) =>
     set((s) => ({ jobNodeMap: { ...s.jobNodeMap, [jobId]: nodeId } })),
+  reconcileGeneratingNodes: async () => {
+    // 1) 没 lastJobId 但 generating=true 的旧节点：直接清掉 generating（无法重建关联 job）
+    const orphanIds: string[] = [];
+    set((s) => ({
+      nodes: s.nodes.map((n) => {
+        if (n.data?.generating && !n.data?.lastJobId) {
+          orphanIds.push(n.id);
+          return { ...n, data: { ...n.data, generating: false, error: '上次会话未完成，请重新发起' } };
+        }
+        return n;
+      }),
+      dirty: true,
+    }));
+    if (orphanIds.length) {
+      // tsc-only debug: 让 console 留个痕迹
+      console.info(`[reconcile] cleared ${orphanIds.length} orphan generating node(s) without lastJobId`);
+    }
+    // 2) 有 lastJobId 的节点：并发查后端，按真实状态回填
+    const targets = get().nodes
+      .filter((n) => n.data?.generating && n.data?.lastJobId)
+      .map((n) => ({ nodeId: n.id, jobId: n.data!.lastJobId as string }));
+    if (targets.length === 0) return;
+    await Promise.all(
+      targets.map(async ({ nodeId, jobId }) => {
+        try {
+          const { data } = await api.get<any>(`/generation/jobs/${jobId}`);
+          const st = data?.status;
+          if (st === 'done') {
+            const url = data?.resultUrl ?? undefined;
+            const urls = data?.resultUrls ?? (url ? [url] : undefined);
+            set((s) => ({
+              nodes: s.nodes.map((n) =>
+                n.id === nodeId
+                  ? { ...n, data: { ...n.data, generating: false, error: undefined, resultUrl: urls?.[0] ?? url, resultUrls: urls, resultIndex: 0 } }
+                  : n
+              ),
+              dirty: true,
+            }));
+          } else if (st === 'failed' || st === 'refunded') {
+            set((s) => ({
+              nodes: s.nodes.map((n) =>
+                n.id === nodeId
+                  ? { ...n, data: { ...n.data, generating: false, error: data?.error || '生成失败' } }
+                  : n
+              ),
+              dirty: true,
+            }));
+          } else {
+            // 还在跑：注册到 jobNodeMap 让轮询兜底继续接管
+            set((s) => ({ jobNodeMap: { ...s.jobNodeMap, [jobId]: nodeId } }));
+            const { pollNodeJobResult } = await import('../lib/nodeGeneration');
+            pollNodeJobResult(jobId);
+          }
+        } catch {
+          // 后端查不到（job 已过期/被清理）→ 直接清理节点
+          set((s) => ({
+            nodes: s.nodes.map((n) =>
+              n.id === nodeId
+                ? { ...n, data: { ...n.data, generating: false, error: '任务记录已过期，请重新发起' } }
+                : n
+            ),
+            dirty: true,
+          }));
+        }
+      })
+    );
+  },
   applyJobResult: (jobId, patch) =>
     set((s) => {
+      // 1) 正常路径: jobNodeMap 找到 -> 直接 patch
       const nodeId = s.jobNodeMap[jobId];
-      if (!nodeId) return {};
-      return {
-        dirty: true,
-        nodes: s.nodes.map((n) =>
-          n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n,
-        ),
-      };
+      if (nodeId) {
+        return {
+          dirty: true,
+          nodes: s.nodes.map((n) =>
+            n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n,
+          ),
+        };
+      }
+      // 2) 兜底: jobNodeMap 已被清 (早期 removeJob, 或 reload 后 map 重置),
+      //    但节点 data.lastJobId 持久化了 jobId —— 用它回写到正确节点.
+      //    不然失败/完成事件会"丢失", 节点 stuck 在 generating=true,
+      //    HUD 4 角 + 中心 TechLoader 一直转.
+      const fallbackId = s.nodes.find((n) => n.data?.lastJobId === jobId)?.id;
+      if (fallbackId) {
+        return {
+          dirty: true,
+          nodes: s.nodes.map((n) =>
+            n.id === fallbackId ? { ...n, data: { ...n.data, ...patch } } : n,
+          ),
+        };
+      }
+      return {};
     }),
   removeJob: (jobId) =>
     set((s) => {

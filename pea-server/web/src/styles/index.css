@@ -17,6 +17,13 @@
   --pea-brand-strong: #0b86bd;
   --pea-purple: #8b5cf6;
   --pea-lime: #34d399;
+  /* 派生强调色（基于系统 brand，不新增配色）：用于按钮/状态光/辉光 */
+  --pea-accent: #1fa2dc;
+  --pea-accent-soft: #5cc6ec;   /* 亮色 tint，用于暗底上的辉光/标签 */
+  --pea-accent-press: #0b86bd;  /* 按下态 */
+  --pea-warn: #f59e0b;          /* 优雅琥珀，替代饱和红 */
+  --pea-warn-soft: #ffb454;
+  --pea-success: #34d399;
 }
 
 .dark {
@@ -32,6 +39,12 @@
   --pea-brand-strong: #90c4e5;
   --pea-purple: #8b5cf6;
   --pea-lime: #34d399;
+  --pea-accent: #1fa2dc;
+  --pea-accent-soft: #5cc6ec;
+  --pea-accent-press: #0b86bd;
+  --pea-warn: #f59e0b;
+  --pea-warn-soft: #ffb454;
+  --pea-success: #34d399;
 }
 
 html,
@@ -46,6 +59,168 @@ body {
   background: var(--pea-bg-deep);
   color: var(--pea-text-primary);
   transition: background 0.2s ease, color 0.2s ease;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 统一按钮系统 .pea-btn — 优雅 / 科技感 / 适配系统（暗色节点默认，亮色用 --light）
+ *
+ * 设计语言（取自 frontend-design skill，落在本系统既有 token 上，不另起配色）：
+ *  - 圆角 9px、1px 描边、悬停微抬升 + 柔光、按下回弹
+ *  - focus-visible 显式焦点环（WCAG 2.1 AA）
+ *  - 主/警告按钮带"扫光"高光，但 reduced-motion 下自动关闭
+ *  - 默认暗色玻璃（画布节点），.pea-btn--light 用于亮色应用栏等
+ * ═════════════════════════════════════════════════════════════════════════════ */
+.pea-btn {
+  --btn-bg: rgba(255, 255, 255, 0.05);
+  --btn-fg: #eaf6fb;
+  --btn-border: rgba(255, 255, 255, 0.16);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.2px;
+  padding: 7px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--btn-border);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+    background 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    color 0.18s ease;
+}
+.pea-btn:hover  { transform: translateY(-1px); }
+.pea-btn:active { transform: translateY(0); }
+.pea-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--pea-bg-deep),
+    0 0 0 4px color-mix(in srgb, var(--pea-accent) 65%, transparent);
+}
+.pea-btn:disabled,
+.pea-btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+.pea-btn--sm    { padding: 5px 11px; font-size: 11px; border-radius: 7px; }
+.pea-btn--block { width: 100%; }
+
+/* primary：青色渐变 + 柔光 + 扫光（系统 brand） */
+.pea-btn--primary {
+  --btn-fg: #04141c;
+  background: linear-gradient(180deg, var(--pea-accent-soft), var(--pea-accent));
+  border-color: transparent;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.28),
+    0 2px 10px rgba(31, 162, 220, 0.30);
+  font-weight: 600;
+}
+.pea-btn--primary::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(110deg, transparent 32%, rgba(255, 255, 255, 0.40) 50%, transparent 68%);
+  transform: translateX(-120%);
+}
+.pea-btn--primary:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.40),
+    0 4px 18px rgba(31, 162, 220, 0.50);
+}
+.pea-btn--primary:hover::after { transform: translateX(120%); transition: transform 0.6s ease; }
+
+/* ghost：克制描边，悬停轻微提亮 */
+.pea-btn--ghost {
+  --btn-bg: rgba(255, 255, 255, 0.04);
+  --btn-fg: rgba(248, 250, 252, 0.78);
+  --btn-border: rgba(255, 255, 255, 0.16);
+}
+.pea-btn--ghost:hover {
+  --btn-bg: rgba(255, 255, 255, 0.09);
+  --btn-border: rgba(255, 255, 255, 0.26);
+  --btn-fg: #ffffff;
+}
+
+/* warn：失败重试 —— 琥珀渐变（读作"恢复"，与主操作青色区分） */
+.pea-btn--warn {
+  --btn-fg: #1a1206;
+  background: linear-gradient(180deg, var(--pea-warn-soft), var(--pea-warn));
+  border-color: transparent;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.30),
+    0 2px 10px rgba(245, 158, 11, 0.32);
+  font-weight: 600;
+}
+.pea-btn--warn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(110deg, transparent 32%, rgba(255, 255, 255, 0.45) 50%, transparent 68%);
+  transform: translateX(-120%);
+}
+.pea-btn--warn:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.45),
+    0 4px 18px rgba(245, 158, 11, 0.50);
+}
+.pea-btn--warn:hover::after { transform: translateX(120%); transition: transform 0.6s ease; }
+
+/* quiet：纯文字，最低存在感 */
+.pea-btn--quiet {
+  --btn-bg: transparent;
+  --btn-fg: rgba(248, 250, 252, 0.72);
+  --btn-border: transparent;
+  box-shadow: none;
+}
+.pea-btn--quiet:hover {
+  --btn-bg: rgba(255, 255, 255, 0.07);
+  --btn-fg: #ffffff;
+}
+
+/* light 变体：亮色应用栏（TopNav 等后续可复用，不破坏暗色节点默认） */
+.pea-btn--light {
+  --btn-bg: #ffffff;
+  --btn-fg: var(--pea-text-primary);
+  --btn-border: var(--pea-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.pea-btn--light.pea-btn--primary { --btn-fg: #04141c; }
+.pea-btn--light.pea-btn--ghost {
+  --btn-bg: transparent;
+  --btn-fg: var(--pea-text-secondary);
+  --btn-border: var(--pea-border);
+  box-shadow: none;
+}
+.pea-btn--light.pea-btn--ghost:hover {
+  --btn-bg: var(--pea-bg-elevated);
+  --btn-fg: var(--pea-text-primary);
+}
+.pea-btn--light.pea-btn--warn { --btn-fg: #1a1206; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pea-btn,
+  .pea-btn:hover {
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    transform: none;
+  }
+  .pea-btn--primary::after,
+  .pea-btn--warn::after { display: none; }
 }
 
 /* ===== 画布节点卡片 (对齐 pea-canvas-v12 截图3/4/5/6) =====
@@ -69,10 +244,53 @@ body {
   cursor: grab;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   整节点流动感（生成中状态）
+   与中心 TechLoader 装饰完全分层独立动画：
+   - 节点级：背景光晕脉动 (box-shadow)
+   - 4 角 L 形角标：落在 body-card 的 18px 圆角上，曲线贴合节点框
+   - 纵向扫描线 + 底部光带：节点内流动
+   - TechLoader：transform 旋转 / 缩放 + 容器装饰 background-position
+   周期全部错开 (3.6s / 2.4s / 2.4s / 1.8s vs 3.2/2.1/1.1s)，互不干扰。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.pea-node.is-generating {
+  /* 整节点外发光呼吸 —— box-shadow 脉动，撑出"光在节点外流动"的氛围 */
+  animation: pea-node-aura 3.6s ease-in-out infinite;
+  will-change: box-shadow;
+}
+
+/* 生成中：body-card 改为完全不透明，杜绝圆角处透出浅色画布的"半透明"感 */
+.pea-node.is-generating .pea-node-body-card {
+  background: #222228;
+}
+
+/* 整节点 HUD 框（生成中）：4 角色 + 纵向扫描 + 底部进度光带
+   放在 .pea-node-body-card 内（4 个角紧贴 body-card 的 18px 圆角，
+   与节点框完全重合），让"在节点框内动"的视觉感更直接。
+   z-index 2：在 body 内容之上、ReactFlow 手柄 (z=10) 之下；pointer-events: none 不抢事件。
+   注：用户反馈"4 角 HUD 也不要"，已整体移除，生成中仅保留 body-card 外柔光呼吸 + 中心 TechLoader。 */
+
+@media (prefers-reduced-motion: reduce) {
+  .pea-node.is-generating { animation: none; }
+  .pea-node-generating::after { animation: none; opacity: 0.6; }
+}
+@keyframes pea-node-aura {
+  /* 整节点外柔光呼吸 (只留 blur 光晕, 不出实心环 —— 实心环会和 HUD 4 角叠加成两层框) */
+  0%, 100% {
+    box-shadow:
+      0 0 24px -4px color-mix(in srgb, var(--pea-accent, #1fa2dc) 20%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 48px -2px color-mix(in srgb, var(--pea-accent, #1fa2dc) 45%, transparent);
+  }
+}
 .pea-node:hover {
-  /* 轻微上浮效果，增强交互反馈 */
+  /* 轻微上浮效果，增强交互反馈。
+     注意：不要给外层加 box-shadow 实心描边 —— 在浅色画布上会显出比 body-card 大一圈的"半透明框"，
+     让用户觉得像多了一层。深色投影在浅色画布几乎不可见，所以只保留 transform。 */
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1);
 }
 .pea-node:active {
   cursor: grabbing;
@@ -115,13 +333,11 @@ body {
   overflow: hidden; /* 图片节点需要让图片完全贴合 body-card 圆角 */
 }
 .pea-node.selected .pea-node-body-card {
-  /* 选中时直接用品牌色边框，更清晰明确 */
-  border-color: var(--pea-brand-strong, #0b86bd);
-  border-width: 2px;
-  box-shadow: 
-    0 22px 50px rgba(0, 0, 0, 0.55),      /* 原有深投影 */
-    0 0 0 4px rgba(31, 162, 220, 0.25),   /* 外层蓝色光晕（无物理边框，不产生缝隙） */
-    inset 0 0 0 1px rgba(255, 255, 255, 0.15); /* 内层微弱高光增加层次 */
+  /* 选中只给一条浅蓝细边, 不再加外光晕/内高光 —— 用户反馈"边框太重, 知道选中就行" */
+  border-color: var(--pea-brand, #38e1ff);
+  border-width: 1.5px;
+  box-shadow:
+    0 22px 50px rgba(0, 0, 0, 0.55);   /* 只保留原深投影, 去掉 4px 外光晕和 1px 内高光 */
   transition: all 0.2s ease;
 }
 
@@ -375,13 +591,50 @@ body {
 }
 
 /* ===== 节点生成中动画 & 结果预览 ===== */
+/* 生成中面板使用与 body-card 同色的不透明底，避免圆角/缝隙处透出画布；
+   min-width 保证 TechLoader label（"生成中…"）有充足水平空间不被压成两行。 */
 .pea-node-generating {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 10px;
-  padding: 16px 0;
-  min-height: 80px;
+  padding: 16px 8px 18px;
+  min-height: 110px;
+  min-width: 168px;
+  border-radius: 18px;
+  background: #222228;
+}
+/* 极淡扫描线纹理，增加生成中面板的科技感，同时不抢眼 */
+.pea-node-generating::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent,
+    transparent 3px,
+    rgba(255, 255, 255, 0.015) 3px,
+    rgba(255, 255, 255, 0.015) 6px
+  );
+  pointer-events: none;
+  opacity: 0.6;
+}
+/* 顶部状态光轨（与失败卡同一视觉语言，青色流光）——节点状态统一签名 */
+.pea-node-generating::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--pea-accent-soft), var(--pea-accent), var(--pea-accent-soft), transparent);
+  background-size: 200% 100%;
+  opacity: 0.8;
+  animation: pea-rail-flow 2.4s linear infinite;
+  pointer-events: none;
 }
 .pea-node-generate-spinner {
   width: 32px;
@@ -398,6 +651,261 @@ body {
   font-size: 11px;
   color: rgba(255, 255, 255, 0.45);
   letter-spacing: 0.5px;
+}
+
+/* ===== 科技感加载动画（TechLoader） =====
+   内层只放中心圆环 + label。节点外壳的 HUD 四角 + 扫描 + 进度光带
+   已上移到 .pea-node.is-generating 内的 .pea-node-hud，让 4 个角贴在节点框 4 角，
+   "在节点框内动"的视觉感更直接。 */
+.tech-loader {
+  --tech-color: var(--pea-accent, #1fa2dc);
+  color: var(--tech-color);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 4px 0 0;
+  min-width: 132px;
+}
+.tech-loader__svg {
+  display: block;
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--tech-color) 55%, transparent));
+}
+.tech-loader__ring {
+  transform-origin: 50% 50%;
+  transform-box: fill-box;
+}
+.tech-loader__ring--outer { animation: tech-spin     3.2s linear      infinite; }
+.tech-loader__ring--mid   { animation: tech-spin-rev 2.1s linear      infinite; }
+.tech-loader__ring--arc   { animation: tech-spin     1.1s cubic-bezier(0.65, 0, 0.35, 1) infinite; }
+.tech-loader__core {
+  transform-origin: 50% 50%;
+  transform-box: fill-box;
+  animation: tech-pulse 1.4s ease-in-out infinite;
+}
+
+.tech-loader__label {
+  font-size: 11px;
+  letter-spacing: 1.8px;
+  color: color-mix(in srgb, var(--tech-color) 85%, #ffffff 15%);
+  text-transform: uppercase;
+  opacity: 0.9;
+  /* 关键：永不换行；超出时省略号兜底，避免窄容器把"生成中…"压成两行 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  position: relative;
+  z-index: 1;
+  /* 文字极轻微脉动呼吸（与圆环错开周期） */
+  animation: tech-label-pulse 1.8s ease-in-out infinite;
+}
+@keyframes tech-spin     { to { transform: rotate(360deg); } }
+@keyframes tech-spin-rev { to { transform: rotate(-360deg); } }
+@keyframes tech-pulse {
+  0%, 100% { transform: scale(0.82); opacity: 0.65; }
+  50%      { transform: scale(1.12); opacity: 1; }
+}
+@keyframes tech-label-pulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tech-loader__ring,
+  .tech-loader__core,
+  .tech-loader__label { animation: none; }
+}
+
+/* ===== 节点生成失败卡 =====
+   科技风任务终端状态卡：深色玻璃底 + 顶部琥珀状态边 + 角括号脉冲指示 +
+   青蓝重试按钮。失败态被处理成画布「命令面板」的一部分，而非警告弹窗。
+   所有装饰动画尊重 prefers-reduced-motion。 */
+.pea-node-failure {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 14px 12px;
+  margin: 2px 0;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top-color: transparent;
+  background:
+    linear-gradient(180deg, rgba(245, 158, 11, 0.06) 0%, rgba(245, 158, 11, 0.01) 35%, rgba(16, 18, 24, 0.72) 100%),
+    rgba(16, 18, 24, 0.78);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 158, 11, 0.18),
+    0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  text-align: left;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 环境扫描线：极淡，增加科技感但不抢内容 */
+.pea-node-failure::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 255, 255, 0.015) 2px,
+    rgba(255, 255, 255, 0.015) 4px
+  );
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+/* 顶部状态光轨（签名元素）：琥珀渐变流光，与生成态青色光轨成同一视觉语言 */
+.pea-node-failure::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--pea-warn-soft), var(--pea-warn), var(--pea-warn-soft), transparent);
+  background-size: 200% 100%;
+  opacity: 0.85;
+  animation: pea-rail-flow 3.2s linear infinite;
+  pointer-events: none;
+}
+
+/* 头部：角括号状态指示 + 标题/提示 */
+.pea-node-failure-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  position: relative;
+  z-index: 1;
+}
+.pea-node-failure-mark {
+  flex-shrink: 0;
+  position: relative;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  color: rgba(245, 158, 11, 0.85);
+}
+.pea-node-failure-mark::before,
+.pea-node-failure-mark::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-color: currentColor;
+  border-style: solid;
+  opacity: 0.75;
+}
+.pea-node-failure-mark::before {
+  top: 0;
+  left: 0;
+  border-width: 1.5px 0 0 1.5px;
+}
+.pea-node-failure-mark::after {
+  bottom: 0;
+  right: 0;
+  border-width: 0 1.5px 1.5px 0;
+}
+.pea-node-failure-pulse {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.55);
+  animation: pea-failure-pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes pea-failure-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.45); opacity: 0.5; }
+}
+
+/* 状态光轨流光（失败=琥珀 / 生成=青），跨节点状态共享 */
+@keyframes pea-rail-flow {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.pea-node-failure-titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pea-node-failure-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+  letter-spacing: 0.3px;
+  line-height: 1.35;
+}
+.pea-node-failure-hint {
+  font-size: 11px;
+  color: rgba(248, 250, 252, 0.58);
+  line-height: 1.5;
+}
+
+/* 详情折叠：终端日志风格 */
+.pea-node-failure-detail-toggle {
+  align-self: flex-start;
+  position: relative;
+  z-index: 1;
+  font-size: 10.5px;
+  color: rgba(200, 220, 255, 0.5);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  transition: color 0.15s ease;
+}
+.pea-node-failure-detail-toggle:hover {
+  color: rgba(200, 220, 255, 0.88);
+}
+.pea-node-failure-detail {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 10.5px;
+  line-height: 1.55;
+  color: rgba(200, 220, 255, 0.62);
+  background: rgba(0, 0, 0, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  position: relative;
+  z-index: 1;
+}
+
+/* 操作：关闭 (ghost) + 重新生成 (tech primary) */
+.pea-node-failure-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 2px;
+  position: relative;
+  z-index: 1;
+}
+/* 操作按钮统一走 .pea-btn 系统（见文件顶部）：关闭 → .pea-btn--ghost，重新生成 → .pea-btn--warn。
+   此处仅保留布局容器，不再各自定义按钮样式，保证全系统按钮观感一致。 */
+.pea-node-failure-actions .pea-btn { min-width: 64px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pea-node-failure-pulse { animation: none; opacity: 0.85; }
+  .pea-node-failure::after { animation: none; opacity: 0.7; }
 }
 .pea-node-result-preview {
   max-width: 100%;
@@ -464,17 +972,17 @@ body {
 }
 .pea-node.hover .pea-handle,
 .pea-node.selected .pea-handle {
-  width: 22px !important;
-  height: 22px !important;
-  background: #fff !important;
-  border-color: var(--pea-brand) !important;
-  box-shadow: 0 0 0 3px rgba(31, 162, 220, 0.18), 0 2px 8px rgba(0, 0, 0, 0.25);
+  /* 选中/悬停: 把手从默认 6x6 放大到 10x10, 配品牌色, 但去掉 3px 大光晕 —— 避免节点像被 4 个白点框住 */
+  width: 10px !important;
+  height: 10px !important;
+  background: var(--pea-brand, #38e1ff) !important;
+  border-color: #fff !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
 }
 .pea-node.hover .pea-handle::after,
 .pea-node.selected .pea-handle::after {
-  content: '+';
-  opacity: 1;
-  color: var(--pea-brand);
+  content: '';
+  /* 不再画 "+" 号, 简洁 */
 }
 .dark .pea-node.hover .pea-handle,
 .dark .pea-node.selected .pea-handle {
@@ -2230,11 +2738,13 @@ body {
 .node-input-bar {
   position: absolute;
   z-index: 25;
-  background: rgba(28, 28, 34, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(28, 28, 34, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 18px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(14px);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(14px) saturate(120%);
   color: #fff;
   padding: 12px 14px 10px;
   animation: node-input-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
@@ -3622,6 +4132,26 @@ body {
   filter: brightness(1.04);
 }
 
+/* 结果图加载失败占位：避免浏览器默认裂图，提示可点击重新生成 */
+.pea-node-result-image-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 160px;
+  width: 100%;
+  padding: 24px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 12px;
+}
+.pea-node-result-image-error svg {
+  opacity: 0.7;
+}
+
 /* 左上角收藏星标 */
 .pea-node-result-star {
   position: absolute;
@@ -4351,17 +4881,25 @@ body {
   border: none;
   outline: none;
   color: #fff;
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 14px;
+  /* 标准字重 500：避免 450 这种非标准值在 GPU 合成层里被灰度抗锯齿渲染发虚
+     （表现为「鼠标移上去才清晰」）。500 是系统字体真实存在的档位，各状态一致清晰。 */
+  font-weight: 500;
+  letter-spacing: normal;
+  line-height: 1.65;
   padding: 4px 0;
   font-family: inherit;
   cursor: text;
   white-space: pre-wrap;
   word-break: break-word;
+  caret-color: var(--pea-brand);
+  /* 统一文字渲染路径，避免合成层/重绘切换导致清晰度抖动 */
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 .node-prompt-editor:empty::before {
   content: attr(data-placeholder);
-  color: rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.36);
   pointer-events: none;
   display: block;
 }
@@ -4371,8 +4909,9 @@ body {
   vertical-align: middle;
   margin: 0 2px;
   border-radius: 8px;
-  background: rgba(31, 162, 220, 0.18);
-  border: 1px solid rgba(31, 162, 220, 0.28);
+  background: rgba(31, 162, 220, 0.26);
+  border: 1px solid rgba(31, 162, 220, 0.45);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
   color: #fff;
   font-size: 12px;
   line-height: 1;
@@ -4393,6 +4932,7 @@ body {
   border-radius: 6px;
   background: #000;
   display: block;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 /* 缩略图 URL 尚未解析完成时的占位态（避免显示浏览器默认裂图图标） */
 .node-prompt-editor .pea-ref-thumb[data-pea-pending="1"] {
@@ -4421,7 +4961,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(255, 255, 255, 0.92);
+  color: #fff;
+  font-weight: 500;
+}
+/* @ token 上的「参考图N」编号角标：产品侧已隐藏，编号仅在发给模型的 prompt 中体现。 */
+.node-prompt-editor .pea-ref-badge {
+  display: none;
 }
 
 /* 快捷引用条 */

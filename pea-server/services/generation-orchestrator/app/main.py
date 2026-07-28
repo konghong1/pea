@@ -30,19 +30,23 @@ for _p in (_ROOT, _APP_PARENT):
 from fastapi import FastAPI
 
 from app.api import router
+from app.async_core import webhook as webhook_module
+from app.async_core import completer as completer_module
 from app.config import settings
 from app.worker import start as start_worker
 
 app = FastAPI(title="pea generation-orchestrator", version="0.1.0")
 app.include_router(router)
+app.include_router(webhook_module.router)  # 异步完成层: 第三方回调端点
 
 if settings.worker_enabled:
     start_worker()
+    completer_module.start()  # 异步完成层: 后台轮询回路 (视频状态维护)
 
 
 @app.on_event("startup")
 def _startup() -> None:
-    # worker 已在 import 时 daemon 启动; 此处可挂健康检查/指标
+    # worker + completer 已在 import 时 daemon 启动; 此处可挂健康检查/指标
     pass
 
 

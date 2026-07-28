@@ -22,9 +22,12 @@ router = APIRouter(prefix="/api")
 def _row_to_dto(row: dict) -> JobStatusResponse:
     result = row.get("result_json")
     result_url = None
+    result_urls = None
     if result:
         try:
-            result_url = json.loads(result).get("url")
+            parsed = json.loads(result)
+            result_url = parsed.get("url")
+            result_urls = parsed.get("urls")
         except Exception:  # noqa: BLE001
             pass
     return JobStatusResponse(
@@ -34,7 +37,10 @@ def _row_to_dto(row: dict) -> JobStatusResponse:
         status=row["status"],
         cost_tapies=row.get("cost_tapies", 0),
         resultUrl=result_url,
-        error=None,
+        resultUrls=result_urls,
+        # T-FIX-ERROR-2026-07-28: 失败详情从库读出, 节点失败卡可展示真实原因.
+        # row.get 保证旧库 (error 列不存在) 也不会 KeyError.
+        error=row.get("error"),
         createdAt=str(row.get("created_at")),
     )
 

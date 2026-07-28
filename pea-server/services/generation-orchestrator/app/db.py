@@ -128,11 +128,14 @@ def get_model_with_provider(model_id: str) -> dict | None:
 
 
 def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies=None,
-                      usage_json=None) -> None:
+                      usage_json=None, error=None) -> None:
     """更新任务状态, 并强制校验状态机合法性 (T-GEN-01).
 
     非法跳转 (如 done -> refunded, queued -> done) 直接抛错, 杜绝状态错乱。
     幂等: 目标状态与当前一致时不报错。
+
+    error: 失败详情 (T-FIX-ERROR-2026-07-28, 持久化到 generation_jobs.error).
+           只在 status=failed 时写入; 传 None 不动列。
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -146,7 +149,9 @@ def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies
             if not models.can_transition(current, status):
                 raise ValueError(f"illegal transition: {current} -> {status}")
 
-            if result_json is not None or cost_tapies is not None or usage_json is not None:
+            has_meta = any(x is not None for x in (result_json, cost_tapies, usage_json))
+            has_error = error is not None
+            if has_meta or has_error:
                 fields, vals = [], []
                 if result_json is not None:
                     fields.append("result_json = %s")
@@ -157,6 +162,9 @@ def update_job_status(job_id: str, status: str, *, result_json=None, cost_tapies
                 if usage_json is not None:
                     fields.append("usage_json = %s")
                     vals.append(usage_json)
+                if has_error:
+                    fields.append("error = %s")
+                    vals.append(error)
                 vals.append(job_id)
                 cur.execute(
                     f"UPDATE generation_jobs SET status=%s, {', '.join(fields)} "

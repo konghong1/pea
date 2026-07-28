@@ -5,59 +5,16 @@ import { useCanvas, PeaNodeData } from '../store/canvas';
 import { useAgent } from '../store/agent';
 import { toast } from '../store/toast';
 import { listAvailableModels, estimateCost, acceptNodeGenerationJob } from '../api/catalog';
-import { api } from '../api/client';
 import type { AvailableModel, PricingRule } from '../api/catalog';
 import NodePromptInput, { NodePromptInputRef, ParsedPrompt } from './NodePromptInput';
 import { getFileUrl, getPresignedUrl } from '../api/files';
 import { PeaNodeKind } from '../constants/nodeTypes';
+import { pollNodeJobResult } from '../lib/nodeGeneration';
 
 /**
- * 节点生成结果轮询兜底。
- * WS 的 job.updated 事件是 fire-and-forget：实时图/视频任务若跑了很久（真实模型常 ~1-3 分钟）才完成，
- * 前端 WS 可能早已不在监听窗口/断连，事件被丢弃，导致节点永远停在 generating、不再出图。
- * 这里用轮询兜底：事件若先到，会从 jobNodeMap 移除 job，本函数随即终止；否则轮询负责回填结果。
- * 与 galleryApi 的 pollPeaJob 同源，但作用域限定在单个节点 job。
+ * 节点生成结果轮询兜底：实现见 ../lib/nodeGeneration（pollNodeJobResult）。
+ * 失败态会把 error 写回节点，供节点内失败卡展示与重试。
  */
-function pollNodeJobResult(jobId: string) {
-  const MAX_ATTEMPTS = 120; // 最多 ~6 分钟（3s 间隔），覆盖真实模型长任务
-  let attempt = 0;
-  const tick = async () => {
-    // 事件已处理 -> jobNodeMap 已无此 job -> 终止轮询（避免重复回填）
-    if (!useCanvas.getState().jobNodeMap[jobId]) return;
-    if (attempt++ >= MAX_ATTEMPTS) {
-      useCanvas.getState().applyJobResult(jobId, { generating: false });
-      useCanvas.getState().removeJob(jobId);
-      toast.error('生成超时，请稍后在历史中查看');
-      return;
-    }
-    try {
-      const { data } = await api.get<any>(`/generation/jobs/${jobId}`);
-      const st = data?.status;
-      if (st === 'done') {
-        const url = data?.resultUrl ?? undefined;
-        useCanvas.getState().applyJobResult(jobId, {
-          generating: false,
-          resultUrl: url,
-          resultUrls: url ? [url] : undefined,
-          resultIndex: 0,
-        });
-        useCanvas.getState().removeJob(jobId);
-        toast.success('生成完成');
-        return;
-      }
-      if (st === 'failed' || st === 'refunded') {
-        useCanvas.getState().applyJobResult(jobId, { generating: false });
-        useCanvas.getState().removeJob(jobId);
-        toast.error(data?.error || '生成失败，已退款');
-        return;
-      }
-    } catch {
-      // 网络抖动忽略，继续轮询
-    }
-    setTimeout(tick, 3000);
-  };
-  setTimeout(tick, 3000);
-}
 
 interface KindCfg {
   label: string;
@@ -180,21 +137,14 @@ function buildReferenceBlock(urls: string[], nameMap: Map<string, string>): stri
     );
   } else {
     lines.push(
-      `【参考图清单】共 ${urls.length} 张，已随请求按序上传，请严格按编号分别使用，切勿混淆彼此用途：`,
+      `【参考图清单】共 ${urls.length} 张，已随请求按序上传，请严格按编号分别使用：`,
     );
     urls.forEach((u, i) => {
       const name = nameMap.get(u) || `参考图${i + 1}`;
-      if (i === 0) {
-        lines.push(
-          `【参考图 ${i + 1}】${name}：主体参考 —— 请严格保持图中物体的款式、颜色、材质、形状、图案与参考图完全一致；` +
-          `仅允许调整摆放位置/角度/场景，不得重新设计并改变该物体外观。`,
-        );
-      } else {
-        lines.push(
-          `【参考图 ${i + 1}】${name}：风格/背景/构图参考 —— 仅参考其整体氛围、色调、质感与布局；` +
-          `不得改变【参考图 1】中主体的外观。`,
-        );
-      }
+      lines.push(
+        `【参考图 ${i + 1}】${name}：请准确识别图中物体的款式、颜色、材质、形状、图案与细节；` +
+        `在生成时根据用户指令将该物体作为素材融入画面，保持其外观特征一致性。`,
+      );
     });
   }
   return lines.join('\n');
@@ -739,7 +689,15 @@ export default function NodeChatPrompt() {
         const count = urls?.length ?? 1;
         toast.success(count > 1 ? `生成完成，共 ${count} 张图` : '生成完成');
       } else if (ev.status === 'failed' || ev.status === 'refunded') {
-        useCanvas.getState().applyJobResult(ev.jobId, { generating: false });
+        useCanvas.getState().applyJobResult(ev.jobId, {
+          generating: false,
+          error: ev.error || '生成失败',
+          // 失败时清理旧结果，避免旧 resultUrl 导致 broken image 覆盖失败卡
+          resultUrl: undefined,
+          resultUrls: undefined,
+          resultIndex: 0,
+          savedToLibrary: false,
+        });
         useCanvas.getState().removeJob(ev.jobId);
         toast.error(ev.error || '生成失败，已退款');
       }
@@ -945,15 +903,13 @@ export default function NodeChatPrompt() {
     if (!anyOpen) return;
     const onDoc = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
-      // 检查是否点击在弹出框内部或触发按钮内部
+      // 仅当点击落在「浮层内容」或「对应触发按钮」内部时才保持打开；
+      // 其它任何点击（选中尺寸后点编辑框内、点节点本体、点画布、点页面其它区域）
+      // 一律关闭浮层 —— 满足「超出选择框范围点击即可关闭」的需求。
+      // 浮层本身通过 Portal + useAnchoredRect 实时跟随触发按钮，关闭不影响其定位。
       if (pickerRef.current?.contains(t) || chipRef.current?.contains(t)) return;
       if (aspectRef.current?.contains(t) || aspectBtnRef.current?.contains(t)) return;
       if (countRef.current?.contains(t)) return;
-      // 点击富文本输入区也视为浮层外部，关闭模型/参数浮层
-      if (t.closest('.node-prompt-input-wrap')) return;
-      // 节点本体 / 编辑器输入栏内的点击（含拖拽节点）不关闭浮层，
-      // 使其能随节点移动而跟随（修复：选择框不随节点移动）
-      if (t.closest('.pea-node') || t.closest('.node-chat-prompt')) return;
       setPickerOpen(false);
       setAspectOpen(false);
       setCountOpen(false);
@@ -1170,19 +1126,23 @@ useEffect(() => {
     // 上传图经 getPresignedUrl 解析为真实可外传签名 URL（blob 会被编排器丢弃，导致"参考图没上传"）。
     const referenceImages: string[] = [];
     const refNameMap = new Map<string, string>();
-    const addRef = (url: string | undefined, name: string) => {
+    const refNumberById = new Map<string, number>();
+    const addRef = (url: string | undefined, name: string, id?: string) => {
       if (!url) return;
-      if (!referenceImages.includes(url)) {
+      let num = referenceImages.indexOf(url);
+      if (num === -1) {
         referenceImages.push(url);
+        num = referenceImages.length - 1;
         refNameMap.set(url, name || `参考图${referenceImages.length}`);
       }
+      if (id && !refNumberById.has(id)) refNumberById.set(id, num + 1);
     };
     for (const id of refIds) {
       const n = nodes.find((x) => x.id === id);
       if (!n) continue;
       if (n.data.kind !== 'image' && n.data.kind !== 'video') continue;
       const url = await resolveUpstreamMediaUrl(n);
-      addRef(url, describeRef(n));
+      addRef(url, describeRef(n), n.id);
     }
     // 兜底：@ 选择器可能直接解析出 URL（未必能映射到节点），也并入并去重
     for (const url of parsed.referenceImages) {
@@ -1190,7 +1150,7 @@ useEffect(() => {
         const u = [x.data.url, x.data.resultUrl, ...(x.data.resultUrls || [])];
         return u.includes(url);
       });
-      addRef(url, describeRef(n));
+      addRef(url, describeRef(n), n?.id);
     }
 
     // 自动合并文本节点内容：① 上游连接的文本(排除已在 @ 中显式引用的，避免重复)
@@ -1214,13 +1174,15 @@ useEffect(() => {
       }
     }
 
-    // 参考图提示词编排：多图时显式编号 + 角色区分，避免模型混淆；单图时强调"主体严格一致"。
+    // 参考图提示词编排：多图时显式编号，避免模型混淆；单图时强调"主体严格一致"。
     // 说明块按数组顺序与上传的 reference_images 一一对应。
     const refBlock = buildReferenceBlock(referenceImages, refNameMap);
+    // 正文：把 @ 的媒体 token 替换为「参考图N」，与说明块编号一致，让模型精确对应。
+    const bodyWithRefs = inputRef.current?.getBodyText(refNumberById) ?? parsed.text;
     const parts: string[] = [];
     if (refBlock) parts.push(refBlock);
     if (autoTextParts.length) parts.push(autoTextParts.join('\n'));
-    if (parsed.text) parts.push(parsed.text);
+    if (bodyWithRefs) parts.push(bodyWithRefs);
     const finalPrompt = parts.join('\n\n').trim();
 
     if (!finalPrompt && referenceImages.length === 0) {
@@ -1306,13 +1268,26 @@ useEffect(() => {
         idempotencyKey: `gen-${single}-${Date.now()}`,
       });
       useCanvas.getState().registerJob(res.jobId, single);
-      update(single, { generating: true });
+      update(single, {
+        generating: true,
+        error: undefined,
+        // 新请求发起时清理旧结果，避免重试/二次生成时仍显示上次失败的图片
+        resultUrl: undefined,
+        resultUrls: undefined,
+        resultIndex: 0,
+        savedToLibrary: false,
+        lastJobId: res.jobId,
+      });
       toast.success(referenceImages.length ? `已受理，含 ${referenceImages.length} 张参考图` : '已受理，生成中…');
       // 轮询兜底：WS 事件若丢失，保证长任务结果仍回填到节点
       pollNodeJobResult(res.jobId);
       setTimeout(() => inputRef.current?.focus(), 0);
     } catch (e: any) {
-      toast.error(e?.response?.data?.message || '受理失败，请重试');
+      // 受理失败 (HTTP 4xx/5xx/网络) —— 节点不能卡在 generating=true,
+      // 否则 HUD 4 角 + 中心 TechLoader 一直转. 同时写 error 给失败卡显示.
+      const msg = e?.response?.data?.message || e?.message || '受理失败，请重试';
+      update(single, { generating: false, error: msg });
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }

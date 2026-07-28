@@ -18,7 +18,10 @@ export interface JobUpdatedEvent {
   type: JobType;
   status: JobStatus;
   progress?: number;
+  /** 完成后媒体 URL (主图，兼容单图) */
   resultUrl?: string | null;
+  /** 多图生成时的所有图片 URL (n > 1 时有值) */
+  resultUrls?: string[];
   error?: string | null;
   cost?: number;
   ts: number;
