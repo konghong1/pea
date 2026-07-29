@@ -37,7 +37,7 @@ export async function installEgressProxyFromEnv(): Promise<void> {
     delete process.env.https_proxy;
     delete process.env.http_proxy;
     logger.warn(
-      `[egress-proxy] 代理 ${proxy} 不可达, 已清除代理环境变量并退回直连 (axios/fetch 均直连)`,
+      `[egress-proxy] 代理 ${proxy} 端口不通或无法经它出网到外部 AI, 已清除代理环境变量并退回直连 (axios/fetch 均直连)`,
     );
     return;
   }
@@ -61,10 +61,12 @@ export async function installEgressProxyFromEnv(): Promise<void> {
 }
 
 /**
- * TCP 探测代理地址是否可连通(超时即判不可达)。
- * 仅校验“端口有人监听”, 不校验代理能否真正出网 —— 足以区分“坏/不存在的代理”与“可用代理”。
+ * 校验代理是否“真正可用” —— 不仅端口有人听, 还要能经它建隧道出网到外部 AI (apihub)。
+ * 仅 TCP 连通会漏报“端口有人听但代理是废的/无法出网”的情况: 那会导致 fetch-models
+ * 报 read ECONNRESET 这类令人困惑的错误。这里额外做一次真实 HTTP CONNECT 隧道到
+ * apihub:443, 只有隧道建成功才认为代理可用。
  */
-function isProxyReachable(proxyUrl: string, timeoutMs = 2000): Promise<boolean> {
+async function isProxyReachable(proxyUrl: string, timeoutMs = 3000): Promise<boolean> {
   let host: string | undefined;
   let port = 80;
   try {
@@ -72,24 +74,72 @@ function isProxyReachable(proxyUrl: string, timeoutMs = 2000): Promise<boolean> 
     host = u.hostname || undefined;
     port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
   } catch {
-    return Promise.resolve(false);
+    return false;
   }
-  if (!host) return Promise.resolve(false);
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  if (!host) return false;
+
   const net = require('net');
-  return new Promise<boolean>((resolve) => {
-    const socket = new net.Socket();
+  // 1) 先快速 TCP 连通性(端口有人听?)
+  const tcpOk = await new Promise<boolean>((resolve) => {
+    const s = net.connect(port, host as string);
     let settled = false;
     const done = (ok: boolean) => {
       if (settled) return;
       settled = true;
-      socket.destroy();
+      s.destroy();
       resolve(ok);
     };
-    socket.setTimeout(timeoutMs);
-    socket.once('connect', () => done(true));
-    socket.once('timeout', () => done(false));
-    socket.once('error', () => done(false));
-    socket.connect(port, host);
+    s.setTimeout(timeoutMs);
+    s.once('connect', () => done(true));
+    s.once('timeout', () => done(false));
+    s.once('error', () => done(false));
+  });
+  if (!tcpOk) return false;
+
+  // 2) 真实隧道测试: 经代理 CONNECT 到外部 AI (apihub:443), 验证能否真正出网
+  return tunnelTest('apihub.agnes-ai.com', 443, host, port, timeoutMs);
+}
+
+/**
+ * 经 HTTP 代理向 targetHost:targetPort 发起 CONNECT 隧道, 验证代理能否真正出网。
+ * 收到 “2xx Connection established” 即视为可用(只验证 TCP/TLS 隧道可达, 不依赖对端应用层)。
+ */
+function tunnelTest(
+  targetHost: string,
+  targetPort: number,
+  proxyHost: string,
+  proxyPort: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const net = require('net');
+  return new Promise<boolean>((resolve) => {
+    const sock = net.connect(proxyPort, proxyHost);
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      try {
+        sock.destroy();
+      } catch {
+        /* ignore */
+      }
+      resolve(ok);
+    };
+    sock.setTimeout(timeoutMs);
+    sock.once('timeout', () => done(false));
+    sock.once('error', () => done(false));
+    sock.once('connect', () => {
+      sock.write(
+        `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\nHost: ${targetHost}:${targetPort}\r\n\r\n`,
+      );
+    });
+    let buf = '';
+    sock.once('data', (d: Buffer) => {
+      buf += d.toString();
+      if (buf.includes('\r\n\r\n')) {
+        const statusLine = buf.split('\r\n')[0];
+        done(/^HTTP\/\d\.\d 2\d\d /.test(statusLine));
+      }
+    });
   });
 }

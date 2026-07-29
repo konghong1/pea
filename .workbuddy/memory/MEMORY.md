@@ -10,10 +10,13 @@
 - **Windows .bat/.cmd 必须纯 ASCII + CRLF**，否则 GBK 拆坏 UTF-8 中文乱码。
 
 ## ⚠️ 出网/代理三大陷阱（2026-07-29 定案，勿回退）
-- `PEA_PROXY_FIX` 服务器无本地代理必须=0；`PEA_AI_GATEWAY` 默认**空**（不兜底）。严禁再把 `host.docker.internal:33210` 写成任何默认值——那是开发机专属代理，服务器上会把真实错误掩盖成 `ECONNREFUSED 172.17.0.1:33210`。
-- 死代理防护已双端落地：bff `bootstrap-proxy.ts`（探测失败→**清 HTTP(S)_PROXY env**，axios 才获救）+ orchestrator `main.py:_ensure_proxy_strategy()`。
+- **服务器能直连 apihub（同机 ai-agent 已验证）**：2026-07-29 17:11 扒 ai-agent 代码证实——它的 docker-compose 同样注入 `HTTPS_PROXY=host.docker.internal:33210`（同死代理），但 LLM 客户端 `app/agent.py:211` 用 `httpx.Client(trust_env=False)` **默认直连、不碰 env 代理**，代理仅作兜底。ai-agent 在用户腾讯云服务器能通 agnes ⇒ **该服务器直连外部 AI 可达**。此前"服务器被墙、必须装代理"是基于本机沙箱网络的误判，已纠正。
+- **pea 修复 = 与 ai-agent 等价，强制默认直连**（代码已落，tsc/py_compile 全过）：① bff `providers.service.ts` 的 axios `proxy:false`；② orchestrator `engine.py` 的 httpx `trust_env=False`；③ `agnes_provider.py` 两处 requests 出网点 `proxies=None`；④ 保留 bootstrap-proxy/main.py 的隧道级死代理清 env 作双保险。**结论：服务器 `.env` 设 `PEA_PROXY_FIX=0`，pea 即走直连、与同机 ai-agent 同路可达；无需任何代理。**
+- `PEA_PROXY_FIX` 服务器无本地代理必须=0；`PEA_AI_GATEWAY` 默认**空**（不兜底）。严禁再把 `host.docker.internal:33210` 写成任何默认值——那是**开发沙箱专属**代理（只有跑着 WorkBuddy 沙箱出网代理的机器才有，本机实测它访问 apihub 返回 HTTP 200），服务器上把它当万能钥匙开 `PEA_PROXY_FIX=1` 只会让容器去连服务器自己的 docker 网桥（172.17.0.1）找根本不存在的代理 → ECONNREFUSED/ECONNRESET。
+- **`PEA_PROXY_FIX=1` 不是"开了就通"，是"告诉容器去这个地址找代理"**：地址必须指向服务器上**真实在跑、且能出网到 apihub** 的代理。正确姿势：在服务器部署能出境的 HTTP 代理，监听 `0.0.0.0:<port>`（**非 127.0.0.1**，否则容器经 host.docker.internal 经网桥 IP 访问不到），再 `.env` 设 `PEA_PROXY_FIX=1`+`PEA_EGRESS_PROXY=http://host.docker.internal:<port>`。没有这种代理就保持 =0（直连），靠 DNS-override 的真实 Cloudflare IP 走直连。
+- 死代理防护已双端落地且**已升级为真实出网校验**：bff `bootstrap-proxy.ts` 与 orchestrator `main.py:_ensure_proxy_strategy()` 现在不仅 TCP 探活，还会**真建 CONNECT 隧道到 apihub:443 验证能否出网**；只 TCP 通但代理是废的（ECONNRESET 根因）会被判失败→清 HTTP(S)_PROXY env→退回直连，报错变诚实。独立脚本验证：真代理=isProxyReachable true，死代理(127.0.0.1:9)=false。
 - `dns-override.yml` 的 extra_hosts IP 必须用 **DoH**（dns.google/cloudflare）验证；境内 UDP DNS（含 223.5.5.5）对 apihub.agnes-ai.com 会被抢答假 IP。当前真实 IP=Cloudflare 104.18.18.62/104.18.19.62。
-- 部署前先在服务器跑 `pea-server/check-egress.sh` 判定直连/需代理，按结论配 .env。
+- 部署前先在服务器跑 `pea-server/check-egress.sh` 判定直连/需代理，按结论配 .env。脚本已升级：读 `.env` 的 `PEA_EGRESS_PROXY`，并新增"**容器视角**"检测（代理只绑回环则容器访问不到，会提示改绑 0.0.0.0）。
 
 ## ⚠️ Docker 持久卷 DDL 陷阱（关键）
 - named volume 启动不重跑 `initdb.d/*.sql`，源码 DDL 变更不自动生效 → schema 漂移。

@@ -76,7 +76,12 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
     target = url
     for attempt in range(1, max_attempts + 1):
         try:
-            resp = requests.post(target, json=payload, headers=headers, timeout=timeout)
+            # proxies=None: 与 httpx(trust_env=False) 一致 —— 强制不走 HTTPS_PROXY 环境变量,
+            # 直接出网(服务器直连外部 AI 可达, 同机 ai-agent 已验证)。避免被注入的死代理劫持。
+            resp = requests.post(
+                target, json=payload, headers=headers, timeout=timeout,
+                proxies={"http": None, "https": None},
+            )
         except requests.ConnectionError as e:  # 连接级错误 -> 重试/兜底切换
             last_err = e
             if fallback_url and target != fallback_url:
@@ -407,9 +412,11 @@ class OpenAICompatibleProvider:
         last_err: Exception | None = None
         for attempt in range(1, 3):
             try:
+                # proxies=None: 强制直连(同 httpx trust_env=False), 不被死代理劫持。
                 resp = requests.get(
                     target, headers=self._headers(),
                     timeout=(settings.provider_http_connect_timeout_s, 60),
+                    proxies={"http": None, "https": None},
                 )
                 _raise_for_provider(resp, "video-status")
                 return resp.json()

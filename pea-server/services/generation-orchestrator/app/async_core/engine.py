@@ -43,6 +43,11 @@ async def _init_client() -> None:
     )
     _client = httpx.AsyncClient(
         # 位置参数=默认(read/write/pool), connect 单独覆盖; httpx 要求四参数或带默认, 缺一不可。
+        # trust_env=False: 与 ai-agent 的 httpx(trust_env=False) 等价 —— 强制不走 HTTPS_PROXY 环境变量,
+        # 直接出网。否则容器里注入的 HTTPS_PROXY=host.docker.internal:33210(开发机专属死代理)会劫持
+        # 所有出网调用(出图/出视频), 在服务器上表现为连接被重置/超时。服务器直连外部 AI 可达(同机
+        # ai-agent 已验证), 故默认直连最稳; 真需代理时由 PEA_PROXY_FIX 链路单独处理。
+        trust_env=False,
         timeout=httpx.Timeout(
             settings.provider_image_timeout_s,
             connect=settings.provider_http_connect_timeout_s,

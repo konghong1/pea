@@ -204,6 +204,10 @@ export class ProvidersService {
     const tryFetch = async (baseUrl: string): Promise<any[]> => {
       const url = normalizeModelsUrl(baseUrl);
       const { data } = await axios.get(url, {
+        // 🔑 与 ai-agent 的 httpx(trust_env=False) 等价: 强制不走 HTTPS_PROXY 环境变量,
+        // 直接出网。否则容器里的 HTTPS_PROXY=host.docker.internal:33210(开发机专属死代理)
+        // 会劫持本请求, 在服务器上表现为 read ECONNRESET / ECONNREFUSED。
+        proxy: false,
         headers: p.api_key ? { Authorization: `Bearer ${p.api_key}` } : {},
         timeout: 20000,
       });
