@@ -113,10 +113,10 @@ if [ "$DETACH" -eq 1 ]; then
     sleep 1
   done
   ok "服务已就绪："
-  echo -e "   ${C_G}Web${C_0}          http://localhost:8080"
-  echo -e "   ${C_G}BFF API${C_0}      http://localhost:4000"
+  echo -e "   ${C_G}Web${C_0}          http://localhost:8088"
+  echo -e "   ${C_G}BFF API${C_0}      http://localhost:4100"
   echo -e "   ${C_G}Orchestrator${C_0} http://localhost:8000/api/health"
   echo -e "   ${C_G}MinIO 控制台${C_0}  http://localhost:9001  (minioadmin/minioadmin)"
-  open_browser "http://localhost:8080" || true
+  open_browser "http://localhost:8088" || true
   info "查看日志: ./start.sh --logs   停止: ./start.sh --down"
 fi
