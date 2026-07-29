@@ -1,0 +1,26 @@
+# docker-compose.proxy-override.yml
+# 用途: 当宿主存在"出网代理"(如 WorkBuddy 沙箱代理, 监听宿主 33210) 且容器直连境外
+#       外部 AI 域名(apihub.agnes-ai.com)被污染/封锁时, 让 bff/orchestrator 经宿主代理出网。
+#       镜像 ai-agent 的方案: 容器经 host.docker.internal 走宿主代理。
+# 启用: .env 中 PEA_PROXY_FIX=1 时, start.sh 叠加本文件; 默认 0(关闭), 完全直连, 不强制。
+# 前置: 宿主代理须在 33210 运行 (否则出网 ECONNREFUSED)。改端口用 PEA_EGRESS_PROXY 覆盖。
+# 注意: bff=Node, 其内置 fetch 不读 HTTPS_PROXY, 已由代码(bootstrap-proxy.ts)接 undici
+#       代理; orchestrator=Python 自动读 env, 无需改代码。内部地址已在 NO_PROXY 走直连。
+services:
+  bff:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HTTPS_PROXY: ${PEA_EGRESS_PROXY:-http://host.docker.internal:33210}
+      HTTP_PROXY: ${PEA_EGRESS_PROXY:-http://host.docker.internal:33210}
+      NO_PROXY: localhost,127.0.0.1,::1,mysql,redis,minio,generation-orchestrator,bff
+      no_proxy: localhost,127.0.0.1,::1,mysql,redis,minio,generation-orchestrator,bff
+
+  generation-orchestrator:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HTTPS_PROXY: ${PEA_EGRESS_PROXY:-http://host.docker.internal:33210}
+      HTTP_PROXY: ${PEA_EGRESS_PROXY:-http://host.docker.internal:33210}
+      NO_PROXY: localhost,127.0.0.1,::1,mysql,redis,minio,bff,generation-orchestrator
+      no_proxy: localhost,127.0.0.1,::1,mysql,redis,minio,bff,generation-orchestrator

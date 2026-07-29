@@ -70,7 +70,15 @@ if [ "${PEA_DNS_FIX:-1}" != "0" ] && [ -f docker-compose.dns-override.yml ]; the
   DNS_OVERRIDE="-f docker-compose.dns-override.yml"
   warn "已叠加 DNS 修复 overlay (干净公共 DNS); 若环境 DNS 正常请在 .env 设 PEA_DNS_FIX=0"
 fi
-DC="$DC -f docker-compose.yml $DNS_OVERRIDE"
+# 可选叠加出网代理 overlay: 仅当 PEA_PROXY_FIX=1 时启用(默认关闭)。
+# 镜像 ai-agent 的方案 —— 容器经 host.docker.internal 走宿主沙箱代理(默认 33210)。
+# 前置: 宿主代理须运行, 否则出网 ECONNREFUSED。改代理地址用 PEA_EGRESS_PROXY 覆盖。
+PROXY_OVERRIDE=""
+if [ "${PEA_PROXY_FIX:-0}" = "1" ] && [ -f docker-compose.proxy-override.yml ]; then
+  PROXY_OVERRIDE="-f docker-compose.proxy-override.yml"
+  warn "已叠加出网代理 overlay (走宿主沙箱代理 ${PEA_EGRESS_PROXY:-33210}); 需宿主代理运行, 否则出网失败"
+fi
+DC="$DC -f docker-compose.yml $DNS_OVERRIDE $PROXY_OVERRIDE"
 
 # docker 守护进程是否可用
 if ! docker info >/dev/null 2>&1; then
