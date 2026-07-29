@@ -5,10 +5,12 @@ import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { installEgressProxyFromEnv } from './common/proxy/bootstrap-proxy';
 
-// 必须尽早执行: 覆盖 globalThis.fetch, 让后续所有出网请求(含 Node 内置 undici)走代理。
-installEgressProxyFromEnv();
-
 async function bootstrap() {
+  // 必须在监听端口前完成: ① 代理可达 => 覆盖 globalThis.fetch 走代理;
+  // ② 代理不可达 => 清除 HTTP(S)_PROXY env, 防止 axios 读到死代理导致
+  //   所有出网请求 ECONNREFUSED (fetch-models 报 172.17.0.1:33210 的根因之一)。
+  // await 保证首个请求到达时代理策略已定型, 无竞态。
+  await installEgressProxyFromEnv();
   const app = await NestFactory.create(AppModule);
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalPipes(

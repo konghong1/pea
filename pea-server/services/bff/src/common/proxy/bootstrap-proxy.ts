@@ -29,7 +29,16 @@ export async function installEgressProxyFromEnv(): Promise<void> {
   // 所有出网请求(含 fetch remote models)直接 ECONNREFUSED 全死。现在: 代理不可达时
   // 跳过安装、退回直连, 与 ai-agent 行为一致, 不再因坏代理硬崩。
   if (!(await isProxyReachable(proxy))) {
-    logger.warn(`[egress-proxy] 代理 ${proxy} 不可达, 跳过安装(退回直连, 与 ai-agent 行为一致)`);
+    // ★ 必须同时清掉环境变量: axios / got 等库会各自读 HTTP(S)_PROXY 走代理,
+    //   仅"跳过 fetch dispatcher 安装"救不了它们。死代理不清 env 的直接后果就是
+    //   /admin/providers/:id/fetch-models (axios) 报 connect ECONNREFUSED <代理IP>:33210。
+    delete process.env.HTTPS_PROXY;
+    delete process.env.HTTP_PROXY;
+    delete process.env.https_proxy;
+    delete process.env.http_proxy;
+    logger.warn(
+      `[egress-proxy] 代理 ${proxy} 不可达, 已清除代理环境变量并退回直连 (axios/fetch 均直连)`,
+    );
     return;
   }
 

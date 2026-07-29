@@ -203,8 +203,8 @@ class OpenAICompatibleProvider:
         self.model_name: str = cfg.get("model_name", "")
         self.provider_name: str = cfg.get("provider_name") or cfg.get("provider_id") or "provider"
         self.name = self.provider_name
-        # 网关兜底地址: 官方 base_url 不可达时回退。默认 host.docker.internal:33210
-        # (需 docker-compose extra_hosts 支持)。与 base_url 相同则视为无兜底。
+        # 网关兜底地址: 官方 base_url 不可达时回退。默认空(不兜底);
+        # 仅当显式配置 PEA_AI_GATEWAY 时启用。与 base_url 相同则视为无兜底。
         self.gateway_base: str = (settings.ai_gateway or "").strip()
 
     def _headers(self) -> dict:

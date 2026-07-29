@@ -9,6 +9,12 @@
 - 快速迭代 web：本地 `npm run build` → `docker cp web/dist/. pea-server-web-1:/usr/share/nginx/html/ && docker exec pea-server-web-1 nginx -s reload`；生产改仍 `docker compose up -d --build web`。
 - **Windows .bat/.cmd 必须纯 ASCII + CRLF**，否则 GBK 拆坏 UTF-8 中文乱码。
 
+## ⚠️ 出网/代理三大陷阱（2026-07-29 定案，勿回退）
+- `PEA_PROXY_FIX` 服务器无本地代理必须=0；`PEA_AI_GATEWAY` 默认**空**（不兜底）。严禁再把 `host.docker.internal:33210` 写成任何默认值——那是开发机专属代理，服务器上会把真实错误掩盖成 `ECONNREFUSED 172.17.0.1:33210`。
+- 死代理防护已双端落地：bff `bootstrap-proxy.ts`（探测失败→**清 HTTP(S)_PROXY env**，axios 才获救）+ orchestrator `main.py:_ensure_proxy_strategy()`。
+- `dns-override.yml` 的 extra_hosts IP 必须用 **DoH**（dns.google/cloudflare）验证；境内 UDP DNS（含 223.5.5.5）对 apihub.agnes-ai.com 会被抢答假 IP。当前真实 IP=Cloudflare 104.18.18.62/104.18.19.62。
+- 部署前先在服务器跑 `pea-server/check-egress.sh` 判定直连/需代理，按结论配 .env。
+
 ## ⚠️ Docker 持久卷 DDL 陷阱（关键）
 - named volume 启动不重跑 `initdb.d/*.sql`，源码 DDL 变更不自动生效 → schema 漂移。
 - 根治(T-OBS-04)：`infra/mysql/assert-migrated.sh` 幂等自检 + `dbmigrate` 一次性服务，`bff`/`orchestrator` 的 `depends_on` 加 `condition: service_completed_successfully`。**新 DDL：① 改 `01-schema.sql` ② 在脚本追加断言**。

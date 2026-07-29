@@ -192,7 +192,15 @@ export class ProvidersService {
   async fetchRemoteModels(id: string): Promise<{ models: RemoteModelEntry[] }> {
     const p = await this.getRaw(id);
     if (!p.base_url) throw new BadRequestException('provider has no base_url');
-    const gateway = (process.env.PEA_AI_GATEWAY || 'http://host.docker.internal:33210').replace(/\/+$/, '');
+    // AI 网关兜底: 仅在显式配置 PEA_AI_GATEWAY 时启用。
+    // ★ 默认必须为空 —— 之前默认 host.docker.internal:33210 是开发机专属代理,
+    //   服务器上无此代理, 兜底反而把真实的主地址错误掩盖成
+    //   "connect ECONNREFUSED 172.17.0.1:33210", 极难排查。
+    const gateway = (process.env.PEA_AI_GATEWAY || '').trim().replace(/\/+$/, '');
+    const errDetail = (e: any): string =>
+      e?.response?.data
+        ? JSON.stringify(e.response.data).slice(0, 300)
+        : e?.message ?? 'unknown';
     const tryFetch = async (baseUrl: string): Promise<any[]> => {
       const url = normalizeModelsUrl(baseUrl);
       const { data } = await axios.get(url, {
@@ -203,24 +211,25 @@ export class ProvidersService {
     };
     let list: any[] = [];
     const primary = p.base_url.replace(/\/+$/, '');
-    const useGateway = gateway && gateway !== primary;
+    const useGateway = !!gateway && gateway !== primary;
     try {
       list = await tryFetch(p.base_url);
     } catch (e: any) {
+      const primaryErr = errDetail(e);
       if (!useGateway) {
-        const detail = e?.response?.data
-          ? JSON.stringify(e.response.data).slice(0, 300)
-          : e?.message ?? 'unknown';
-        throw new BadRequestException(`fetch remote models failed: ${detail}`);
+        throw new BadRequestException(
+          `fetch remote models failed: ${primaryErr} (url=${normalizeModelsUrl(p.base_url)})`,
+        );
       }
       try {
-        console.warn(`[providers] official base_url unreachable, fallback to gateway ${gateway}`);
+        console.warn(`[providers] official base_url unreachable (${primaryErr}), fallback to gateway ${gateway}`);
         list = await tryFetch(gateway);
       } catch (e2: any) {
-        const detail = e2?.response?.data
-          ? JSON.stringify(e2.response.data).slice(0, 300)
-          : e2?.message ?? 'unknown';
-        throw new BadRequestException(`fetch remote models failed: ${detail}`);
+        // 两路都失败: 必须同时报出主地址与网关的错误, 不能只报网关错误掩盖根因。
+        throw new BadRequestException(
+          `fetch remote models failed: primary(${normalizeModelsUrl(p.base_url)}): ${primaryErr}; ` +
+          `gateway(${gateway}): ${errDetail(e2)}`,
+        );
       }
     }
     const models: RemoteModelEntry[] = list

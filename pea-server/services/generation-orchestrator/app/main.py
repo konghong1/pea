@@ -27,6 +27,11 @@ for _p in (_ROOT, _APP_PARENT):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
+import logging
+import os
+import socket
+from urllib.parse import urlparse
+
 from fastapi import FastAPI
 
 from app.api import router
@@ -35,6 +40,42 @@ from app.async_core import completer as completer_module
 from app.async_core import engine as engine_module
 from app.config import settings
 from app.worker import start as start_worker
+
+_proxy_logger = logging.getLogger("egress-proxy")
+
+
+def _ensure_proxy_strategy() -> None:
+    """死代理防护 (与 bff bootstrap-proxy 行为对齐).
+
+    requests/httpx 默认 trust_env=True, 会读取 HTTP(S)_PROXY 环境变量走代理。
+    若 compose 注入了代理 (PEA_PROXY_FIX=1) 但代理进程实际没在运行(常见:
+    把开发机 .env 原样搬上服务器), 则所有出网调用(生成/拉模型)都会
+    ECONNREFUSED <代理IP>:33210, 且报错掩盖真实原因。
+    这里在进程启动时 TCP 探测一次: 代理端口无人监听 => 清掉代理 env, 退回直连。
+    """
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") \
+        or os.environ.get("https_proxy") or os.environ.get("http_proxy")
+    if not proxy:
+        return
+    try:
+        u = urlparse(proxy)
+        host = u.hostname
+        port = u.port or (443 if u.scheme == "https" else 80)
+        if not host:
+            raise ValueError(f"bad proxy url: {proxy}")
+        with socket.create_connection((host, port), timeout=2):
+            pass
+        _proxy_logger.info("egress proxy %s reachable, keep proxy env", proxy)
+    except OSError:
+        for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+            os.environ.pop(k, None)
+        _proxy_logger.warning(
+            "egress proxy %s unreachable, cleared proxy env vars (fallback to direct)", proxy,
+        )
+
+
+# 必须在 worker / httpx 客户端启动前执行, 保证首个出网请求前代理策略已定型。
+_ensure_proxy_strategy()
 
 app = FastAPI(title="pea generation-orchestrator", version="0.1.0")
 app.include_router(router)

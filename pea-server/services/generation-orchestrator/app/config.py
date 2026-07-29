@@ -49,9 +49,11 @@ class Settings(BaseSettings):
     provider_video_submit_timeout_s: int = 900
     provider_http_connect_timeout_s: int = 15
     # AI 网关兜底地址: 当 provider 官方 base_url 不可达(连接错误)时, 自动回退到此网关。
-    # 默认 http://host.docker.internal:33210 (需 docker-compose 的 extra_hosts 支持,
-    # Linux 上 host.docker.internal 不自带, 靠 extra_hosts 注入)。设为空字符串则不做兜底。
-    ai_gateway: str = "http://host.docker.internal:33210"
+    # ★ 默认为空 = 不兜底。之前默认 host.docker.internal:33210 是开发机专属代理,
+    #   服务器上无此代理时兜底请求必然 ECONNREFUSED, 且会把真实的主地址错误
+    #   掩盖成 "connect ECONNREFUSED 172.17.0.1:33210"。
+    #   确有网关时通过环境变量 PEA_AI_GATEWAY 显式配置。
+    ai_gateway: str = ""
     # 视频轮询: 每 interval 秒查一次, 最多等 max 秒 (超时 -> 失败 -> 退款)。
     # 2026-07-28 修正: Agnes 晚高峰真实出片常需 5-10 分钟 (见 provider_video_submit_timeout_s 注释),
     # 原 300s 会把正常长任务误杀成 failed。与 submit 超时对齐放宽到 900s (15min)。

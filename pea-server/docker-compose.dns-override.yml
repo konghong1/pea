@@ -6,30 +6,27 @@
 #   1) dns:       给 bff / generation-orchestrator 指定干净公共 DNS(阿里 223.5.5.5 / 腾讯 119.29.29.29),
 #                 其它外部域名仍能正确解析, 绕过宿主被污染的递归解析器。
 #   2) extra_hosts: 把 apihub.agnes-ai.com 直接写死到容器 /etc/hosts (优先级高于 DNS),
-#                 使用本机干净 AliDNS 解析出的真实集群 IP, 保证该域名一定命中正确 IP, 不受任何 DNS 污染影响。
+#                 保证该域名一定命中真实 IP, 不受任何 DNS 污染影响。
 #                 用短字符串写法 "host:ip" (部分 docker compose 版本只支持字符串, 不支持 host:/ip: 对象写法)。
 #
-# 域名 -> IP 映射 (来自本机 `nslookup apihub.agnes-ai.com` 经 AliDNS 的非权威应答):
-#   IPv4: 118.193.202.219   162.125.7.1
-#   IPv6: 2001::629f:6c3a   2001::76c1:cadb
-# 注意: 这些是 CDN 多节点 IP, 可能随厂商调度变化。若日后失效, 重新 nslookup 取新 IP 覆盖本文件即可。
-# 若容器内无 IPv6 出口 (连 IPv6 报 network unreachable), 删掉两条 IPv6 的 extra_hosts 即可, IPv4 仍可用。
+# ★ 域名 -> IP 映射 (2026-07-29 经 DoH https://dns.google/resolve 与 Cloudflare DoH 双源交叉验证):
+#     apihub.agnes-ai.com = 104.18.18.62 / 104.18.19.62  (Cloudflare CDN Anycast, 相对稳定)
+#   之前写死的 118.193.202.219 / 162.125.7.1 是"被污染的假 IP"(162.125.x.x 是 Dropbox 网段!),
+#   写进 /etc/hosts 后反而导致永远连到假 IP —— 更新本文件时必须用 DoH 验证, 禁止用境内 UDP DNS 的应答。
+#   验证命令: curl -s "https://dns.google/resolve?name=apihub.agnes-ai.com&type=A"
+# 注意: 若服务器对该域名存在 TLS/SNI 阻断, 写对 IP 也无法直连, 需走出网代理 (见 .env 的 PEA_PROXY_FIX)。
 services:
   bff:
     dns:
       - "223.5.5.5"
       - "119.29.29.29"
     extra_hosts:
-      - "apihub.agnes-ai.com:118.193.202.219"
-      - "apihub.agnes-ai.com:162.125.7.1"
-      - "apihub.agnes-ai.com:2001::629f:6c3a"
-      - "apihub.agnes-ai.com:2001::76c1:cadb"
+      - "apihub.agnes-ai.com:104.18.18.62"
+      - "apihub.agnes-ai.com:104.18.19.62"
   generation-orchestrator:
     dns:
       - "223.5.5.5"
       - "119.29.29.29"
     extra_hosts:
-      - "apihub.agnes-ai.com:118.193.202.219"
-      - "apihub.agnes-ai.com:162.125.7.1"
-      - "apihub.agnes-ai.com:2001::629f:6c3a"
-      - "apihub.agnes-ai.com:2001::76c1:cadb"
+      - "apihub.agnes-ai.com:104.18.18.62"
+      - "apihub.agnes-ai.com:104.18.19.62"
