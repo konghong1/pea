@@ -1,0 +1,42 @@
+# docker-compose.dns-override.yml
+# 用途: 仅当宿主 DNS 被污染、容器解析不到外部 AI 域名(apihub.agnes-ai.com 等)时叠加使用。
+# 启用: .env 中 PEA_DNS_FIX=1 (默认) 时, start.sh 会自动 `-f` 叠加本文件; 设为 0 则不叠加, 完全走宿主默认 DNS (不强制)。
+#
+# 原理 (两层防护):
+#   1) dns:       给 bff / generation-orchestrator 指定干净公共 DNS(阿里 223.5.5.5 / 腾讯 119.29.29.29),
+#                 其它外部域名仍能正确解析, 绕过宿主被污染的递归解析器。
+#   2) extra_hosts: 把 apihub.agnes-ai.com 直接写死到容器 /etc/hosts (优先级高于 DNS),
+#                 使用本机干净 AliDNS 解析出的真实集群 IP, 保证该域名一定命中正确 IP, 不受任何 DNS 污染影响。
+#
+# 域名 -> IP 映射 (来自本机 `nslookup apihub.agnes-ai.com` 经 AliDNS 的非权威应答):
+#   IPv4: 118.193.202.219   162.125.7.1
+#   IPv6: 2001::629f:6c3a   2001::76c1:cadb
+# 注意: 这些是 CDN 多节点 IP, 可能随厂商调度变化。若日后失效, 重新 nslookup 取新 IP 覆盖本文件即可。
+# 若容器内无 IPv6 出口 (连 IPv6 报 network unreachable), 删掉两条 IPv6 的 extra_hosts 即可, IPv4 仍可用。
+services:
+  bff:
+    dns:
+      - "223.5.5.5"
+      - "119.29.29.29"
+    extra_hosts:
+      - host: "apihub.agnes-ai.com"
+        ip: "118.193.202.219"
+      - host: "apihub.agnes-ai.com"
+        ip: "162.125.7.1"
+      - host: "apihub.agnes-ai.com"
+        ip: "2001::629f:6c3a"
+      - host: "apihub.agnes-ai.com"
+        ip: "2001::76c1:cadb"
+  generation-orchestrator:
+    dns:
+      - "223.5.5.5"
+      - "119.29.29.29"
+    extra_hosts:
+      - host: "apihub.agnes-ai.com"
+        ip: "118.193.202.219"
+      - host: "apihub.agnes-ai.com"
+        ip: "162.125.7.1"
+      - host: "apihub.agnes-ai.com"
+        ip: "2001::629f:6c3a"
+      - host: "apihub.agnes-ai.com"
+        ip: "2001::76c1:cadb"

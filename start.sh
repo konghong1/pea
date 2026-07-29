@@ -21,6 +21,9 @@ if [ ! -f "$COMPOSE_FILE" ]; then
 fi
 cd "$COMPOSE_DIR"
 
+# 加载 .env (若存在) 以读取 PEA_DNS_FIX 等开关; 不影响 docker compose 自身自动读 .env
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
 # ----- 颜色 -----
 if [ -t 1 ]; then
   C_B="\033[1;34m"; C_G="\033[1;32m"; C_Y="\033[1;33m"; C_R="\033[1;31m"; C_0="\033[0m"
@@ -60,6 +63,15 @@ else
   exit 1
 fi
 
+# 可选叠加 DNS 修复 overlay: 宿主 DNS 被污染、容器解析不到外部 AI 域名时启用。
+# 默认开启 (PEA_DNS_FIX 默认 1), 以修复被污染环境; 若环境 DNS 正常, 在 .env 设 PEA_DNS_FIX=0 即完全走默认解析, 不强制。
+DNS_OVERRIDE=""
+if [ "${PEA_DNS_FIX:-1}" != "0" ] && [ -f docker-compose.dns-override.yml ]; then
+  DNS_OVERRIDE="-f docker-compose.dns-override.yml"
+  warn "已叠加 DNS 修复 overlay (干净公共 DNS); 若环境 DNS 正常请在 .env 设 PEA_DNS_FIX=0"
+fi
+DC="$DC -f docker-compose.yml $DNS_OVERRIDE"
+
 # docker 守护进程是否可用
 if ! docker info >/dev/null 2>&1; then
   err "Docker 守护进程未运行，请先启动 Docker Desktop。"
@@ -95,12 +107,15 @@ if [ -n "$RUNNING" ] && [ "$BUILD" -eq 0 ]; then
 fi
 
 # 构建并启动
+# 后台模式 (-d) 给 up 加 -d 真正后台运行并返回; 前台模式不加 -d 以便 Ctrl+C 停止 + 实时看日志
+UP_ARGS="--build"
+[ "$DETACH" -eq 1 ] && UP_ARGS="--build -d"
 if [ "$BUILD" -eq 1 ]; then
   info "重新构建镜像并启动..."
-  $DC up --build --force-recreate
+  $DC up $UP_ARGS --force-recreate
 else
   info "构建并启动全栈 (首次会拉镜像/建表，请稍候)..."
-  $DC up --build
+  $DC up $UP_ARGS
 fi
 
 # 若前台模式，启动命令会阻塞到这里；以下仅对 --detach 生效

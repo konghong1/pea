@@ -1,5 +1,11 @@
 # BFF (NestJS) 镜像
 FROM node:20-alpine AS build
+
+# 构建参数: 默认用国内 npm 镜像 (海外部署可覆盖:
+#   docker compose build --build-arg NPM_REGISTRY=https://registry.npmjs.org/)
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV npm_config_registry=$NPM_REGISTRY
+
 WORKDIR /app
 COPY services/bff/package*.json ./
 RUN npm install

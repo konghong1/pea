@@ -96,6 +96,8 @@ services:
       # 改密码只需改 PEA_ADMIN_PASSWORD 后 docker compose up -d bff 重启即可。
       PEA_ADMIN_EMAIL: "admin@pea.ai"
       PEA_ADMIN_PASSWORD: "${PEA_ADMIN_PASSWORD:-admin12345}"
+    # 外部 AI 域名(apihub 等) DNS: 默认走宿主 DNS; 若宿主 DNS 被污染导致拉取/出图失败,
+    # 由 .env 的 PEA_DNS_FIX=1 叠加 docker-compose.dns-override.yml 使用干净公共 DNS(见该文件注释)。
     ports:
       - "4100:4000"   # 宿主机 4000 被 WorkBuddy 自带 node 占用, 改用 4100 映射到容器内 4000; web 走内网 bff:4000 不受影响
     depends_on:
@@ -138,6 +140,7 @@ services:
       PEA_PROVIDER_HTTP_CONNECT_TIMEOUT_S: "15"
       # 真实模型出图：不走 mock。图像/视频直接透传提供商公网 CDN URL，浏览器直显。
       # （之前 PEA_FORCE_MOCK_TYPES=image,video 仅用于联调占位，已移除——用户要求调用真实模型。）
+    # 外部 AI 域名 DNS: 默认走宿主 DNS; 若被污染, 由 PEA_DNS_FIX=1 叠加 dns-override.yml 修复
     ports:
       - "8000:8000"
     depends_on:
