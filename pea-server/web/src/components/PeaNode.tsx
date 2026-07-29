@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Handle, Position, NodeProps } from 'reactflow';
+import { Handle, Position, NodeProps, useViewport } from 'reactflow';
 import { useCanvas, PeaNodeData } from '../store/canvas';
 import { toast } from '../store/toast';
 import { useAuth } from '../store/auth';
@@ -9,6 +9,9 @@ import { getFileUrl } from '../api/files';
 import { NODE_DEF_OF, PeaNodeKind } from '../constants/nodeTypes';
 import TechLoader from './TechLoader';
 import { retryNodeGeneration } from '../lib/nodeGeneration';
+
+/** 数值夹取，用于连接点跟随鼠标的小范围限制 */
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /**
  * 画布节点渲染：
@@ -20,7 +23,11 @@ import { retryNodeGeneration } from '../lib/nodeGeneration';
 export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const update = useCanvas((s) => s.updateNodeData);
   const select = useCanvas((s) => s.select);
-  const selected = useCanvas((s) => s.selectedIds.includes(id));
+  const selectedIdsArr = useCanvas((s) => s.selectedIds);
+  const selected = selectedIdsArr.includes(id);
+  // 多选（框选 / Shift 多选）时抑制单节点自身的「选中边框 + 功能条」，
+  // 只保留透明组选框 + 多选工具条，避免多个节点功能框堆叠干扰（需求3）。
+  const isMulti = selectedIdsArr.length > 1;
   const [hovered, setHovered] = useState(false);
   // 文本节点的编辑态：与 selected 解耦。
   // - 单击节点 → 只选中（可拖动，不会进编辑）
@@ -29,6 +36,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   // - 失焦 / 取消选中 → 自动退出编辑态
   const [editing, setEditing] = useState(false);
   const editRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // 拖动判定：mousedown 记录起点，click 时若位移>4px 视为拖动（不选中）
   const downXY = useRef<{ x: number; y: number } | null>(null);
@@ -45,6 +53,16 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const isUserUploadedImage = kind === 'image' && !!(data.fileKey || data.url) && !(data.resultUrl || data.resultUrls?.length);
   const def = NODE_DEF_OF(kind);
   const tagLabel = tagLabelOf(kind);
+
+  // ── 连接点反缩放（counter-scale）──────────────────────────────────────
+  // ReactFlow 会把整个节点按 zoom 缩放，导致缩小时连接点被压成 3px、还紧贴节点边，
+  // 用户「找不到连线点」。这里读取视口 zoom，给连接点套 scale(1/zoom)，
+  // 使其在任意缩放下都保持恒定屏幕尺寸；GAP 间距同样反缩放，保持与节点框恒定距离。
+  const { zoom = 1 } = useViewport();
+  const zClamped = Math.max(zoom, 0.1);
+  const inv = 1 / zClamped;
+  const HANDLE_GAP = 10; // 连接点与节点框的屏幕恒定间距(px)，补偿锚点偏移后实际 gap≈3px 贴边
+  const handleOffset = -HANDLE_GAP / zClamped; // 节点空间下的偏移
 
   // 将 data.aspectRatio（如 "9:16"）映射为节点尺寸
   // 仅空白节点使用；有内容后由 CSS aspect-ratio:auto 接管（按实际媒体比例包裹）
@@ -148,9 +166,80 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
 
   return (
     <div
-      className={`pea-node ${selected ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''} ${data.generating ? 'is-generating' : ''}`}
+      ref={rootRef}
+      className={`pea-node ${selected && !isMulti ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''} ${data.generating ? 'is-generating' : ''}`}
       onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      onMouseLeave={() => {
+        setHovered(false);
+        // 鼠标移出节点：所有连接点跟随偏移归零
+        const el = rootRef.current;
+        if (el) {
+          el.style.setProperty('--pea-hx-l', '0px');
+          el.style.setProperty('--pea-hy-l', '0px');
+          el.style.setProperty('--pea-hx-r', '0px');
+          el.style.setProperty('--pea-hy-r', '0px');
+        }
+      }}
+      onMouseMove={(e) => {
+        // ── 连接点独立热区跟随逻辑（带弹回边界）────────────────────
+        // 只有鼠标进入某个 handle 的热区半径(45px屏幕像素)内时，
+        // 该 handle 才跟随鼠标小范围移动；另一个保持初始位置。
+        // 弹回效果：handle 不能越过节点框边缘，碰到就钳制在边界上。
+        const el = rootRef.current;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const mx = e.clientX;
+        const my = e.clientY;
+
+        // 左/右 handle 的初始中心位置（屏幕坐标）
+        const GAP_SCREEN = HANDLE_GAP; // 屏幕像素间距
+        const leftCx = r.left - GAP_SCREEN;   // 左 handle 初始中心 x（节点左边缘往左 GAP）
+        const rightCx = r.right + GAP_SCREEN;  // 右 handle 初始中心 x（节点右边缘往右 GAP）
+        const cy = r.top + r.height / 2;       // 垂直居中
+
+        const HOT_RADIUS = 45; // 热区半径(屏幕 px)，鼠标进入此范围才激活跟随
+
+        const distLeft = Math.hypot(mx - leftCx, my - cy);
+        const distRight = Math.hypot(mx - rightCx, my - cy);
+
+        // ── 弹回边界 ──
+        // handle 不能进入节点框内部：
+        //   左 handle 往右最多到节点左边缘(dx ≤ GAP_SCREEN)
+        //   右 handle 往左最多到节点右边缘(dx ≥ -GAP_SCREEN)
+        //   垂直方向不超出节点上下边缘(dy 限制按节点半高留余量)
+        const FOLLOW_MAX_X_OUT = 14;    // 向外（远离节点）最大跟随距离
+        const FOLLOW_MAX_Y = 18;        // 垂直方向最大跟随距离
+        const VERTICAL_MARGIN = 12;     // 上下边距节点边缘的最小距离
+
+        if (distLeft < HOT_RADIUS && distLeft <= distRight) {
+          // 鼠标在左 handle 热区内：左 handle 跟随，带弹回边界
+          // 左 handle: dx > 0 是朝向节点(受弹回限制), dx < 0 是远离节点(自由)
+          const dx = clamp(mx - leftCx, -FOLLOW_MAX_X_OUT, GAP_SCREEN);
+          // 垂直方向不超出节点上下范围
+          const dy = clamp(my - cy, -Math.min(FOLLOW_MAX_Y, cy - r.top - VERTICAL_MARGIN),
+                                Math.min(FOLLOW_MAX_Y, r.bottom - cy - VERTICAL_MARGIN));
+          el.style.setProperty('--pea-hx-l', `${dx.toFixed(1)}px`);
+          el.style.setProperty('--pea-hy-l', `${dy.toFixed(1)}px`);
+          el.style.setProperty('--pea-hx-r', '0px');
+          el.style.setProperty('--pea-hy-r', '0px');
+        } else if (distRight < HOT_RADIUS) {
+          // 鼠标在右 handle 热区内：右 handle 跟随，带弹回边界
+          // 右 handle: dx < 0 是朝向节点(受弹回限制), dx > 0 是远离节点(自由)
+          const dx = clamp(mx - rightCx, -GAP_SCREEN, FOLLOW_MAX_X_OUT);
+          const dy = clamp(my - cy, -Math.min(FOLLOW_MAX_Y, cy - r.top - VERTICAL_MARGIN),
+                                Math.min(FOLLOW_MAX_Y, r.bottom - cy - VERTICAL_MARGIN));
+          el.style.setProperty('--pea-hx-l', '0px');
+          el.style.setProperty('--pea-hy-l', '0px');
+          el.style.setProperty('--pea-hx-r', `${dx.toFixed(1)}px`);
+          el.style.setProperty('--pea-hy-r', `${dy.toFixed(1)}px`);
+        } else {
+          // 鼠标不在任何 handle 热区：都归零（显示在初始位置）
+          el.style.setProperty('--pea-hx-l', '0px');
+          el.style.setProperty('--pea-hy-l', '0px');
+          el.style.setProperty('--pea-hx-r', '0px');
+          el.style.setProperty('--pea-hy-r', '0px');
+        }
+      }}
       onMouseDown={(e) => {
         if ((e.target as HTMLElement).closest('.react-flow__handle')) return;
         downXY.current = { x: e.clientX, y: e.clientY };
@@ -162,23 +251,41 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       }}
       onDoubleClick={onNodeDoubleClick}
       data-kind={kind}
-      style={outerStyle}
+      style={{ ...outerStyle, '--inv': String(inv), '--pea-hx-l': '0px', '--pea-hy-l': '0px', '--pea-hx-r': '0px', '--pea-hy-r': '0px' } as React.CSSProperties}
     >
       {/* 左手柄：用户上传的图片不需要接收其他节点输入，隐藏 */}
       {!isUserUploadedImage && (
         <Handle
           type="target"
           position={Position.Left}
-          className="pea-handle"
-          style={{ left: -10, top: '50%', transform: 'translateY(-50%)' }}
-        />
+          className="pea-handle pea-handle-left"
+          style={{
+            left: handleOffset,
+            top: '50%',
+            transformOrigin: 'right center',
+            // 独立跟随变量：--pea-hx-l / --pea-hy-l
+            '--pea-hx': 'var(--pea-hx-l)',
+            '--pea-hy': 'var(--pea-hy-l)',
+          } as React.CSSProperties}
+        >
+          <HandleGlyph />
+        </Handle>
       )}
       <Handle
         type="source"
         position={Position.Right}
-        className="pea-handle"
-        style={{ right: -10, top: '50%', transform: 'translateY(-50%)' }}
-      />
+        className="pea-handle pea-handle-right"
+        style={{
+          right: handleOffset,
+          top: '50%',
+          transformOrigin: 'left center',
+          // 独立跟随变量：--pea-hx-r / --pea-hy-r
+          '--pea-hx': 'var(--pea-hx-r)',
+          '--pea-hy': 'var(--pea-hy-r)',
+        } as React.CSSProperties}
+      >
+        <HandleGlyph />
+      </Handle>
 
       {/* 顶部标签：所有节点始终显示 */}
       <div className="pea-node-tag-pill">
@@ -1031,6 +1138,18 @@ function GenericNodeBody({
             <div className="pea-node-generic-hint">选中后在下方输入栏描述生成内容</div>
           )}
         </div>
+  );
+}
+
+/* 连接点图标：科技感「连接端口」——外环 + 旋转虚线转子 + 发光核心。
+   缩小时仍清晰可辨，悬停/连线时转子旋转。 */
+function HandleGlyph() {
+  return (
+    <svg className="pea-handle-glyph" viewBox="0 0 24 24" aria-hidden>
+      <circle className="hg-ring" cx="12" cy="12" r="7.5" />
+      <circle className="hg-rotor" cx="12" cy="12" r="10" />
+      <circle className="hg-core" cx="12" cy="12" r="3.2" />
+    </svg>
   );
 }
 

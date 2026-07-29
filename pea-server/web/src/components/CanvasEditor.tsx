@@ -38,6 +38,7 @@ import { useAuth } from '../store/auth';
 import { useTheme } from '../store/theme';
 import { canvasesApi } from '../api/canvases';
 import PeaNode from './PeaNode';
+import GroupNode from './GroupNode';
 
 // dev/E2E 钩子：暴露 zustand store 到 window，方便 verify 脚本注入测试数据。
 // - dev 模式始终暴露；
@@ -54,12 +55,13 @@ import SidePanel from './SidePanel';
 import MaterialPanel from './MaterialPanel';
 import NodeChatPrompt from './NodeChatPrompt';
 import TextNodeToolbar from './TextNodeToolbar';
+import MultiSelectToolbar from './MultiSelectToolbar';
 import {
   NODE_DEF_OF,
   PeaNodeKind,
 } from '../constants/nodeTypes';
 
-const nodeTypes = { pea: PeaNode };
+const nodeTypes = { pea: PeaNode, group: GroupNode };
 const edgeTypes = { pea: PeaEdge };
 
 /**
@@ -918,12 +920,26 @@ function Flow() {
   // （width/height/positionAbsolute/selected/dragging/measured 等），避免脏字段写回导致
   // 重新加载时视口/布局抖动、表现为「同一画布数据不一致」。
   const cleanGraph = (nodes: any[], edges: any[]) => ({
-    nodes: nodes.map((n: any) => ({
-      id: n.id,
-      type: n.type || 'pea',
-      position: n.position,
-      data: n.data,
-    })),
+    nodes: nodes.map((n: any) => {
+      const base: Record<string, unknown> = {
+        id: n.id,
+        type: n.type || 'pea',
+        position: n.position,
+        data: n.data,
+      };
+      // Group 节点需持久化容器尺寸与父子关系，否则刷新后分组丢失
+      if (n.type === 'group') {
+        base.parentNode = n.parentNode;
+        base.extent = n.extent;
+        base.style = n.style ? { width: n.style.width, height: n.style.height } : undefined;
+      }
+      // 子节点需持久化 parentNode + extent（指向父组）
+      if (n.parentNode) {
+        base.parentNode = n.parentNode;
+        base.extent = n.extent;
+      }
+      return base;
+    }),
     edges: edges.map((e: any) => ({
       id: e.id,
       source: e.source,
@@ -1427,6 +1443,7 @@ function Flow() {
       <ZoomVarSync />
       <TextNodeToolbar />
       <NodeChatPrompt />
+      <MultiSelectToolbar />
 
       {menu && (
         <>

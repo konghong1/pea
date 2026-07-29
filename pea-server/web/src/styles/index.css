@@ -974,58 +974,100 @@ body {
 /* 文本节点内容区：回流文本直接写入可编辑区（与用户输入同区） */
 .pea-node-text-wrap { width: 100%; }
 
-/* 节点连接手柄：默认显示小圆点（让用户知道这里能拖线），hover/选中时放大显 +
-   ReactFlow 默认 handle 是 pointer-events:none，事件穿透到 node，由 ReactFlow 用 elementsFromPoint 探测 handle */
+/* 节点连接手柄：科技感「连接端口」图标（SVG 见 PeaNode.tsx <HandleGlyph/>）。
+   反缩放策略：手柄在 JSX 里套了 scale(1/zoom)，这里只管视觉与尺寸；
+   width/height 是节点空间值，经父级 zoom 与手柄自身的 1/zoom 抵消后，
+   在屏幕上恒为下面这些 px —— 缩小时也恒定大小、恒定间距，一眼可定位。 */
 .react-flow__handle.pea-handle {
-  width: 10px !important;
-  height: 10px !important;
+  width: 13px !important;
+  height: 13px !important;
+  min-width: 13px !important;
+  min-height: 13px !important;
   border-radius: 50% !important;
-  background: rgba(255, 255, 255, 0.45) !important;
-  border: 1px solid rgba(255, 255, 255, 0.55) !important;
-  opacity: 1 !important;
-  pointer-events: all !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  /* 默认隐藏：连接点仅在鼠标悬停节点时出现（需求1） */
+  opacity: 0 !important;
+  pointer-events: none !important;
   cursor: crosshair !important;
   /* 关键：手柄在 DOM 中先于 .pea-node-body-card 渲染，
-     若不抬升层级，节点主体会盖住手柄的命中区域，导致连线无法发起。
-     抬到 body 之上即可让 mousedown 落在手柄上。 */
+     若不抬升层级，节点主体会盖住手柄的命中区域，导致连线无法发起。 */
   z-index: 10 !important;
-  transition: width 0.15s ease, height 0.15s ease, background 0.15s ease,
-    border-color 0.15s ease !important;
   display: flex !important;
   align-items: center;
   justify-content: center;
+  overflow: visible !important;
+  filter: drop-shadow(0 0 3px rgba(31, 162, 220, 0.55)) !important;
+  /* 反缩放 + 鼠标小范围跟随：--inv / --pea-hx / --pea-hy 由 PeaNode 注入，
+     经父级 zoom 与 scale(inv) 抵消后，位移在屏幕上保持恒定像素。 */
+  transform: translate(calc(var(--pea-hx, 0px) * var(--inv, 1)), calc(var(--pea-hy, 0px) * var(--inv, 1))) translateY(-50%) scale(var(--inv, 1)) !important;
+  transition: opacity 0.16s ease,
+    width 0.16s cubic-bezier(0.34, 1.56, 0.64, 1),
+    height 0.16s cubic-bezier(0.34, 1.56, 0.64, 1),
+    filter 0.16s ease !important;
 }
-.react-flow__handle.pea-handle::after {
-  content: '';
-  font-size: 14px;
-  line-height: 1;
-  color: rgba(0, 0, 0, 0.85);
+.pea-handle-glyph {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  pointer-events: none;
+}
+.pea-handle-glyph .hg-ring {
+  fill: none;
+  stroke: var(--pea-brand, #1fa2dc);
+  stroke-width: 1.6;
+  opacity: 0.9;
+}
+.pea-handle-glyph .hg-core {
+  fill: var(--pea-brand, #1fa2dc);
+  filter: drop-shadow(0 0 3px var(--pea-brand, #1fa2dc));
+}
+.pea-handle-glyph .hg-rotor {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.4;
+  stroke-dasharray: 3 4;
+  stroke-linecap: round;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 0.2s ease;
 }
-.pea-node.hover .pea-handle,
-.pea-node.selected .pea-handle {
-  /* 选中/悬停: 把手从默认 6x6 放大到 10x10, 配品牌色, 但去掉 3px 大光晕 —— 避免节点像被 4 个白点框住 */
-  width: 10px !important;
-  height: 10px !important;
-  background: var(--pea-brand, #38e1ff) !important;
-  border-color: #fff !important;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+
+/* 悬停节点：连接点显现 + 放大 + 转子旋转（需求1：仅悬停时展示） */
+.pea-node.hover .pea-handle {
+  opacity: 1 !important;
+  pointer-events: all !important;
+  width: 19px !important;
+  height: 19px !important;
+  filter: drop-shadow(0 0 7px rgba(31, 162, 220, 0.9)) !important;
 }
-.pea-node.hover .pea-handle::after,
-.pea-node.selected .pea-handle::after {
-  content: '';
-  /* 不再画 "+" 号, 简洁 */
+.pea-node.hover .pea-handle .hg-rotor {
+  opacity: 0.9;
+  animation: pea-handle-spin 3.2s linear infinite;
 }
-.dark .pea-node.hover .pea-handle,
-.dark .pea-node.selected .pea-handle {
-  background: #fff !important;
+
+/* 连线进行中：正在拖拽的源手柄始终可见并放大（即使鼠标已移出节点） */
+.react-flow__handle.pea-handle.connectingfrom {
+  opacity: 1 !important;
+  pointer-events: all !important;
+  width: 22px !important;
+  height: 22px !important;
+  filter: drop-shadow(0 0 10px rgba(31, 162, 220, 1)) !important;
 }
-.react-flow__handle.pea-handle.connectingfrom,
-.react-flow__handle.pea-handle.connectionindicator {
-  background: var(--pea-brand) !important;
-  border-color: #fff !important;
+.react-flow__handle.pea-handle.connectingfrom .hg-rotor {
+  opacity: 1;
+  animation: pea-handle-spin 1.6s linear infinite;
 }
+
+@keyframes pea-handle-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 暗色：保持品牌青色辉光（科技感更强），外环略加粗提升对比 */
+.dark .pea-handle-glyph .hg-ring { stroke-width: 1.8; }
 
 /* ===== 自定义画布缩放控件 (对齐 @image#2) ===== */
 .pea-zoom-controls {
@@ -1250,9 +1292,14 @@ body {
   background: rgba(31, 162, 220, 0.08);
   border: 1px solid var(--pea-brand);
 }
+/* 框选组选框：多选时完全透明不可见，仅用多选工具条传达选区（需求3）。
+   关键：这是 SVG <rect> 元素，必须用 fill/stroke 而非 background/border！
+   pointer-events:none —— 透明框不应拦截对底层节点的 hover/点击。 */
 .react-flow__nodesselection-rect {
-  background: rgba(31, 162, 220, 0.08);
-  border: 1px solid var(--pea-brand);
+  fill: transparent !important;
+  stroke: transparent !important;
+  stroke-width: 1px !important;
+  pointer-events: none !important;
 }
 /* 自管框选矩形（Shift+拖拽空白处） */
 .pea-sel-box {
@@ -5670,3 +5717,577 @@ body {
 .node-canvas-pick-exit:hover {
   background: rgba(255, 255, 255, 0.28);
 }
+
+/* ============================================================
+ * MultiSelectToolbar — 多选工具条 & 中心 + 按钮
+ * 当选中多个节点时显示：下方工具栏 + 选择区域中心添加按钮
+ * ============================================================ */
+
+/** 中心 + 添加按钮（圆形，脉冲动画） */
+/* 选中框右侧「添加节点」按钮：复用节点卡片视觉语言（玻璃拟态圆角卡 + 品牌色），
+   与画布节点框同风格、与节点框同距（需求4）。 */
+.multiselect-plus-btn {
+  position: fixed;
+  z-index: 45;
+  width: 46px;
+  height: 52px;
+  border-radius: 12px;
+  background: rgba(24, 24, 28, 0.92);
+  backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  color: var(--pea-brand, #1fa2dc);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transform: translate(-50%, -50%);
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+              box-shadow 0.18s ease,
+              border-color 0.18s ease,
+              background 0.18s ease;
+  /* 脉冲光环动画 */
+  animation: mst-pulse-ring 2s ease-out infinite;
+}
+.multiselect-plus-btn:hover {
+  transform: translate(-50%, -50%) scale(1.06);
+  border-color: var(--pea-brand, #1fa2dc);
+  background: rgba(28, 28, 36, 0.96);
+  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.45), 0 6px 22px rgba(31, 162, 220, 0.32);
+}
+.multiselect-plus-btn:active {
+  transform: translate(-50%, -50%) scale(0.97);
+}
+.multiselect-plus-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  line-height: 1;
+}
+.mpi-icon { font-size: 18px; }
+.mpi-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.78);
+  letter-spacing: 0.5px;
+}
+
+@keyframes mst-pulse-ring {
+  0% { box-shadow: 0 0 0 0 rgba(31, 162, 220, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3); }
+  60% { box-shadow: 0 0 0 10px rgba(31, 162, 220, 0), 0 2px 8px rgba(0, 0, 0, 0.3); }
+  100% { box-shadow: 0 0 0 0 rgba(31, 162, 220, 0), 0 2px 8px rgba(0, 0, 0, 0.3); }
+}
+
+/** 下方工具栏（暗色胶囊） */
+.multiselect-toolbar {
+  position: fixed;
+  z-index: 45;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  background: rgba(24, 24, 28, 0.92);
+  backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 6px 24px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
+  animation: mst-fade-in 0.18s ease-out;
+}
+
+@keyframes mst-fade-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(-6px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.mst-inner {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/** 工具栏按钮 */
+.mst-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.14s ease;
+  line-height: 1;
+}
+.mst-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.mst-btn:active {
+  transform: scale(0.95);
+}
+
+/** 主操作按钮（+ 插入节点）— 品牌色高亮 */
+.mst-btn.mst-primary {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #1fa2dc, #0d8ab8);
+  color: #fff;
+  font-size: 13px;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(31, 162, 220, 0.35);
+}
+.mst-btn.mst-primary:hover {
+  background: linear-gradient(135deg, #22b8f0, #1fa2dc);
+  box-shadow: 0 3px 12px rgba(31, 162, 220, 0.5);
+  transform: scale(1.08);
+}
+
+/** 危险操作（删除） */
+.mst-btn.mst-danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+/** 分隔线 */
+.mst-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 0 3px;
+}
+
+/** 选中数量角标 */
+.mst-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #1fa2dc;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(31, 162, 220, 0.4);
+  pointer-events: none;
+}
+
+/* ============================================================
+ * MultiSelectNodePicker — 多选插入节点的选择器弹窗
+ * ============================================================ */
+
+.msnp-picker {
+  min-width: 280px;
+  max-width: 340px;
+  border-radius: 14px;
+  background: rgba(28, 28, 36, 0.96);
+  backdrop-filter: blur(20px) saturate(200%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  overflow: hidden;
+  animation: msnp-pop 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes msnp-pop {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/** 标题区 */
+.msnp-header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.msnp-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+.msnp-subtitle {
+  display: block;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.42);
+  margin-top: 2px;
+}
+
+/** 连线预览区 */
+.msnp-edges-preview {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(31, 162, 220, 0.04);
+}
+.msnp-edges-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+.msnp-edges-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 100px;
+  overflow-y: auto;
+}
+.msnp-edge-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.03);
+}
+.msnp-edge-src {
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msnp-edge-arrow {
+  font-size: 9px;
+  color: #1fa2dc;
+  flex-shrink: 0;
+}
+.msnp-edge-tgt {
+  max-width: 70px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msnp-edge-badge {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(31, 162, 220, 0.15);
+  color: #1fa2dc;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/** 节点类型网格 */
+.msnp-grid {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.msnp-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.13s ease;
+  text-align: left;
+}
+.msnp-item:hover,
+.msnp-item.hl {
+  background: rgba(31, 162, 220, 0.1);
+}
+.msnp-item:active {
+  transform: scale(0.98);
+}
+.msnp-item-icon {
+  font-size: 18px;
+  width: 28px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.msnp-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.msnp-item-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+}
+.msnp-item-desc {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+/** 底部提示 */
+.msnp-footer {
+  padding: 8px 14px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.32);
+  text-align: center;
+}
+
+/* Dark mode 微调（当前已是暗色主题为主，这里做亮色适配） */
+.light .multiselect-toolbar {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 6px 24px rgba(0, 0, 0, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.03) inset;
+}
+.light .mst-btn {
+  color: rgba(0, 0, 0, 0.65);
+}
+.light .mst-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.9);
+}
+.light .msnp-picker {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(0, 0, 0, 0.02) inset;
+}
+.light .msnp-title { color: #1a1a1a; }
+.light .msnp-subtitle { color: rgba(0, 0, 0, 0.4); }
+.light .msnp-edge-item { color: rgba(0, 0, 0, 0.55); background: rgba(0, 0, 0, 0.02); }
+.light .msnp-edge-src { color: rgba(0, 0, 0, 0.8); }
+.light .msnp-item-label { color: rgba(0, 0, 0, 0.85); }
+.light .msnp-item-desc { color: rgba(0, 0, 0, 0.38); }
+.light .msnp-footer { color: rgba(0, 0, 0, 0.3); }
+.light .msnp-edges-preview { background: rgba(31, 162, 220, 0.03); }
+
+/* ═══════════════════════════════════════════════════════════════
+   GroupNode — 打组容器
+   ═══════════════════════════════════════════════════════════════ */
+
+.pea-group-node {
+  width: 100%;
+  height: 100%;
+  min-width: 180px;
+  min-height: 140px;
+  border-radius: 16px;
+  background: rgba(18, 20, 24, 0.85);
+  backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pea-group-node.selected {
+  border-color: rgba(31, 162, 220, 0.5);
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.4),
+    0 0 0 2px rgba(31, 162, 220, 0.15),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* ── 顶部工具栏 ── */
+.pgn-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  min-height: 38px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  flex-shrink: 0;
+}
+
+.pgn-header-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.pgn-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1fa2dc, #22b8f0);
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(31, 162, 220, 0.5);
+}
+
+.pgn-icon {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+  flex-shrink: 0;
+}
+
+.pgn-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.82);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.3px;
+}
+
+/* ── 右侧操作区 ── */
+.pgn-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.pgn-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+}
+
+.pgn-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.pgn-btn span {
+  font-size: 11.5px;
+}
+
+/* ── 布局切换下拉 ── */
+.pgn-layout-wrap {
+  position: relative;
+}
+
+.pgn-layout-trigger.active {
+  background: rgba(31, 162, 220, 0.15);
+  color: #5bc8f7;
+}
+
+.pgn-layout-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 70;
+  min-width: 150px;
+  padding: 5px;
+  border-radius: 10px;
+  background: rgba(28, 30, 36, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  animation: pgn-pop-in 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes pgn-pop-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.pgn-layout-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+}
+
+.pgn-layout-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.pgn-layout-item.active {
+  color: #5bc8f7;
+  background: rgba(31, 162, 220, 0.1);
+}
+
+.pgn-layout-item.pgn-danger:hover {
+  background: rgba(240, 72, 72, 0.12);
+  color: #ff7878;
+}
+
+.pgn-layout-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* ── ReactFlow 组节点 wrapper 调整 ── */
+.react-flow__node.group {
+  z-index: 1 !important; /* 组容器压在普通节点之下，子节点在其上 */
+}
+
+.react-flow__node[groupParentId] {
+  z-index: 5 !important; /* 子节点抬升，不被兄弟组容器遮挡 */
+}
+
+/* ── 亮色适配 ── */
+.light .pea-group-node {
+  background: rgba(255, 255, 255, 0.75);
+  border-color: rgba(0, 0, 0, 0.07);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+.light .pea-group-node.selected {
+  border-color: rgba(31, 162, 220, 0.35);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.1),
+    0 0 0 2px rgba(31, 162, 220, 0.1);
+}
+.light .pgn-header {
+  background: rgba(0, 0, 0, 0.02);
+  border-bottom-color: rgba(0, 0, 0, 0.05);
+}
+.light .pgn-label { color: rgba(0, 0, 0, 0.75); }
+.light .pgn-icon { color: rgba(0, 0, 0, 0.35); }
+.light .pgn-btn { color: rgba(0, 0, 0, 0.45); }
+.light .pgn-btn:hover { background: rgba(0, 0, 0, 0.05); color: rgba(0, 0, 0, 0.75); }
+.light .pgn-dot { box-shadow: 0 0 5px rgba(31, 162, 220, 0.35); }
+.light .pgn-layout-menu {
+  background: rgba(255, 255, 255, 0.97);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+}
+.light .pgn-layout-item { color: rgba(0, 0, 0, 0.6); }
+.light .pgn-layout-item:hover { background: rgba(0, 0, 0, 0.04); color: rgba(0, 0, 0, 0.85); }
+.light .pgn-layout-item.active { color: #1a8ccf; background: rgba(31, 162, 220, 0.06); }

@@ -86,6 +86,22 @@ interface CanvasState {
   bumpSave: () => void;
   /** 获取某节点的直接上游输入节点（按边建立顺序排序）。 */
   getUpstreamInputs: (nodeId: string) => Node<PeaNodeData>[];
+  /** 批量添加边（用于多选插入节点后的自动连线）。 */
+  addEdges: (newEdges: Edge[]) => void;
+  /**
+   * 多选插入节点：在选中节点集合的中心位置创建新节点，
+   * 并将所有从选中节点出发的 source 边重连到新节点的 target（左 handle）。
+   * 返回新创建的节点 ID。
+   */
+  insertNodeForSelection: (kind: PeaNodeKind, label: string) => string | null;
+  /** 打组：将选中的节点包裹进一个 Group 容器节点。 */
+  groupNodes: (nodeIds: string[]) => string | null;
+  /** 解组：移除 Group 容器，子节点脱离父级（保留绝对位置）。 */
+  ungroupNode: (groupId: string) => void;
+  /** 切换组内布局：grid(宫格) / horizontal(水平)。 */
+  reLayoutGroup: (groupId: string, layout: 'grid' | 'horizontal') => void;
+  /** 下载组：将组内所有节点的数据打包导出为 JSON 文件。 */
+  downloadGroup: (groupId: string) => void;
 }
 
 /** 基于当前 nodes 生成唯一 ID，防止模块级 seq 在热更新/加载画布后重复导致节点被覆盖。 */
@@ -119,19 +135,38 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     set({ canvasId: id, version, ...(title !== undefined ? { title } : {}) }),
   onNodesChange: (changes) => {
     const next = applyNodeChanges(changes, get().nodes) as any;
-    const ids = get().selectedIds;
+    let ids = get().selectedIds;
+
+    // 检测框选（box-selection）产生的 select 类型变更：
+    // ReactFlow 在拖拽框选时会发出 type='select' 的 change，
+    // 把被框选中的节点标记 selected=true / 未选中的标记 selected=false。
+    // 此时需要反向同步：从节点 selected 状态回写 selectedIds，
+    // 否则多选工具条等依赖 selectedIds.length > 1 的功能无法感知框选结果。
+    const hasSelectChanges = changes.some((c: any) => c.type === 'select');
+    if (hasSelectChanges) {
+      ids = next.filter((n: any) => n.selected).map((n: any) => n.id);
+    }
+
     // 受控选中：强制 node.selected 与 selectedIds 一致，
-    // 避免 ReactFlow 内部选中（如拖动节点）制造“选中但没弹框/弹错框”的错乱。
+    // 避免 ReactFlow 内部选中（如拖动节点）制造"选中但没弹框/弹错框"的错乱。
     const reconciled = next.map((n: any) =>
       n.selected === ids.includes(n.id) ? n : { ...n, selected: ids.includes(n.id) },
     );
     // 仅用户实质变更（拖动 position / 增删 / replace）才标脏。
-    // dimensions(ReactFlow 加载时尺寸测量) 与 select(受控选中) 是内部事件，
+    // dimensions(ReactFlow 加载时尺寸测量) 与 select(受控选中/框选) 是内部事件，
     // 不标脏——否则「进入画布即被自动保存」，导致 version 无谓递增、写放大、乐观锁冲突。
     const isUserChange = changes.some(
       (c: any) => c.type === 'position' || c.type === 'remove' || c.type === 'add' || c.type === 'replace',
     );
-    set({ nodes: reconciled, dirty: isUserChange ? true : get().dirty });
+    set({
+      nodes: reconciled,
+      dirty: isUserChange ? true : get().dirty,
+      // 框选时同步更新 selectedIds / selectedId
+      ...(hasSelectChanges ? {
+        selectedIds: ids,
+        selectedId: ids.length ? ids[ids.length - 1] : null,
+      } : {}),
+    });
   },
   onEdgesChange: (changes) => {
     // 同上：select(受控选中) 不标脏，仅 remove/add/position 等实质变更标脏。
@@ -213,12 +248,19 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     // 加载时清洗节点：丢弃 ReactFlow 运行时字段（width/height/positionAbsolute/
     // selected/dragging/measured 等），只保留持久化所需的字段，交由 ReactFlow 重新测量，
     // 避免陈旧测量值导致 fitView 视口抖动、看起来「内容变了」。
-    const cleanNode = (n: any) => ({
-      id: n.id,
-      type: n.type || 'pea',
-      position: n.position || { x: 0, y: 0 },
-      data: n.data || {},
-    });
+    const cleanNode = (n: any) => {
+      const base: Record<string, unknown> = {
+        id: n.id,
+        type: n.type || 'pea',
+        position: n.position || { x: 0, y: 0 },
+        data: n.data || {},
+      };
+      // 保留父子关系与容器尺寸（分组节点/子节点必需）
+      if (n.parentNode) base.parentNode = n.parentNode;
+      if (n.extent) base.extent = n.extent;
+      if (n.style) base.style = n.style;
+      return base;
+    };
     const cleanEdge = (e: any) => ({
       id: e.id,
       source: e.source,
@@ -424,4 +466,269 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       delete next[jobId];
       return { jobNodeMap: next };
     }),
+  addEdges: (newEdges) =>
+    set((s) => ({
+      edges: [...s.edges, ...newEdges.map((e) => ({ ...e, type: e.type || 'pea' }))],
+      dirty: true,
+    })),
+  insertNodeForSelection: (kind, label) => {
+    const s = get();
+    const selIds = s.selectedIds;
+    if (selIds.length === 0) return null;
+
+    // 计算选中节点的包围盒中心（画布坐标）
+    const selNodes = s.nodes.filter((n) => selIds.includes(n.id));
+    if (selNodes.length === 0) return null;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    selNodes.forEach((n) => {
+      const w = (n as any).width ?? 260;
+      const h = (n as any).height ?? 160;
+      minX = Math.min(minX, n.position.x);
+      minY = Math.min(minY, n.position.y);
+      maxX = Math.max(maxX, n.position.x + w);
+      maxY = Math.max(maxY, n.position.y + h);
+    });
+    const centerPos = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 + 80 }; // 稍偏下，避免遮挡
+
+    // 创建新节点
+    const nid = nextId(s.nodes);
+    const store = useCanvas.getState();
+    const ratio = kind === 'image'
+      ? store.defaultAspectRatio
+      : kind === 'video'
+        ? '16:9'
+        : undefined;
+    const newNode: Node<PeaNodeData> = {
+      id: nid,
+      type: 'pea',
+      position: centerPos,
+      data: {
+        kind,
+        label,
+        aspectRatio: ratio,
+        meta: { error: false, ...(kind === 'image' ? { genParams: { aspectRatio: ratio, resolution: '2k' } } : {}) },
+      } as PeaNodeData,
+      selected: false, // 不选中新节点，保持多选状态
+    };
+
+    // 收集所有从选中节点出发的 source 边（这些边需要重连到新节点）
+    // 同时找出这些边的原始 target 节点
+    const sourceEdges = s.edges.filter((e) => selIds.includes(e.source));
+    // 原始 target 集合（去重）
+    const originalTargets = [...new Set(sourceEdges.map((e) => e.target))];
+
+    // 构建新边：
+    // 1. 仅把"确有右节点连线（将被重连）的选中节点"连到新节点左端。
+    //    注意：只取 sourceEdges 里的 source，而**不是**对所有 selectedIds 建边——
+    //    否则当某选中节点同时是另一条边的下游（如框选整条链 A->B 时 B 既被连入又被连出）
+    //    会产生多余的环边（B->新节点 + 新节点->B）。
+    const outgoingSources = [...new Set(sourceEdges.map((e) => e.source))];
+    const edgesToNew = outgoingSources.map((sid, i) => ({
+      id: `e${nid}_from_${i}`,
+      source: sid,
+      target: nid,
+    }));
+
+    // 2. 新节点 → 每个 original target（保留原有下游连接）
+    const edgesFromNew = originalTargets.map((tgt, i) => ({
+      id: `e${nid}_to_${i}`,
+      source: nid,
+      target: tgt,
+    }));
+
+    // 要删除的旧边 ID（被替换掉的 source 边）
+    const oldEdgeIds = new Set(sourceEdges.map((e) => e.id));
+
+    set({
+      nodes: [...s.nodes, newNode],
+      edges: [
+        // 保留不被替换的边
+        ...s.edges.filter((e) => !oldEdgeIds.has(e.id)),
+        // 新增：选中→新节点 + 新节点→原目标
+        ...edgesToNew,
+        ...edgesFromNew,
+      ],
+      dirty: true,
+      // 保持当前多选状态不变（不切换到新节点）
+    });
+
+    return nid;
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // 打组 / 解组 / 布局 / 下载
+  // ═══════════════════════════════════════════════════════════════
+
+  groupNodes: (nodeIds) => {
+    const s = get();
+    if (nodeIds.length < 2) return null;
+    const ids = [...new Set(nodeIds)];
+
+    // 计算子节点包围盒
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    ids.forEach((id) => {
+      const n = s.nodes.find((x) => x.id === id);
+      if (!n) return;
+      minX = Math.min(minX, n.position.x);
+      minY = Math.min(minY, n.position.y);
+      // 用 width/height(如有)估算右下角，否则默认 200x160
+      const w = (n as any).width ?? 200;
+      const h = (n as any).height ?? 160;
+      maxX = Math.max(maxX, n.position.x + w);
+      maxY = Math.max(maxY, n.position.y + h);
+    });
+
+    const PAD = 28; // 容器内边距
+    const gw = maxX - minX + PAD * 2;
+    const gh = maxY - minY + PAD * 2;
+    const gx = minX - PAD;
+    const gy = minY - PAD;
+
+    const gid = `group_${Date.now()}`;
+
+    // 创建 Group 节点
+    const groupNode: any = {
+      id: gid,
+      type: 'group',
+      position: { x: gx, y: gy },
+      data: { label: '新建组', layout: 'grid', childrenIds: ids },
+      // ReactFlow 父子容器属性
+      style: { width: gw, height: gh },
+    };
+
+    // 将子节点的 parentNode 指向 group
+    const childUpdates = s.nodes.map((n) =>
+      ids.includes(n.id)
+        ? { ...n, parentNode: gid, extent: 'parent' as const }
+        : n,
+    );
+
+    set({ nodes: [groupNode, ...childUpdates], dirty: true });
+    get().clearSelection();
+    return gid;
+  },
+
+  ungroupNode: (groupId) => {
+    const s = get();
+    const groupNode = s.nodes.find((n) => n.id === groupId);
+    if (!groupNode || groupNode.type !== 'group') return;
+
+    const grpData = groupNode.data as any;
+    const childIds: string[] = grpData.childrenIds || [];
+
+    // 子节点脱离父级：清除 parentNode/extent，将 position 转为绝对坐标
+    const gp = groupNode.position;
+    const updated = s.nodes.map((n) => {
+      if (!childIds.includes(n.id)) return n;
+      // 子节点当前 position 是相对于父容器的，加上父容器位置即为绝对坐标
+      return {
+        ...n,
+        parentNode: undefined,
+        extent: undefined,
+        position: {
+          x: n.position.x + gp.x,
+          y: n.position.y + gp.y,
+        },
+      };
+    });
+
+    // 移除 Group 节点
+    set({
+      nodes: updated.filter((n) => n.id !== groupId),
+      dirty: true,
+    });
+  },
+
+  reLayoutGroup: (groupId, layout) => {
+    const s = get();
+    const gn = s.nodes.find((n) => n.id === groupId);
+    if (!gn || gn.type !== 'group') return;
+
+    const grpData = gn.data as any;
+    const childIds: string[] = grpData.childrenIds || [];
+    if (childIds.length === 0) return;
+
+    const children = s.nodes.filter((n) => childIds.includes(n.id));
+    const PAD = 28;
+    const GAP = 16;
+
+    if (layout === 'horizontal') {
+      // ── 水平布局：单行横向排列 ──
+      let cx = PAD;
+      children.forEach((n) => {
+        const w = (n as any).width ?? 200;
+        Object.assign(n, { position: { x: cx, y: PAD } });
+        cx += w + GAP;
+      });
+      const totalW = cx - GAP + PAD;
+      const maxH = Math.max(...children.map((n) => ((n as any).height ?? 160))) + PAD * 2;
+      set({
+        nodes: s.nodes.map((n) => (n.id === gn.id ? { ...n, data: { ...gn.data, layout }, style: { width: totalW, height: maxH } } : children.find((c) => c.id === n.id) ?? n)),
+        dirty: true,
+      });
+    } else {
+      // ── 宫格布局：尽量均分到 3 列（或更少） ──
+      const cols = Math.min(3, childIds.length);
+      const rows = Math.ceil(childIds.length / cols);
+      const cellW = 220; // 近似节点宽度
+      const cellH = 180; // 近似节点高度
+      children.forEach((n, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        Object.assign(n, {
+          position: { x: PAD + col * (cellW + GAP), y: PAD + row * (cellH + GAP) },
+        });
+      });
+      const gw = cols * cellW + (cols - 1) * GAP + PAD * 2;
+      const gh = rows * cellH + (rows - 1) * GAP + PAD * 2;
+      set({
+        nodes: s.nodes.map((n) => (n.id === gn.id ? { ...n, data: { ...gn.data, layout }, style: { width: gw, height: gh } } : children.find((c) => c.id === n.id) ?? n)),
+        dirty: true,
+      });
+    }
+  },
+
+  downloadGroup: (groupId) => {
+    const s = get();
+    const gn = s.nodes.find((n) => n.id === groupId);
+    if (!gn || gn.type !== 'group') return;
+    const grpData = gn.data as any;
+    const childIds: string[] = grpData.childrenIds || [];
+
+    const children = s.nodes
+      .filter((n) => childIds.includes(n.id))
+      .map((n) => ({
+        id: n.id,
+        type: n.type,
+        label: (n.data as any)?.label,
+        kind: (n.data as any)?.kind,
+        prompt: (n.data as any)?.prompt,
+        url: (n.data as any)?.url,
+        resultUrl: (n.data as any)?.resultUrl,
+        resultUrls: (n.data as any)?.resultUrls,
+        html: (n.data as any)?.html,
+      }));
+
+    const edges = s.edges.filter(
+      (e) => childIds.includes(e.source) && childIds.includes(e.target),
+    );
+
+    const payload = {
+      group: { id: groupId, label: grpData.label || '新建组', layout: grpData.layout || 'grid' },
+      nodes: children,
+      edges: edges.map((e) => ({ source: e.source, target: e.target })),
+      exportedAt: new Date().toISOString(),
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${grpData.label || 'group'}_${groupId}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 }));
