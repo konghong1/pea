@@ -42,8 +42,17 @@ def _api_base(base_url: str, path: str) -> str:
     return f"{base}{path}"
 
 
+def _swap_host(url: str, new_base: str) -> str:
+    """把 URL 的 host 换成 new_base, 保留 path/query。用于网关兜底时复用同一路径。"""
+    from urllib.parse import urlsplit, urlunsplit
+    p = urlsplit(url)
+    b = urlsplit(new_base)
+    return urlunsplit((b.scheme, b.netloc, p.path, p.query, p.fragment))
+
+
 def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
-                     max_attempts: int = 3, backoff_base: int = 4):
+                     max_attempts: int = 3, backoff_base: int = 4,
+                     fallback_url: str | None = None):
     """POST JSON 到外部提供商, 对瞬时错误自动重试。
 
     重试仅针对「真·瞬时错误」: HTTP 429/500/502/503 与连接错误 (ConnectionError)。
@@ -64,14 +73,20 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
         520, 521, 522, 523, 524, 525, 526, 527, 530,
     })
     last_err: Exception | None = None
+    target = url
     for attempt in range(1, max_attempts + 1):
         try:
-            resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
-        except requests.ConnectionError as e:  # 连接级错误 -> 重试
+            resp = requests.post(target, json=payload, headers=headers, timeout=timeout)
+        except requests.ConnectionError as e:  # 连接级错误 -> 重试/兜底切换
             last_err = e
-            if attempt < max_attempts:
+            if fallback_url and target != fallback_url:
+                target = fallback_url
+                print(f"[agnes] attempt {attempt} primary unreachable, fallback to gateway {fallback_url}")
+                if attempt < max_attempts:
+                    time.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                    continue
+            elif attempt < max_attempts:
                 wait = min(backoff_base * (2 ** (attempt - 1)), 20)
-                print(f"[agnes] attempt {attempt} network error {e!r}, retry in {wait}s")
                 time.sleep(wait)
                 continue
             raise
@@ -88,7 +103,8 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
 
 
 async def _apost_with_retry(client, url, payload, headers, timeout,
-                            max_attempts: int = 3, backoff_base: int = 4):
+                            max_attempts: int = 3, backoff_base: int = 4,
+                            fallback_url: str | None = None):
     """异步版 POST (httpx): 仅对连接级错误与瞬时 5xx 重试, 不对读取超时重试。
 
     语义与 _post_with_retry 完全一致, 区别仅在用 ``await client.post(...)`` ——
@@ -99,19 +115,31 @@ async def _apost_with_retry(client, url, payload, headers, timeout,
         520, 521, 522, 523, 524, 525, 526, 527, 530,
     })
     last_err: Exception | None = None
+    target = url
     for attempt in range(1, max_attempts + 1):
         try:
-            resp = await client.post(url, json=payload, headers=headers, timeout=timeout)
-        except (httpx.ConnectError, httpx.TimeoutException) as e:  # 连接级 + 各类超时(含 ReadTimeout) -> 重试
+            resp = await client.post(target, json=payload, headers=headers, timeout=timeout)
+        except httpx.ConnectError as e:  # 真·连不上 -> 兜底切换
+            last_err = e
+            if fallback_url and target != fallback_url:
+                target = fallback_url
+                print(f"[agnes] attempt {attempt} primary unreachable, fallback to gateway {fallback_url}")
+                if attempt < max_attempts:
+                    await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                    continue
+            elif attempt < max_attempts:
+                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                continue
+            raise RuntimeError(
+                f"provider connection failed ({type(e).__name__}): {url}"
+            ) from e
+        except httpx.TimeoutException as e:  # 超时(含读取超时) -> 同址重试, 不切换
             last_err = e
             if attempt < max_attempts:
                 await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
                 continue
-            # 兜底: httpx 部分超时异常(如空 message 的 ReadTimeout) str() 为空,
-            # 直接 raise 会导致终态 error 字段空白 -> 用户看到"失败但无原因".
-            # 包装成含类型与端点的可读错误, 便于诊断.
             raise RuntimeError(
-                f"provider connection/timeout failed ({type(e).__name__}): {url}"
+                f"provider timeout failed ({type(e).__name__}): {url}"
             ) from e
         if resp.status_code in transient_5xx:  # 瞬时过载 / Cloudflare 源站异常 -> 重试
             last_err = RuntimeError(f"provider HTTP {resp.status_code}")
@@ -175,12 +203,31 @@ class OpenAICompatibleProvider:
         self.model_name: str = cfg.get("model_name", "")
         self.provider_name: str = cfg.get("provider_name") or cfg.get("provider_id") or "provider"
         self.name = self.provider_name
+        # 网关兜底地址: 官方 base_url 不可达时回退。默认 host.docker.internal:33210
+        # (需 docker-compose extra_hosts 支持)。与 base_url 相同则视为无兜底。
+        self.gateway_base: str = (settings.ai_gateway or "").strip()
 
     def _headers(self) -> dict:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+    def _fb(self, path: str) -> tuple[str, str | None]:
+        """返回 (官方URL, 网关兜底URL|None)。base_url 与网关相同则无兜底。"""
+        primary = _api_base(self.base_url, path)
+        if self.gateway_base and self.gateway_base.rstrip("/") != (self.base_url or "").rstrip("/"):
+            return primary, _api_base(self.gateway_base, path)
+        return primary, None
+
+    def _fb_status(self, status_query: str) -> str | None:
+        """视频状态查询的网关兜底 URL: 复用官方 status_query 的 path/query, 仅换 host。"""
+        if self.gateway_base and self.gateway_base.rstrip("/") != (self.base_url or "").rstrip("/"):
+            try:
+                return _swap_host(status_query, self.gateway_base)
+            except Exception:
+                return None
+        return None
 
     # ── 分发 ────────────────────────────────────────────────────────
     def generate(self, req: dict) -> GenerationResult:
@@ -204,12 +251,13 @@ class OpenAICompatibleProvider:
         adapter = get_image_adapter(self.base_url)
         payload: dict[str, Any] = adapter.build(norm, self)
 
-        url = _api_base(self.base_url, "/v1/images/generations")
+        url, fb = self._fb("/v1/images/generations")
         logger.info("[agnes] image model=%s payload=%s", self.model_name, _short(payload))
         resp = _post_with_retry(
             url, payload, self._headers(),
             timeout=(settings.provider_http_connect_timeout_s, settings.provider_image_timeout_s),
             max_attempts=settings.provider_image_retry_attempts,
+            fallback_url=fb,
         )
         _raise_for_provider(resp, "image")
         return self._build_image_result(resp.json(), self.provider_name)
@@ -222,7 +270,7 @@ class OpenAICompatibleProvider:
         adapter = get_image_adapter(self.base_url)
         payload: dict[str, Any] = adapter.build(norm, self)
 
-        url = _api_base(self.base_url, "/v1/images/generations")
+        url, fb = self._fb("/v1/images/generations")
         logger.info("[agnes] image model=%s payload=%s", self.model_name, _short(payload))
         client = get_client()
         timeout = httpx.Timeout(
@@ -232,6 +280,7 @@ class OpenAICompatibleProvider:
         resp = await _apost_with_retry(
             client, url, payload, self._headers(), timeout,
             max_attempts=settings.provider_image_retry_attempts,
+            fallback_url=fb,
         )
         _raise_for_provider(resp, "image")
         return self._build_image_result(resp.json(), self.provider_name)
@@ -316,12 +365,13 @@ class OpenAICompatibleProvider:
         供异步完成层适配器调用 —— 提交是快操作(<提交超时), 真正的长轮询交给 Completer.
         """
         payload, num_frames, nrefs = self._build_video_payload(req)
-        submit_url = _api_base(self.base_url, "/v1/videos")
+        submit_url, submit_fb = self._fb("/v1/videos")
         logger.info("[agnes] video submit model=%s frames=%d refs=%d", self.model_name, num_frames, nrefs)
         resp = _post_with_retry(
             submit_url, payload, self._headers(),
             timeout=(settings.provider_http_connect_timeout_s, settings.provider_video_submit_timeout_s),
             max_attempts=2,
+            fallback_url=submit_fb,
         )
         _raise_for_provider(resp, "video-submit")
         sub = resp.json()
@@ -346,18 +396,34 @@ class OpenAICompatibleProvider:
             "status_query": status_query,
         }
 
-    def _query_video_status_raw(self, status_query: str) -> dict:
+    def _query_video_status_raw(self, status_query: str, fallback_url: str | None = None) -> dict:
         """查询视频任务状态, 返回原始 JSON dict (异常上抛). 供异步适配器轮询.
 
         status_query 为提交时已渲染好的完整状态查询 URL:
         推荐 /agnesapi?video_id=<VIDEO_ID>, 或兜底 /v1/videos/<TASK_ID>。
+        官方地址不可达(连接错误)时回退到 fallback_url(网关)。
         """
-        resp = requests.get(
-            status_query, headers=self._headers(),
-            timeout=(settings.provider_http_connect_timeout_s, 60),
-        )
-        _raise_for_provider(resp, "video-status")
-        return resp.json()
+        target = status_query
+        last_err: Exception | None = None
+        for attempt in range(1, 3):
+            try:
+                resp = requests.get(
+                    target, headers=self._headers(),
+                    timeout=(settings.provider_http_connect_timeout_s, 60),
+                )
+                _raise_for_provider(resp, "video-status")
+                return resp.json()
+            except requests.ConnectionError as e:
+                last_err = e
+                if fallback_url and target != fallback_url:
+                    target = fallback_url
+                    print(f"[agnes] video-status primary unreachable, fallback to gateway {fallback_url}")
+                    continue
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+                raise
+        raise last_err or RuntimeError("video status query failed")
 
     def _generate_video(self, req: dict) -> GenerationResult:
         """同步全量路径 (提交 + 轮询). 保留给 route()/测试; 新消费链路走 _submit_video_only + Completer."""
@@ -367,11 +433,12 @@ class OpenAICompatibleProvider:
             return GenerationResult(url=sub["direct_url"], provider=self.provider_name,
                                     raw={"sync": True}, usage={})
         status_query = sub["status_query"]
+        sq_fb = self._fb_status(status_query)
         deadline = time.time() + settings.video_poll_max_s
         last_status = "queued"
         while time.time() < deadline:
             time.sleep(settings.video_poll_interval_s)
-            data = self._query_video_status_raw(status_query)
+            data = self._query_video_status_raw(status_query, fallback_url=sq_fb)
             last_status = (data.get("status") or data.get("state") or "").lower().strip() or last_status
             norm, url, err = _parse_video_status(data)
             if norm == "done":
@@ -386,7 +453,7 @@ class OpenAICompatibleProvider:
 
     # ── 文本 ────────────────────────────────────────────────────────
     def _generate_text(self, req: dict) -> GenerationResult:
-        url = _api_base(self.base_url, "/v1/chat/completions")
+        url, fb = self._fb("/v1/chat/completions")
         payload = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": req["prompt"]}],
@@ -395,6 +462,7 @@ class OpenAICompatibleProvider:
             url, payload, self._headers(),
             timeout=(settings.provider_http_connect_timeout_s, 110),
             max_attempts=2,
+            fallback_url=fb,
         )
         _raise_for_provider(resp, "text")
         data = resp.json()
@@ -409,7 +477,7 @@ class OpenAICompatibleProvider:
         """异步版文本生成: 用 httpx 异步客户端, 不占 OS 线程。"""
         from app.async_core.engine import get_client
 
-        url = _api_base(self.base_url, "/v1/chat/completions")
+        url, fb = self._fb("/v1/chat/completions")
         payload = {
             "model": self.model_name,
             "messages": [{"role": "user", "content": req["prompt"]}],
@@ -422,6 +490,7 @@ class OpenAICompatibleProvider:
         resp = await _apost_with_retry(
             client, url, payload, self._headers(), timeout,
             max_attempts=2,
+            fallback_url=fb,
         )
         _raise_for_provider(resp, "text")
         data = resp.json()

@@ -192,19 +192,36 @@ export class ProvidersService {
   async fetchRemoteModels(id: string): Promise<{ models: RemoteModelEntry[] }> {
     const p = await this.getRaw(id);
     if (!p.base_url) throw new BadRequestException('provider has no base_url');
-    const url = normalizeModelsUrl(p.base_url);
-    let list: any[] = [];
-    try {
+    const gateway = (process.env.PEA_AI_GATEWAY || 'http://host.docker.internal:33210').replace(/\/+$/, '');
+    const tryFetch = async (baseUrl: string): Promise<any[]> => {
+      const url = normalizeModelsUrl(baseUrl);
       const { data } = await axios.get(url, {
         headers: p.api_key ? { Authorization: `Bearer ${p.api_key}` } : {},
         timeout: 20000,
       });
-      list = Array.isArray(data?.data) ? data.data : [];
+      return Array.isArray(data?.data) ? data.data : [];
+    };
+    let list: any[] = [];
+    const primary = p.base_url.replace(/\/+$/, '');
+    const useGateway = gateway && gateway !== primary;
+    try {
+      list = await tryFetch(p.base_url);
     } catch (e: any) {
-      const detail = e?.response?.data
-        ? JSON.stringify(e.response.data).slice(0, 300)
-        : e?.message ?? 'unknown';
-      throw new BadRequestException(`fetch remote models failed: ${detail}`);
+      if (!useGateway) {
+        const detail = e?.response?.data
+          ? JSON.stringify(e.response.data).slice(0, 300)
+          : e?.message ?? 'unknown';
+        throw new BadRequestException(`fetch remote models failed: ${detail}`);
+      }
+      try {
+        console.warn(`[providers] official base_url unreachable, fallback to gateway ${gateway}`);
+        list = await tryFetch(gateway);
+      } catch (e2: any) {
+        const detail = e2?.response?.data
+          ? JSON.stringify(e2.response.data).slice(0, 300)
+          : e2?.message ?? 'unknown';
+        throw new BadRequestException(`fetch remote models failed: ${detail}`);
+      }
     }
     const models: RemoteModelEntry[] = list
       .filter((m: any) => m && m.id)

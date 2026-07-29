@@ -96,10 +96,17 @@ services:
       # 改密码只需改 PEA_ADMIN_PASSWORD 后 docker compose up -d bff 重启即可。
       PEA_ADMIN_EMAIL: "admin@pea.ai"
       PEA_ADMIN_PASSWORD: "${PEA_ADMIN_PASSWORD:-admin12345}"
+      # AI 网关兜底: 官方 base_url 不可达时回退到此地址(需 extra_hosts 支持 host.docker.internal)
+      PEA_AI_GATEWAY: "${PEA_AI_GATEWAY:-http://host.docker.internal:33210}"
     # 外部 AI 域名(apihub 等) DNS: 默认走宿主 DNS; 若宿主 DNS 被污染导致拉取/出图失败,
     # 由 .env 的 PEA_DNS_FIX=1 叠加 docker-compose.dns-override.yml 使用干净公共 DNS(见该文件注释)。
     ports:
       - "4100:4000"   # 宿主机 4000 被 WorkBuddy 自带 node 占用, 改用 4100 映射到容器内 4000; web 走内网 bff:4000 不受影响
+    # 让容器内可用 host.docker.internal 访问宿主上的服务(如 33210 AI 网关)。
+    # 关键修复: 用户配的 AI 网关在 172.17.0.1:33210, 那是 docker0 网关, 仅默认网桥容器可达;
+    # bff 在 compose 用户网桥上不可路由 -> ECONNREFUSED。改用 host.docker.internal 经 host-gateway 访问宿主。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       dbmigrate:
         condition: service_completed_successfully
@@ -138,11 +145,16 @@ services:
       PEA_PROVIDER_IMAGE_TIMEOUT_S: "900"
       PEA_PROVIDER_VIDEO_SUBMIT_TIMEOUT_S: "900"
       PEA_PROVIDER_HTTP_CONNECT_TIMEOUT_S: "15"
+      # AI 网关兜底: 官方 base_url 不可达时回退到此地址(需 extra_hosts 支持 host.docker.internal)
+      PEA_AI_GATEWAY: "${PEA_AI_GATEWAY:-http://host.docker.internal:33210}"
       # 真实模型出图：不走 mock。图像/视频直接透传提供商公网 CDN URL，浏览器直显。
       # （之前 PEA_FORCE_MOCK_TYPES=image,video 仅用于联调占位，已移除——用户要求调用真实模型。）
     # 外部 AI 域名 DNS: 默认走宿主 DNS; 若被污染, 由 PEA_DNS_FIX=1 叠加 dns-override.yml 修复
     ports:
       - "8000:8000"
+    # 同 bff: 允许经 host.docker.internal 访问宿主侧 AI 网关(33210 等)。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       dbmigrate:
         condition: service_completed_successfully

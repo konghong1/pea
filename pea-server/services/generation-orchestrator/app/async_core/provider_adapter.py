@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.agnes_provider import _swap_host
 from app.async_core.types import (
     AsyncHandle,
     CompletionMode,
@@ -106,7 +107,13 @@ class AgnesAdapter(BaseProviderAdapter):
         return SubmitOutcome(sync=False, handle=h)
 
     def query_status(self, handle: AsyncHandle) -> PollStatus:
-        raw = self._real._query_video_status_raw(handle.status_query)
+        fb = None
+        if self._real.gateway_base:
+            try:
+                fb = _swap_host(handle.status_query, self._real.gateway_base)
+            except Exception:
+                fb = None
+        raw = self._real._query_video_status_raw(handle.status_query, fallback_url=fb)
         norm_str, url, err = _parse_video_status(raw)
         return PollStatus(
             normalized=NormalizedStatus(norm_str),

@@ -6,7 +6,9 @@ const logger = new Logger('EgressProxy');
  * 可选出网代理引导 (镜像 ai-agent 的方案).
  *
  * 仅当容器设置了 HTTPS_PROXY / HTTP_PROXY 时生效 —— 这由 docker-compose.proxy-override.yml
- * 在 PEA_PROXY_FIX=1 时注入。默认(无代理 env)为空操作, 完全走直连, 不影响任何现有行为。
+ * 在 PEA_PROXY_FIX=1 时注入。无代理 env 时为空操作, 完全走直连。即便是设置了代理,
+ * 若探测发现代理不可达也会退回直连(镜像 ai-agent 的 ensure_proxy_strategy 行为),
+ * 不再因坏代理导致所有出网请求 ECONNREFUSED。
  *
  * 为什么必须这段代码:
  *   bff 用 Node 内置 fetch(内部 undici) 调外部 AI (apihub)。Node 内置 fetch 用的 undici
@@ -18,9 +20,18 @@ const logger = new Logger('EgressProxy');
  * 内部地址 (bff / generation-orchestrator / mysql / redis / minio) 已在 NO_PROXY 中,
  * 出网时直连, 不经代理。
  */
-export function installEgressProxyFromEnv(): void {
+export async function installEgressProxyFromEnv(): Promise<void> {
   const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
   if (!proxy) return; // 无代理 env => 直连, 空操作
+
+  // 镜像 ai-agent 的 ensure_proxy_strategy(): 先探测代理是否真可达。
+  // 关键修复 —— 之前只要设了 HTTPS_PROXY 就无条件安装 dispatcher, 代理连不上 =>
+  // 所有出网请求(含 fetch remote models)直接 ECONNREFUSED 全死。现在: 代理不可达时
+  // 跳过安装、退回直连, 与 ai-agent 行为一致, 不再因坏代理硬崩。
+  if (!(await isProxyReachable(proxy))) {
+    logger.warn(`[egress-proxy] 代理 ${proxy} 不可达, 跳过安装(退回直连, 与 ai-agent 行为一致)`);
+    return;
+  }
 
   try {
     // 动态 require: 即便未安装 undici 也不会让启动时崩溃(回退直连)
@@ -38,4 +49,38 @@ export function installEgressProxyFromEnv(): void {
   } catch (e: any) {
     logger.warn(`[egress-proxy] 安装失败, 回退直连: ${e?.message ?? e}`);
   }
+}
+
+/**
+ * TCP 探测代理地址是否可连通(超时即判不可达)。
+ * 仅校验“端口有人监听”, 不校验代理能否真正出网 —— 足以区分“坏/不存在的代理”与“可用代理”。
+ */
+function isProxyReachable(proxyUrl: string, timeoutMs = 2000): Promise<boolean> {
+  let host: string | undefined;
+  let port = 80;
+  try {
+    const u = new URL(proxyUrl);
+    host = u.hostname || undefined;
+    port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+  } catch {
+    return Promise.resolve(false);
+  }
+  if (!host) return Promise.resolve(false);
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const net = require('net');
+  return new Promise<boolean>((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.connect(port, host);
+  });
 }
