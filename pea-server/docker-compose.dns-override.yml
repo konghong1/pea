@@ -7,6 +7,7 @@
 #                 其它外部域名仍能正确解析, 绕过宿主被污染的递归解析器。
 #   2) extra_hosts: 把 apihub.agnes-ai.com 直接写死到容器 /etc/hosts (优先级高于 DNS),
 #                 使用本机干净 AliDNS 解析出的真实集群 IP, 保证该域名一定命中正确 IP, 不受任何 DNS 污染影响。
+#                 用短字符串写法 "host:ip" (部分 docker compose 版本只支持字符串, 不支持 host:/ip: 对象写法)。
 #
 # 域名 -> IP 映射 (来自本机 `nslookup apihub.agnes-ai.com` 经 AliDNS 的非权威应答):
 #   IPv4: 118.193.202.219   162.125.7.1
@@ -19,24 +20,16 @@ services:
       - "223.5.5.5"
       - "119.29.29.29"
     extra_hosts:
-      - host: "apihub.agnes-ai.com"
-        ip: "118.193.202.219"
-      - host: "apihub.agnes-ai.com"
-        ip: "162.125.7.1"
-      - host: "apihub.agnes-ai.com"
-        ip: "2001::629f:6c3a"
-      - host: "apihub.agnes-ai.com"
-        ip: "2001::76c1:cadb"
+      - "apihub.agnes-ai.com:118.193.202.219"
+      - "apihub.agnes-ai.com:162.125.7.1"
+      - "apihub.agnes-ai.com:2001::629f:6c3a"
+      - "apihub.agnes-ai.com:2001::76c1:cadb"
   generation-orchestrator:
     dns:
       - "223.5.5.5"
       - "119.29.29.29"
     extra_hosts:
-      - host: "apihub.agnes-ai.com"
-        ip: "118.193.202.219"
-      - host: "apihub.agnes-ai.com"
-        ip: "162.125.7.1"
-      - host: "apihub.agnes-ai.com"
-        ip: "2001::629f:6c3a"
-      - host: "apihub.agnes-ai.com"
-        ip: "2001::76c1:cadb"
+      - "apihub.agnes-ai.com:118.193.202.219"
+      - "apihub.agnes-ai.com:162.125.7.1"
+      - "apihub.agnes-ai.com:2001::629f:6c3a"
+      - "apihub.agnes-ai.com:2001::76c1:cadb"
