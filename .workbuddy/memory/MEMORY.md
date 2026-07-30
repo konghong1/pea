@@ -10,13 +10,9 @@
 - **Windows .bat/.cmd 必须纯 ASCII + CRLF**，否则 GBK 拆坏 UTF-8 中文乱码。
 
 ## ⚠️ 出网/代理三大陷阱（2026-07-29 定案，勿回退）
-- **服务器能直连 apihub（同机 ai-agent 已验证）**：2026-07-29 17:11 扒 ai-agent 代码证实——它的 docker-compose 同样注入 `HTTPS_PROXY=host.docker.internal:33210`（同死代理），但 LLM 客户端 `app/agent.py:211` 用 `httpx.Client(trust_env=False)` **默认直连、不碰 env 代理**，代理仅作兜底。ai-agent 在用户腾讯云服务器能通 agnes ⇒ **该服务器直连外部 AI 可达**。此前"服务器被墙、必须装代理"是基于本机沙箱网络的误判，已纠正。
-- **pea 修复 = 与 ai-agent 等价，强制默认直连**（代码已落，tsc/py_compile 全过）：① bff `providers.service.ts` 的 axios `proxy:false`；② orchestrator `engine.py` 的 httpx `trust_env=False`；③ `agnes_provider.py` 两处 requests 出网点 `proxies=None`；④ 保留 bootstrap-proxy/main.py 的隧道级死代理清 env 作双保险。**结论：服务器 `.env` 设 `PEA_PROXY_FIX=0`，pea 即走直连、与同机 ai-agent 同路可达；无需任何代理。**
-- `PEA_PROXY_FIX` 服务器无本地代理必须=0；`PEA_AI_GATEWAY` 默认**空**（不兜底）。严禁再把 `host.docker.internal:33210` 写成任何默认值——那是**开发沙箱专属**代理（只有跑着 WorkBuddy 沙箱出网代理的机器才有，本机实测它访问 apihub 返回 HTTP 200），服务器上把它当万能钥匙开 `PEA_PROXY_FIX=1` 只会让容器去连服务器自己的 docker 网桥（172.17.0.1）找根本不存在的代理 → ECONNREFUSED/ECONNRESET。
-- **`PEA_PROXY_FIX=1` 不是"开了就通"，是"告诉容器去这个地址找代理"**：地址必须指向服务器上**真实在跑、且能出网到 apihub** 的代理。正确姿势：在服务器部署能出境的 HTTP 代理，监听 `0.0.0.0:<port>`（**非 127.0.0.1**，否则容器经 host.docker.internal 经网桥 IP 访问不到），再 `.env` 设 `PEA_PROXY_FIX=1`+`PEA_EGRESS_PROXY=http://host.docker.internal:<port>`。没有这种代理就保持 =0（直连），靠 DNS-override 的真实 Cloudflare IP 走直连。
-- 死代理防护已双端落地且**已升级为真实出网校验**：bff `bootstrap-proxy.ts` 与 orchestrator `main.py:_ensure_proxy_strategy()` 现在不仅 TCP 探活，还会**真建 CONNECT 隧道到 apihub:443 验证能否出网**；只 TCP 通但代理是废的（ECONNRESET 根因）会被判失败→清 HTTP(S)_PROXY env→退回直连，报错变诚实。独立脚本验证：真代理=isProxyReachable true，死代理(127.0.0.1:9)=false。
-- `dns-override.yml` 的 extra_hosts IP 必须用 **DoH**（dns.google/cloudflare）验证；境内 UDP DNS（含 223.5.5.5）对 apihub.agnes-ai.com 会被抢答假 IP。当前真实 IP=Cloudflare 104.18.18.62/104.18.19.62。
-- 部署前先在服务器跑 `pea-server/check-egress.sh` 判定直连/需代理，按结论配 .env。脚本已升级：读 `.env` 的 `PEA_EGRESS_PROXY`，并新增"**容器视角**"检测（代理只绑回环则容器访问不到，会提示改绑 0.0.0.0）。
+- **结论：服务器直连 apihub 可达**（同机 ai-agent 已验证：docker-compose 同样注入死代理 `HTTPS_PROXY=host.docker.internal:33210`，但 LLM 客户端 `trust_env=False` 默认直连）。pea 已等价修复（bff axios `proxy:false`；orchestrator httpx `trust_env=False`；agnes_provider requests `proxies=None`；bootstrap 清 env 双保险）→ **服务器 `.env` 设 `PEA_PROXY_FIX=0` 即直连，无需任何代理**。
+- **`PEA_PROXY_FIX=1` 必须指向真实出网代理**：该地址须是服务器上**真在跑、能出境**的 HTTP 代理，监听 `0.0.0.0:<port>`（**非 127.0.0.1**，否则容器经网桥访问不到），再配 `PEA_EGRESS_PROXY=http://host.docker.internal:<port>`。**严禁**把 `host.docker.internal:33210` 当默认值（那是开发沙箱专属死代理，服务器上只会导致 ECONNREFUSED/ECONNRESET）。
+- 死代理双端校验已升级为**真实出网校验**（TCP 探活+真建 CONNECT 到 apihub:443；废代理判失败→清 env→退回直连）。`dns-override.yml` 的 extra_hosts 必须用 **DoH** 验证真实 IP（Cloudflare 104.18.18.62/104.18.19.62，境内 UDP DNS 抢答假 IP）。部署前跑 `pea-server/check-egress.sh` 判定直连/需代理。
 
 ## ⚠️ Docker 持久卷 DDL 陷阱（关键）
 - named volume 启动不重跑 `initdb.d/*.sql`，源码 DDL 变更不自动生效 → schema 漂移。
@@ -44,8 +40,11 @@
 - 选区自管：用 zustand `selectedIds[]`+`selectedId`，`PeaNode.selected` 读 `includes(id)`；勿用 `.react-flow__node.selected`。
 - Shift 框选：`panOnDrag={[1,2]}`；浮动浮层(`NodeChatPrompt`/`TextNodeToolbar`)必须 `position:fixed`+rAF 读 `getBoundingClientRect` 重定位。
 - 连接手柄：用 `PeaNode` 内 `useState` 控 `.hover` 类，勿用 `.react-flow__node:hover .pea-handle`(Tailwind purge 剥离)。
-- 节点点击命中：菜单/选择用真实鼠标 `page.mouse.click` 中心坐标（DOM `.click()` 被 React 事件代理吞）。
+- **`ConnectionMode.Loose` 入边必须强制 targetHandle='in'`**：Loose 模式下若把线释放在目标节点右侧，ReactFlow 会把它解析到 source handle `out`（右侧），导致入边看起来像吸在节点框右边。应在 `onConnect` 中统一把入边 targetHandle 改写为 `'in'`（左侧固定连接点），而不是只在 `onConnectEnd` 兜底。
+- **连线连「节点框」+ 端点恒定回退（关键坑）**：手柄中心距框 `HANDLE_GAP=14px`（`handleOffset=-(HANDLE_GAP/zClamped+HANDLE_HALF)`）；`PeaEdge` 边端点朝框回退**恒定** `gap=HANDLE_GAP+HANDLE_HALF`（**绝不除 zoom、不读 `useStore`**——ReactFlow 的 `sourceX/targetX` 在边创建时按当时 zoom 算死、zoom 变化不重算，除 zoom 会导致放大后线反向越框≈14px）。`.pea-handle` 须 `transform-origin:center center !important`（否则缩放把手柄拉进框）。
+- **手柄弹回 + 连线发起回归**：手柄按外缘定位(`right:-20.5px`)，静止中心=框边±(HANDLE_GAP+HANDLE_HALF)∓halfHit(hover半宽9.5)，非框边±偏移；弹回判定=浅推时手柄左缘≥节点右缘(`verify_bounce_back.py` PASS)。连线发起根因=手柄浮框外→`onMouseLeave`去hover→`.pea-handle`变`pe:none`→mousedown起不来；修复=`.pea-handle`基础`pointer-events:all !important`+两`<Handle>`加`onMouseEnter`保活hover(`verify_three_fixes.py` 建边3/3/`targetHandle:'in'`/gap 28@2x·7@0.5x PASS)。
 - `window.__canvas`：注入节点=`loadGraph(nodes,edges,version)`+`select(id)`；注入边=`onConnect({source,target})`（非 `addEdge`）。
+- **选择/框选交互三修 + 右上角断框收尾（2026-07-30）**：① 选择框被选中节点遮挡→`.react-flow__node.selected{z-index:30}`、`.react-flow__nodesselection-rect/.react-flow__selection{z-index:35}`；② 框选过程/完成后抑制单节点 UI→容器加 `.pea-selecting`/`.pea-multi-select`，CSS 隐藏单节点功能条/编辑框；③ 多选工具条浮于组框上方→`.multiselect-toolbar{z-index:100;position:fixed}` + `createPortal` 到 `document.body`；④ 右上角断框→工具条与选区间距由 16px 提至 24px、阴影由 `0 6px 24px rgba(0,0,0,0.4)` 收淡为 `0 3px 12px rgba(0,0,0,0.22)`，并删除误把选区当 SVG 的透明规则。打组/取消多选即恢复单节点交互。
 
 ## 视图模型（三态路由）
 - `useUi().active`：`home`(占位)/`workspace`(项目列表)/`canvas`(画布，隐藏 TopNav，头部下拉返回)。`PageKey` 须含 `'workspace'`；画布回项目列表走头部下拉，勿用 TopNav「工作空间」。
@@ -58,3 +57,5 @@
 - **编辑框不渲染（anchorEl 时序）**：`NodeChatPrompt` 用 `useRef`+`useEffect([single])` 缓存 anchor，effect 赋值不触发重渲染 + 仅在 single 变化时跑一次。首次选中时锚点 DOM 未挂载→查到 null → single 不再变 → 永远不渲染。**修复**：改为每次渲染同步 `querySelector` + `useState` 触发重渲染；切换节点时保留旧 anchor 防闪烁。
 - **@ picker 缩略图黑方块**：上传图节点（仅 fileKey）在 `resolveNodeMediaUrl` 中 `getPresignedUrl`/`getFileUrl` 双失败 → 返回 undefined → `<img src="">` + CSS `background:#000` = 黑方块。**修复**：① blob: URL 检测跳过（防 DB 持久化的失效 blob URL 提前返回）；② 失败时 console.warn；③ picker 渲染降级为 🖼️ 图标（`.pea-ref-picker-thumb-fallback`）替代黑方块。
 - **Docker 构建缓存陷阱**：Windows Git Bash 下 `docker compose up -d --build web` 可能用缓存层导致源码修改未入镜像。可靠部署方式：本地 `NODE_OPTIONS="--use-system-ca" npm run build` + `docker cp web/dist/. container:/usr/share/nginx/html/` + `docker exec container nginx -s reload`。
+- **组节点删除必须清理子节点（2026-07-30）**：`removeNode(id)` 删除 `type:'group'` 节点时，若不同步清理/删除其子节点（`parentNode===id`），ReactFlow 渲染时按 parentNode 查父节点找不到 → 白屏崩溃。修复：检测 group 类型后从 `data.childrenIds` 收集子节点ID + 扫描孤立子节点，用 Set 一次性批量删除。
+- **选区框浅色背景可见性（2026-07-30）**：`.react-flow__selection` 的 background 透明度需 ≥10% 才在白色画布背景上可辨识；border 建议 ≥1.5px。

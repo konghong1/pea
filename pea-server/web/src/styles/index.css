@@ -975,9 +975,8 @@ body {
 .pea-node-text-wrap { width: 100%; }
 
 /* 节点连接手柄：科技感「连接端口」图标（SVG 见 PeaNode.tsx <HandleGlyph/>）。
-   反缩放策略：手柄在 JSX 里套了 scale(1/zoom)，这里只管视觉与尺寸；
-   width/height 是节点空间值，经父级 zoom 与手柄自身的 1/zoom 抵消后，
-   在屏幕上恒为下面这些 px —— 缩小时也恒定大小、恒定间距，一眼可定位。 */
+   手柄大小 13px 是 flow 坐标值，随节点一起被父级 zoom 缩放；
+   视觉上缩小时变小、放大时变大，与节点框保持一致比例。 */
 .react-flow__handle.pea-handle {
   width: 13px !important;
   height: 13px !important;
@@ -989,19 +988,24 @@ body {
   padding: 0 !important;
   /* 默认隐藏：连接点仅在鼠标悬停节点时出现（需求1） */
   opacity: 0 !important;
-  pointer-events: none !important;
+  /* 关键修复：手柄必须始终可被命中（pointer-events:all），否则当光标移到框外的
+     手柄上时 .pea-node 的 onMouseLeave 会移除 hover、使手柄 pe:none，
+     导致 mousedown 穿透到 .react-flow__pane 而无法发起连线。
+     可见性(opacity)仍由 .pea-node.hover / .connectingfrom 控制，仅命中不受 hover 影响。 */
+  pointer-events: all !important;
   cursor: crosshair !important;
   /* 关键：手柄在 DOM 中先于 .pea-node-body-card 渲染，
      若不抬升层级，节点主体会盖住手柄的命中区域，导致连线无法发起。 */
   z-index: 10 !important;
+  transform-origin: center center !important;
   display: flex !important;
   align-items: center;
   justify-content: center;
   overflow: visible !important;
   filter: drop-shadow(0 0 3px rgba(31, 162, 220, 0.55)) !important;
-  /* 反缩放 + 鼠标小范围跟随：--inv / --pea-hx / --pea-hy 由 PeaNode 注入，
-     经父级 zoom 与 scale(inv) 抵消后，位移在屏幕上保持恒定像素。 */
-  transform: translate(calc(var(--pea-hx, 0px) * var(--inv, 1)), calc(var(--pea-hy, 0px) * var(--inv, 1))) translateY(-50%) scale(var(--inv, 1)) !important;
+  /* 鼠标小范围跟随：--pea-hx / --pea-hy 由 PeaNode 注入（屏幕 px），
+     直接位移，配合弹回逻辑使手柄不会进入节点框。 */
+  transform: translate(var(--pea-hx, 0px), var(--pea-hy, 0px)) translateY(-50%) !important;
   transition: opacity 0.16s ease,
     width 0.16s cubic-bezier(0.34, 1.56, 0.64, 1),
     height 0.16s cubic-bezier(0.34, 1.56, 0.64, 1),
@@ -1288,19 +1292,117 @@ body {
 }
 
 /* ===== Shift 框选高亮（对齐 pea 品牌色） ===== */
-.react-flow__selection {
-  background: rgba(31, 162, 220, 0.08);
-  border: 1px solid var(--pea-brand);
-}
-/* 框选组选框：多选时完全透明不可见，仅用多选工具条传达选区（需求3）。
-   关键：这是 SVG <rect> 元素，必须用 fill/stroke 而非 background/border！
-   pointer-events:none —— 透明框不应拦截对底层节点的 hover/点击。 */
+/* 框选矩形：在浅色/深色背景下都清晰可见。
+   pointer-events:none —— 选择框不拦截事件，拖拽期间经过节点的 hover/点击仍命中节点本身。
+   增强背景透明度至 10% + 加粗边框至 1.5px，确保浅色画布背景下选区框清晰可辨（之前 6%+1px 在白色背景几乎不可见）。 */
+.react-flow__selection,
 .react-flow__nodesselection-rect {
-  fill: transparent !important;
-  stroke: transparent !important;
-  stroke-width: 1px !important;
+  /* !important 必须：ReactFlow 会在运行时注入默认样式（晚于本包样式、同特异性），不加 !important 会被覆盖 */
+  background: rgba(31, 162, 220, 0.10) !important;
+  border: 1.5px solid var(--pea-brand, #1fa2dc) !important;
   pointer-events: none !important;
 }
+/* nodesselection SVG 容器本身：确保不被任何父元素裁剪，选区矩形完整展示 */
+.react-flow__nodesselection {
+  overflow: visible !important;
+  z-index: 3 !important;
+}
+/* 关键：ReactFlow 默认 .react-flow__pane z-index=1，.react-flow__nodesselection 在 pane 内
+   且 z-index=3；.react-flow__viewport（承载 .react-flow__nodes）是 pane 的子元素且没有
+   z-index，导致拖拽完成后选区矩形容器覆盖在 viewport 之上，框内节点内容被半透明层遮住。
+   把 viewport 提到 z-index:4（高于 nodesselection 的 3、低于拖拽中 .react-flow__selection 的 6），
+   这样选中后节点显示在选区背景之上，既能看清选区范围，又能看清节点内容。 */
+.react-flow__viewport {
+  z-index: 4 !important;
+}
+.react-flow__nodes {
+  pointer-events: none !important;
+}
+/* 框选进行中（左键拖拽空白）：抑制节点 hover 时连接点的显隐，
+   避免在选择框扫过节点时节点下方/上方的连接手柄与功能条闪现（需求2：不触发下方节点行为）。 */
+.pea-selecting .pea-node.hover .pea-handle {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.pea-selecting .pea-node {
+  cursor: crosshair !important;
+}
+/* 框选进行中：强制隐藏节点自身的功能条、上传条、下方编辑框、文本工具条，
+   确保框选时只保留透明选择框 + 整体多选工具条，避免单个节点 UI 堆叠干扰。 */
+.pea-selecting .pea-node-result-toolbar,
+.pea-selecting .pea-node-top-upload-bar,
+.pea-selecting .node-chat-prompt,
+.pea-selecting .text-node-toolbar {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+/* 多选状态（框选完成后）：同样抑制单个节点的功能条和上传条，只保留整体多选工具条。
+   打组后 / 点击取消多选即恢复正常单节点交互。 */
+.pea-multi-select .pea-node-result-toolbar,
+.pea-multi-select .pea-node-top-upload-bar {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* ===== 画布错误边界兜底（避免白屏，需求3） ===== */
+.pea-canvas-error-boundary {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 20, 28, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.pea-eb-card {
+  width: min(440px, 92vw);
+  padding: 28px 26px;
+  border-radius: 18px;
+  background: var(--pea-bg-panel, #1a1a22);
+  border: 1px solid var(--pea-border, rgba(255, 255, 255, 0.08));
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  text-align: center;
+  color: var(--pea-text, #e8e8ee);
+}
+.pea-eb-icon { font-size: 34px; }
+.pea-eb-title { margin-top: 10px; font-size: 17px; font-weight: 700; }
+.pea-eb-desc { margin-top: 8px; font-size: 13px; line-height: 1.6; color: var(--pea-text-secondary, #9ca3af); }
+.pea-eb-detail {
+  margin: 14px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #f0a0a0;
+  background: rgba(255, 80, 80, 0.08);
+  border: 1px solid rgba(255, 80, 80, 0.2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.pea-eb-actions { margin-top: 18px; display: flex; gap: 10px; justify-content: center; }
+.pea-eb-btn {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 1px solid var(--pea-border, rgba(255, 255, 255, 0.12));
+  background: transparent;
+  color: var(--pea-text, #e8e8ee);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.pea-eb-btn:hover { background: rgba(255, 255, 255, 0.06); }
+.pea-eb-btn.primary {
+  background: var(--pea-brand, #1fa2dc);
+  border-color: var(--pea-brand, #1fa2dc);
+  color: #fff;
+}
+.pea-eb-btn.primary:hover { filter: brightness(1.08); }
 /* 自管框选矩形（Shift+拖拽空白处） */
 .pea-sel-box {
   position: fixed;
@@ -1956,7 +2058,18 @@ body {
 
 /* ===== React Flow 容器：确保画线/拖动时节点不被裁切 ===== */
 /* 关键：根容器 .react-flow 默认 overflow:hidden 会把靠近边缘/偏下的节点
-   下半部直接裁掉（截图中“节点只露出标签”的根因）。改为 visible 让节点完整显示。 */
+   下半部直接裁掉（截图中"节点只露出标签"的根因）。改为 visible 让节点完整显示。
+   同理 .pea-canvas-host / .react-flow__pane 的 overflow:hidden 也会裁掉
+   nodesselection（选区矩形），导致选择框只显示左上角一小块。 */
+.pea-canvas-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--pea-bg-deep);
+  color: var(--pea-text-primary);
+  /* 保留 overflow:hidden 用于安全边界（防止内容溢出破坏页面布局），
+     但下方的 .react-flow 链路全部设为 visible 确保选区框不被裁剪 */
+}
 .react-flow {
   overflow: visible !important;
 }
@@ -1967,6 +2080,10 @@ body {
   overflow: visible !important;
   /* 防止画线时 viewport transform 异常导致节点消失 */
   will-change: transform;
+}
+/* pane 是 nodesselection（选区 SVG）的父容器，必须 visible 否则选区框被裁成碎片 */
+.react-flow__pane {
+  overflow: visible !important;
 }
 /* 连线预览 SVG（react-flow__connectionline）有实心背景色 + z=1001 全屏覆盖，
    导致连线时所有节点被"同色遮挡"消失。根治：去背景 + 降层级到节点之下。 */
@@ -1984,9 +2101,16 @@ body {
 .react-flow__node {
   z-index: 10;
 }
-/* 选中节点的层级抬到最高，确保编辑框/功能条不被其它节点遮挡 */
+/* 选中节点层级适度提升：足够高于普通节点/边，但不过高，避免遮挡多选选择框
+   （需求：单机/框选时选择框要完整展示）。 */
 .react-flow__node.selected {
-  z-index: 1000 !important;
+  z-index: 30 !important;
+}
+
+/* 多选选择框 / 框选矩形：必须在选中节点之上，保证边框完整可见 */
+.react-flow__nodesselection-rect,
+.react-flow__selection {
+  z-index: 35 !important;
 }
 
 /* ===== React Flow 边颜色 ===== */
@@ -5728,7 +5852,8 @@ body {
    与画布节点框同风格、与节点框同距（需求4）。 */
 .multiselect-plus-btn {
   position: fixed;
-  z-index: 45;
+  /* 与多选工具条保持一致，确保浮在选择框/组框之上 */
+  z-index: 100;
   width: 46px;
   height: 52px;
   border-radius: 12px;
@@ -5783,7 +5908,9 @@ body {
 /** 下方工具栏（暗色胶囊） */
 .multiselect-toolbar {
   position: fixed;
-  z-index: 45;
+  /* 必须高于 ReactFlow 选中节点/组节点(z-index 30) 及选择框(z-index 35)，
+     保证多选工具条始终浮于选择框/组框上方。 */
+  z-index: 100;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
@@ -5794,7 +5921,7 @@ body {
   backdrop-filter: blur(16px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow:
-    0 6px 24px rgba(0, 0, 0, 0.4),
+    0 3px 12px rgba(0, 0, 0, 0.22),
     0 0 0 1px rgba(255, 255, 255, 0.05) inset;
   animation: mst-fade-in 0.18s ease-out;
 }

@@ -283,13 +283,28 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     void get().reconcileGeneratingNodes();
   },
   removeNode: (id) =>
-    set((s) => ({
-      nodes: s.nodes.filter((n) => n.id !== id),
-      edges: s.edges.filter((e) => e.source !== id && e.target !== id),
-      selectedId: s.selectedId === id ? null : s.selectedId,
-      selectedIds: s.selectedIds.filter((x) => x !== id),
-      dirty: true,
-    })),
+    set((s) => {
+      // 若删除的是组节点（type:'group'），必须同步清理其子节点；
+      // 否则子节点的 parentNode 仍指向已删除的组 id，
+      // ReactFlow 渲染时按 parentNode 查父节点找不到 → "Couldn't find parent node" / 白屏崩溃。
+      const target = s.nodes.find((n) => n.id === id);
+      const childIds: string[] =
+        target?.type === 'group' ? ((target.data as any)?.childrenIds ?? []) : [];
+      // 同时把 parentNode 指向该组的孤立子节点也一并移除（防御：childrenIds 可能漏记）
+      const orphanIds = s.nodes
+        .filter((n) => n.parentNode === id && !childIds.includes(n.id))
+        .map((n) => n.id);
+      const removeSet = new Set([id, ...childIds, ...orphanIds]);
+      return {
+        nodes: s.nodes.filter((n) => !removeSet.has(n.id)),
+        edges: s.edges.filter(
+          (e) => !removeSet.has(e.source) && !removeSet.has(e.target),
+        ),
+        selectedId: s.selectedId != null && removeSet.has(s.selectedId) ? null : s.selectedId,
+        selectedIds: s.selectedIds.filter((x) => !removeSet.has(x)),
+        dirty: true,
+      };
+    }),
   duplicateNode: (id) => {
     const src = get().nodes.find((n) => n.id === id);
     if (!src) return;
@@ -597,12 +612,19 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       style: { width: gw, height: gh },
     };
 
-    // 将子节点的 parentNode 指向 group
-    const childUpdates = s.nodes.map((n) =>
-      ids.includes(n.id)
-        ? { ...n, parentNode: gid, extent: 'parent' as const }
-        : n,
-    );
+    // 将子节点的 parentNode 指向 group，并把坐标转为相对于 group 原点。
+    // ReactFlow 的 subflow 中，子节点 position 是相对父容器而言的；保留绝对坐标会导致
+    // 子节点跑到容器外部，出现"打组后节点不在组内"的问题。
+    const childUpdates = s.nodes.map((n) => {
+      if (!ids.includes(n.id)) return n;
+      return {
+        ...n,
+        parentNode: gid,
+        extent: 'parent' as const,
+        position: { x: n.position.x - gx, y: n.position.y - gy },
+        selected: false,
+      };
+    });
 
     set({ nodes: [groupNode, ...childUpdates], dirty: true });
     get().clearSelection();

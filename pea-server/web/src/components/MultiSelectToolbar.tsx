@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useViewport } from 'reactflow';
 import { useCanvas, PeaNodeData } from '../store/canvas';
-import { PeaNodeKind, PEA_NODE_TYPES, NODE_DEF_OF } from '../constants/nodeTypes';
+import { PeaNodeKind, NODE_DEF_OF } from '../constants/nodeTypes';
 import {
   PlusOutlined,
   DownloadOutlined,
@@ -93,9 +94,9 @@ export default function MultiSelectToolbar() {
       const centerX = (minX + maxX) / 2;
       const centerY = (minY + maxY) / 2;
 
-      // 工具栏：在包围盒**上方**居中，间距 12px（对齐参考图：功能条在选择框正上方）
+      // 工具栏：在包围盒**上方**居中，间距 24px（对齐参考图：功能条在选择框正上方，留出清晰间距）
       const barLeft = Math.round(centerX);
-      const barTop = Math.round(minY - 12 - 40); // 40 ≈ 工具栏高度，让工具栏底部贴近选区顶部
+      const barTop = Math.round(minY - 24 - 40); // 40 ≈ 工具栏高度，让工具栏底部与选区顶部保持 24px 间距
 
       // + 按钮：在包围盒「右侧」，垂直居中，与节点框同距（复用 HANDLE_GAP=24）。
       // 按钮半宽约 23px，故 center = maxX + 24(同距) + 23，使按钮近边距框 = 24px。
@@ -165,7 +166,7 @@ export default function MultiSelectToolbar() {
   if (!isMultiSelect || !bounds || !bounds.bar || !bounds.plus) return null;
   const { bar, plus } = bounds;
 
-  return (
+  const toolbar = (
     <>
       {/* ====== 1. 选中框右侧「添加节点」按钮（节点卡样式） ====== */}
       <div
@@ -189,14 +190,14 @@ export default function MultiSelectToolbar() {
         style={{ left: bar.left, top: bar.top }}
         role="toolbar"
         aria-label="多选操作"
-        aria-selected-count={selectedIds.length}
+        data-selected-count={selectedIds.length}
       >
         <div className="mst-inner">
           <button className="mst-btn" onClick={handleJoinConversation} title="加入对话">
             <CommentOutlined /> <span>加入对话</span>
           </button>
-          <button className="mst-btn" onClick={handlePack} title="打包">
-            <AppstoreOutlined /> <span>打包</span>
+          <button className="mst-btn" onClick={handlePack} title="打组">
+            <AppstoreOutlined /> <span>打组</span>
           </button>
 
           <div className="mst-sep" />
@@ -243,6 +244,9 @@ export default function MultiSelectToolbar() {
       )}
     </>
   );
+
+  // 使用 Portal 渲染到 body，避免被 ReactFlow viewport / 组节点 / 选中节点等高 z-index 元素遮挡
+  return typeof document !== 'undefined' ? createPortal(toolbar, document.body) : null;
 }
 
 /**

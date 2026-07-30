@@ -575,7 +575,9 @@ export default function NodeChatPrompt() {
   const selectedIds = useCanvas((s) => s.selectedIds);
   const selectedId = useCanvas((s) => s.selectedId);
   // 必须在引用它的选择器（upstream）之前声明，避免 TDZ 崩溃
-  const single = selectedIds.length === 1 ? selectedIds[0] : selectedId;
+  // 关键修复：仅当「恰好选中 1 个节点」时才视为单选，否则为 null。
+  // 之前的回退 selectedId 会在多选（框选）时让下方输入栏错误弹出（需求2：框选不应触发节点弹框）。
+  const single = selectedIds.length === 1 ? selectedIds[0] : null;
   const nodes = useCanvas((s) => s.nodes);
   const update = useCanvas((s) => s.updateNodeData);
   const upstream = useCanvas((s) => (single ? s.getUpstreamInputs(single) : []));

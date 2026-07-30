@@ -14,6 +14,17 @@ import { retryNodeGeneration } from '../lib/nodeGeneration';
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /**
+ * 连接点(手柄圆点)内缘距节点框的间距（flow 坐标 px）。
+ * 设计：连接点是一个浮在节点框外、与节点同缩放的小圆点（hover 时显现并带“弹开”跟随）；
+ * 真正的连线端点要连到“节点框”上，而不是这个悬浮点。PeaEdge 会按手柄中心到框边的距离
+ * 把边端点回退到框边。
+ */
+export const HANDLE_GAP = 14;
+/** 手柄直径（flow 坐标 13px）的一半。手柄中心距框 = HANDLE_GAP + HANDLE_HALF，
+ *  PeaEdge 回退量同此值，使连线端点精确落在节点框边。 */
+export const HANDLE_HALF = 6.5;
+
+/**
  * 画布节点渲染：
  *  - text：顶部标签（图标+Text） + contentEditable 方框
  *  - image/video/audio：顶部上传按钮 + 媒体标签（图标+label） + 预览/占位
@@ -22,7 +33,6 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
  */
 export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const update = useCanvas((s) => s.updateNodeData);
-  const select = useCanvas((s) => s.select);
   const selectedIdsArr = useCanvas((s) => s.selectedIds);
   const selected = selectedIdsArr.includes(id);
   // 多选（框选 / Shift 多选）时抑制单节点自身的「选中边框 + 功能条」，
@@ -38,8 +48,6 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const editRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  // 拖动判定：mousedown 记录起点，click 时若位移>4px 视为拖动（不选中）
-  const downXY = useRef<{ x: number; y: number } | null>(null);
 
   const kind = data.kind;
   const isText = kind === 'text';
@@ -54,15 +62,12 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const def = NODE_DEF_OF(kind);
   const tagLabel = tagLabelOf(kind);
 
-  // ── 连接点反缩放（counter-scale）──────────────────────────────────────
-  // ReactFlow 会把整个节点按 zoom 缩放，导致缩小时连接点被压成 3px、还紧贴节点边，
-  // 用户「找不到连线点」。这里读取视口 zoom，给连接点套 scale(1/zoom)，
-  // 使其在任意缩放下都保持恒定屏幕尺寸；GAP 间距同样反缩放，保持与节点框恒定距离。
+  // ── 连接点随画布缩放（不再 counter-scale）──────────────────────────────
+  // 用户反馈：缩小时连接点相对节点框显得很大，要求像节点框一样随画布缩放。
+  // 因此去掉 scale(1/zoom)：手柄 width/height 13px 是 flow 坐标值，视觉上随 zoom
+  // 自然缩放；中心距框 HANDLE_GAP+HANDLE_HALF 也是 flow 坐标恒定值。
   const { zoom = 1 } = useViewport();
-  const zClamped = Math.max(zoom, 0.1);
-  const inv = 1 / zClamped;
-  const HANDLE_GAP = 10; // 连接点与节点框的屏幕恒定间距(px)，补偿锚点偏移后实际 gap≈3px 贴边
-  const handleOffset = -HANDLE_GAP / zClamped; // 节点空间下的偏移
+  const handleOffset = -(HANDLE_GAP + HANDLE_HALF);
 
   // 将 data.aspectRatio（如 "9:16"）映射为节点尺寸
   // 仅空白节点使用；有内容后由 CSS aspect-ratio:auto 接管（按实际媒体比例包裹）
@@ -182,52 +187,55 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       }}
       onMouseMove={(e) => {
         // ── 连接点独立热区跟随逻辑（带弹回边界）────────────────────
-        // 只有鼠标进入某个 handle 的热区半径(45px屏幕像素)内时，
-        // 该 handle 才跟随鼠标小范围移动；另一个保持初始位置。
-        // 弹回效果：handle 不能越过节点框边缘，碰到就钳制在边界上。
+        // 直接跟随光标，但把手柄中心钳制在「节点框外」区域：
+        // 左/右 handle 的内缘不能越过节点框边，即光标把它往框里推时，
+        // 手柄会停在框边外缘（弹回），不会压进节点框。
         const el = rootRef.current;
         if (!el) return;
         const r = el.getBoundingClientRect();
         const mx = e.clientX;
         const my = e.clientY;
+        const z = Math.max(zoom, 0.1);
 
-        // 左/右 handle 的初始中心位置（屏幕坐标）
-        const GAP_SCREEN = HANDLE_GAP; // 屏幕像素间距
-        const leftCx = r.left - GAP_SCREEN;   // 左 handle 初始中心 x（节点左边缘往左 GAP）
-        const rightCx = r.right + GAP_SCREEN;  // 右 handle 初始中心 x（节点右边缘往右 GAP）
-        const cy = r.top + r.height / 2;       // 垂直居中
+        const HOT_RADIUS = 45;        // 热区半径（屏幕 px）
+        const FOLLOW_MAX_X = 14;      // 向外最大跟随距离（屏幕 px）
+        const FOLLOW_MAX_Y = 18;      // 垂直方向最大跟随距离（屏幕 px）
+        const VERTICAL_MARGIN = 12;   // 上下不贴边留的余量（屏幕 px）
 
-        const HOT_RADIUS = 45; // 热区半径(屏幕 px)，鼠标进入此范围才激活跟随
+        // 手柄不能越过框边：内缘最多贴到框边。以 hover 时最大可见尺寸(19px, 半宽 9.5)为界，
+        // 保证无论基础态(13px)还是 hover 态(19px)手柄，其内缘都不进入节点框。
+        const half = HANDLE_HALF * z;                 // 基础手柄半宽(13px)
+        const halfHit = 9.5 * z;                       // hover 态手柄半宽(19px)，弹回/跟随边界按最大可见尺寸
+        // 手柄靠 right/left 定位的是「外缘」，故静止中心 = 框边 ± 偏移 ∓ 手柄半宽
+        const cxOffset = (HANDLE_GAP + HANDLE_HALF) * z;
+        const leftRestCx = r.left - cxOffset + halfHit;
+        const rightRestCx = r.right + cxOffset - halfHit;
+        const restCy = r.top + r.height / 2;
 
-        const distLeft = Math.hypot(mx - leftCx, my - cy);
-        const distRight = Math.hypot(mx - rightCx, my - cy);
+        const leftMaxCx = r.left - halfHit;   // 左 handle 最右允许位置(内缘贴框)
+        const leftMinCx = leftRestCx - FOLLOW_MAX_X;
+        const rightMinCx = r.right + halfHit; // 右 handle 最左允许位置(内缘贴框)
+        const rightMaxCx = rightRestCx + FOLLOW_MAX_X;
+        const cyMin = r.top + half + VERTICAL_MARGIN;
+        const cyMax = r.bottom - half - VERTICAL_MARGIN;
 
-        // ── 弹回边界 ──
-        // handle 不能进入节点框内部：
-        //   左 handle 往右最多到节点左边缘(dx ≤ GAP_SCREEN)
-        //   右 handle 往左最多到节点右边缘(dx ≥ -GAP_SCREEN)
-        //   垂直方向不超出节点上下边缘(dy 限制按节点半高留余量)
-        const FOLLOW_MAX_X_OUT = 14;    // 向外（远离节点）最大跟随距离
-        const FOLLOW_MAX_Y = 18;        // 垂直方向最大跟随距离
-        const VERTICAL_MARGIN = 12;     // 上下边距节点边缘的最小距离
+        const distLeft = Math.hypot(mx - leftRestCx, my - restCy);
+        const distRight = Math.hypot(mx - rightRestCx, my - restCy);
 
         if (distLeft < HOT_RADIUS && distLeft <= distRight) {
-          // 鼠标在左 handle 热区内：左 handle 跟随，带弹回边界
-          // 左 handle: dx > 0 是朝向节点(受弹回限制), dx < 0 是远离节点(自由)
-          const dx = clamp(mx - leftCx, -FOLLOW_MAX_X_OUT, GAP_SCREEN);
-          // 垂直方向不超出节点上下范围
-          const dy = clamp(my - cy, -Math.min(FOLLOW_MAX_Y, cy - r.top - VERTICAL_MARGIN),
-                                Math.min(FOLLOW_MAX_Y, r.bottom - cy - VERTICAL_MARGIN));
+          const actualCx = clamp(mx, leftMinCx, leftMaxCx);
+          const actualCy = clamp(my, cyMin, cyMax);
+          const dx = actualCx - leftRestCx;
+          const dy = actualCy - restCy;
           el.style.setProperty('--pea-hx-l', `${dx.toFixed(1)}px`);
           el.style.setProperty('--pea-hy-l', `${dy.toFixed(1)}px`);
           el.style.setProperty('--pea-hx-r', '0px');
           el.style.setProperty('--pea-hy-r', '0px');
         } else if (distRight < HOT_RADIUS) {
-          // 鼠标在右 handle 热区内：右 handle 跟随，带弹回边界
-          // 右 handle: dx < 0 是朝向节点(受弹回限制), dx > 0 是远离节点(自由)
-          const dx = clamp(mx - rightCx, -GAP_SCREEN, FOLLOW_MAX_X_OUT);
-          const dy = clamp(my - cy, -Math.min(FOLLOW_MAX_Y, cy - r.top - VERTICAL_MARGIN),
-                                Math.min(FOLLOW_MAX_Y, r.bottom - cy - VERTICAL_MARGIN));
+          const actualCx = clamp(mx, rightMinCx, rightMaxCx);
+          const actualCy = clamp(my, cyMin, cyMax);
+          const dx = actualCx - rightRestCx;
+          const dy = actualCy - restCy;
           el.style.setProperty('--pea-hx-l', '0px');
           el.style.setProperty('--pea-hy-l', '0px');
           el.style.setProperty('--pea-hx-r', `${dx.toFixed(1)}px`);
@@ -240,29 +248,21 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
           el.style.setProperty('--pea-hy-r', '0px');
         }
       }}
-      onMouseDown={(e) => {
-        if ((e.target as HTMLElement).closest('.react-flow__handle')) return;
-        downXY.current = { x: e.clientX, y: e.clientY };
-      }}
-      onClick={(e) => {
-        const d = downXY.current;
-        if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) > 4) return;
-        if (!selected) select(id);
-      }}
       onDoubleClick={onNodeDoubleClick}
       data-kind={kind}
-      style={{ ...outerStyle, '--inv': String(inv), '--pea-hx-l': '0px', '--pea-hy-l': '0px', '--pea-hx-r': '0px', '--pea-hy-r': '0px' } as React.CSSProperties}
+      style={{ ...outerStyle, '--pea-hx-l': '0px', '--pea-hy-l': '0px', '--pea-hx-r': '0px', '--pea-hy-r': '0px' } as React.CSSProperties}
     >
       {/* 左手柄：用户上传的图片不需要接收其他节点输入，隐藏 */}
       {!isUserUploadedImage && (
         <Handle
           type="target"
+          id="in"
           position={Position.Left}
           className="pea-handle pea-handle-left"
+          onMouseEnter={() => setHovered(true)}
           style={{
             left: handleOffset,
             top: '50%',
-            transformOrigin: 'right center',
             // 独立跟随变量：--pea-hx-l / --pea-hy-l
             '--pea-hx': 'var(--pea-hx-l)',
             '--pea-hy': 'var(--pea-hy-l)',
@@ -273,12 +273,13 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       )}
       <Handle
         type="source"
+        id="out"
         position={Position.Right}
         className="pea-handle pea-handle-right"
+        onMouseEnter={() => setHovered(true)}
         style={{
           right: handleOffset,
           top: '50%',
-          transformOrigin: 'left center',
           // 独立跟随变量：--pea-hx-r / --pea-hy-r
           '--pea-hx': 'var(--pea-hx-r)',
           '--pea-hy': 'var(--pea-hy-r)',

@@ -22,7 +22,9 @@ export default function TextNodeToolbar() {
   const nodes = useCanvas((s) => s.nodes);
   const viewport = useViewport();
 
-  const single = selectedIds.length === 1 ? selectedIds[0] : selectedId;
+  // 仅当「恰好选中 1 个节点」时才视为单选，否则为 null。
+  // 回退 selectedId 会在多选（框选）时让文本工具条错误弹出（需求2）。
+  const single = selectedIds.length === 1 ? selectedIds[0] : null;
   const sel = single ? nodes.find((n) => n.id === single) : null;
   const isTextNode = sel?.data.kind === 'text';
 

@@ -51,6 +51,7 @@ if (typeof window !== 'undefined' && (import.meta.env.DEV || localStorage.getIte
   window.__ui = useUi;
 }
 import PeaEdge from './PeaEdge';
+import CanvasErrorBoundary from './ErrorBoundary';
 import SidePanel from './SidePanel';
 import MaterialPanel from './MaterialPanel';
 import NodeChatPrompt from './NodeChatPrompt';
@@ -904,6 +905,7 @@ function Flow() {
     toggleSelect,
     setSelection,
     clearSelection,
+    selectedIds,
     canvasId,
     version,
     dirty,
@@ -983,16 +985,35 @@ function Flow() {
   }, []);
 
   const { screenToFlowPosition, fitView, getViewport, setViewport } = useReactFlow();
+  // dev/E2E 钩子：暴露一个设置 zoom 的函数，方便验证脚本在任意缩放级别测试连接点位置。
+  useEffect(() => {
+    if (typeof window !== 'undefined' && (import.meta.env.DEV || localStorage.getItem('__peaDevHooks') === '1')) {
+      // @ts-ignore
+      window.__peaSetZoom = (z: number) => {
+        const vp = getViewport();
+        setViewport({ ...vp, zoom: Math.max(0.25, Math.min(3, z)) }, { duration: 0 });
+      };
+    }
+  }, [getViewport, setViewport]);
   const { message } = App.useApp();
   const saveTimer = useRef<number>();
   const [sideOpen, setSideOpen] = useState(false);
   const [materialOpen, setMaterialOpen] = useState(false);
   const [libAt, setLibAt] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number; sourceId: string } | null>(null);
+  const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number; sourceId: string; handleType: 'source' | 'target'; spawn: { x: number; y: number } } | null>(null);
   const [showMinimap, setShowMinimap] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
-  const pendingEdge = useRef<{ source: string; handleId: string | null } | null>(null);
+  const pendingEdge = useRef<{ source: string | null; handleId: string | null; handleType: 'source' | 'target' | null } | null>(null);
+  // 连线起点坐标：用于区分「单击连接点」与「拖拽连线」（位移阈值判定）。
+  const startPosRef = useRef<{ x: number; y: number } | null>(null);
+  // 本次拖拽是否已由 onConnect 真正建边：用于防止 onConnectEnd 对「本体落点」重复建边。
+  const connectedThisDrag = useRef<boolean>(false);
+  // 框选进行中标记：用于抑制拖动经过节点时的 hover 手柄显示与节点弹框（需求2）。
+  const [selecting, setSelecting] = useState(false);
+  const selectingRef = useRef(false);
+  // 多选状态：selectedIds.length > 1 时给画布容器加类，用于抑制单个节点的功能条/上传条
+  const isMultiSelect = selectedIds.length > 1;
   // 拖动 vs 单击判定：在 ReactFlow 的 onNodeDragStart 处记录按下坐标
   // （此处不受节点内部 stopPropagation 影响），onNodeClick 时比较位移。
   const downPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -1090,7 +1111,7 @@ function Flow() {
     } as PeaNodeData, pos);
   };
 
-  const addConnectedAt = (kind: PeaNodeKind, sourceId: string, screenPos: { x: number; y: number }) => {
+  const addConnectedAt = (kind: PeaNodeKind, sourceId: string, screenPos: { x: number; y: number }, handleType: 'source' | 'target' = 'source') => {
     const pos = screenToFlowPosition({ x: screenPos.x, y: screenPos.y });
     const label = kind === 'text' ? '文本生成' : kind === 'image' ? '图片生成' : kind === 'video' ? '视频生成' : kind === 'audio' ? '音频' : '3D 世界';
     const store = useCanvas.getState();
@@ -1109,7 +1130,12 @@ function Flow() {
       },
     } as PeaNodeData, pos);
     if (newId) {
-      onConnect({ source: sourceId, target: newId, sourceHandle: null, targetHandle: null });
+      // 单击源(out)连接点：新节点作为下游(target)；单击目标(in)连接点：新节点作为上游(source)。
+      if (handleType === 'target') {
+        onConnect({ source: newId, target: sourceId, sourceHandle: null, targetHandle: 'in' });
+      } else {
+        onConnect({ source: sourceId, target: newId, sourceHandle: null, targetHandle: 'in' });
+      }
     }
   };
 
@@ -1146,6 +1172,14 @@ function Flow() {
           removeEdge(selEdge.id);
           return;
         }
+        // 多选状态：一次性删除所有选中节点（与工具条"删除"行为一致）
+        const selIds = useCanvas.getState().selectedIds;
+        if (selIds.length > 1) {
+          e.preventDefault();
+          selIds.forEach((id) => removeNode(id));
+          return;
+        }
+        // 单选状态：删除当前选中节点
         if (sel) {
           e.preventDefault();
           // 先检查节点是否存在于 nodes 中，避免删除已不存在的节点
@@ -1200,20 +1234,28 @@ function Flow() {
   };
 
   const onFlowPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 2) return; // 仅响应右键
-    if (!isCanvasBackground(e.target)) return;
-    suppressCtxRef.current = false; // 每次右键交互重置抑制标记
-    const vp = getViewport();
-    panRef.current = {
-      active: true,
-      moved: false,
-      startX: e.clientX,
-      startY: e.clientY,
-      vx: vp.x,
-      vy: vp.y,
-    };
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    e.preventDefault();
+    if (e.button === 2) {
+      // 右键拖拽平移（与左键框选、右键菜单互不冲突）
+      if (!isCanvasBackground(e.target)) return;
+      suppressCtxRef.current = false; // 每次右键交互重置抑制标记
+      const vp = getViewport();
+      panRef.current = {
+        active: true,
+        moved: false,
+        startX: e.clientX,
+        startY: e.clientY,
+        vx: vp.x,
+        vy: vp.y,
+      };
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    if (e.button === 0 && isCanvasBackground(e.target)) {
+      // 左键在空白画布按下并拖拽 = 框选：标记进行中，抑制经过节点的 hover 手柄/弹框
+      selectingRef.current = true;
+      setSelecting(true);
+    }
   };
 
   const onFlowPointerMove = (e: React.PointerEvent) => {
@@ -1232,13 +1274,19 @@ function Flow() {
 
   const onFlowPointerUp = (e: React.PointerEvent) => {
     const p = panRef.current;
-    if (!p || !p.active) return;
-    if (p.moved) {
-      suppressCtxRef.current = true; // 松开后抑制 contextmenu，避免误弹菜单
-      flowRef.current?.classList.remove('pea-panning');
+    if (p && p.active) {
+      if (p.moved) {
+        suppressCtxRef.current = true; // 松开后抑制 contextmenu，避免误弹菜单
+        flowRef.current?.classList.remove('pea-panning');
+      }
+      panRef.current = null;
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
     }
-    panRef.current = null;
-    (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    // 框选结束：延迟一帧关闭标记，避免与框选提交的选中态竞争导致手柄/弹框瞬时闪现。
+    if (selectingRef.current) {
+      selectingRef.current = false;
+      window.setTimeout(() => setSelecting(false), 0);
+    }
   };
 
   // 修复：Ctrl/⌘ + 滚轮会触发浏览器整页缩放，而非画布缩放。
@@ -1317,14 +1365,14 @@ function Flow() {
       {edgeMenu && (
         <EdgeNodeMenu
           at={{ x: edgeMenu.x, y: edgeMenu.y }}
-          onPick={(k) => addConnectedAt(k, edgeMenu.sourceId, { x: edgeMenu.x, y: edgeMenu.y })}
+          onPick={(k) => addConnectedAt(k, edgeMenu.sourceId, edgeMenu.spawn, edgeMenu.handleType)}
           onClose={() => setEdgeMenu(null)}
         />
       )}
 
       <div
         ref={flowRef}
-        className="pea-canvas-flow"
+        className={`pea-canvas-flow${selecting ? ' pea-selecting' : ''}${isMultiSelect ? ' pea-multi-select' : ''}`}
         onPointerDown={onFlowPointerDown}
         onPointerMove={onFlowPointerMove}
         onPointerUp={onFlowPointerUp}
@@ -1336,46 +1384,107 @@ function Flow() {
           edgeTypes={edgeTypes}
           defaultEdgeOptions={{ type: 'pea' }}
           connectionMode={ConnectionMode.Loose}
+          connectionRadius={40}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={(conn: Connection) => {
+            // 所有入边统一固定到目标节点的 'in' 连接点（左侧），防止 Loose 模式下根据落点吸到
+            // source handle 'out'（右侧）或节点框任意位置（需求1）。
+            if (!conn.source || !conn.target || conn.source === conn.target) return;
+            const tNode = useCanvas.getState().nodes.find((n) => n.id === conn.target);
+            const isUploadImg =
+              !!tNode &&
+              tNode.data.kind === 'image' &&
+              !!(tNode.data.fileKey || tNode.data.url) &&
+              !(tNode.data.resultUrl || (tNode.data.resultUrls && tNode.data.resultUrls.length));
+            if (isUploadImg) {
+              // 用户上传的图片没有 input handle，不接受连线入边。
+              return;
+            }
+            connectedThisDrag.current = true;
             pendingEdge.current = null;
-            onConnect(conn);
+            onConnect({
+              source: conn.source,
+              target: conn.target,
+              sourceHandle: conn.sourceHandle ?? null,
+              targetHandle: 'in',
+            } as Connection);
           }}
           onConnectStart={(_evt: any, params: any) => {
-            pendingEdge.current = { source: params.nodeId ?? null, handleId: params.handleId ?? null };
+            const me = _evt as MouseEvent | undefined;
+            startPosRef.current = me ? { x: me.clientX, y: me.clientY } : null;
+            pendingEdge.current = { source: params.nodeId ?? null, handleId: params.handleId ?? null, handleType: params.handleType ?? 'source' };
+            connectedThisDrag.current = false;
           }}
           onConnectEnd={(evt: any) => {
-            const pending = pendingEdge.current;
-            pendingEdge.current = null;
-            if (!pending?.source) return;
             const e = evt as MouseEvent;
             const tgt = e.target as HTMLElement;
             const nodeEl = tgt.closest('.react-flow__node') as HTMLElement | null;
-            const onHandle = !!tgt.closest('.react-flow__handle');
+            const targetId = nodeEl ? nodeEl.getAttribute('data-id') : null;
             const onPane =
               tgt.classList.contains('react-flow__pane') ||
               tgt.classList.contains('react-flow__renderer') ||
               tgt.classList.contains('react-flow__viewport');
-            if (onPane) {
-              // 空白处释放 → 弹出"新建并连接"菜单
-              setEdgeMenu({ x: e.clientX, y: e.clientY, sourceId: pending.source });
+
+            const pending = pendingEdge.current;
+            pendingEdge.current = null;
+
+            // 已由 onConnect 建边 → 不重复处理。
+            if (connectedThisDrag.current) {
+              connectedThisDrag.current = false;
               return;
             }
-            if (nodeEl && !onHandle) {
-              // 释放在某节点内部（非手柄）→ 视为"从节点拖到节点即连线"，
-              // 自动创建一条边（onConnect 已处理手柄路径，这里只补齐"落在节点本体"的情形）。
-              const targetId = nodeEl.getAttribute('data-id');
-              if (targetId && targetId !== pending.source) {
+
+            const ht: 'source' | 'target' = pending?.handleType === 'target' ? 'target' : 'source';
+            // 位移判定：按下即松开、几乎未移动 = 单击；否则视为拖拽连线。
+            const moved = startPosRef.current
+              ? Math.hypot(e.clientX - startPosRef.current.x, e.clientY - startPosRef.current.y)
+              : 999;
+            const releasedOnOtherNode = !!targetId && targetId !== pending?.source;
+
+            // 单击连接点（鼠标放在连接点上，或连接点跟随鼠标时点在圆点上）→ 弹出"新建并连接"菜单。
+            // 手柄命中区随视觉一起移动，故两种场景都能命中。新节点按连线方向偏移出原节点外侧，避免压住原节点。
+            if (pending?.source && !releasedOnOtherNode && moved < 6) {
+              const dir = ht === 'target' ? -1 : 1;
+              setEdgeMenu({
+                x: e.clientX,
+                y: e.clientY,
+                sourceId: pending.source,
+                handleType: ht,
+                spawn: { x: e.clientX + dir * 280, y: e.clientY },
+              });
+              return;
+            }
+
+            // 兜底：极少数场景 onConnect 未识别到目标节点，但鼠标实际释放在其它节点本体上，
+            // 仍解析到 'in' 连接点，保证固定连接点行为一致。
+            if (releasedOnOtherNode && pending?.source) {
+              const tNode = useCanvas.getState().nodes.find((n) => n.id === targetId);
+              const isUploadImg =
+                !!tNode &&
+                tNode.data.kind === 'image' &&
+                !!(tNode.data.fileKey || tNode.data.url) &&
+                !(tNode.data.resultUrl || (tNode.data.resultUrls && tNode.data.resultUrls.length));
+              if (!isUploadImg) {
                 onConnect({
                   source: pending.source,
-                  target: targetId,
-                  sourceHandle: null,
-                  targetHandle: null,
+                  target: targetId as string,
+                  sourceHandle: pending.handleId ?? null,
+                  targetHandle: 'in',
                 } as Connection);
               }
+              return;
             }
-            // 释放在手柄上：onConnect 已建边，这里无需处理。
+            // 拖拽连线释放到空白 → 弹出"新建并连接"菜单（落点为新节点位置）
+            if (pending?.source && onPane) {
+              setEdgeMenu({
+                x: e.clientX,
+                y: e.clientY,
+                sourceId: pending.source,
+                handleType: ht,
+                spawn: { x: e.clientX, y: e.clientY },
+              });
+            }
           }}
           onNodeClick={(e, n) => {
             // 仅在真实拖动（位移>4px）时抑制随后的 click；纯单击正常选中+弹框
@@ -1514,7 +1623,9 @@ function Flow() {
 export default function CanvasEditor() {
   return (
     <ReactFlowProvider>
-      <Flow />
+      <CanvasErrorBoundary>
+        <Flow />
+      </CanvasErrorBoundary>
     </ReactFlowProvider>
   );
 }

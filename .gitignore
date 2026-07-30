@@ -37,3 +37,6 @@ Thumbs.db
 .vscode/
 *.swp
 verify/**/*.png
+verify/**/*.log
+verify/**/*.txt
+verify/**/*.json
