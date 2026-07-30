@@ -70,15 +70,21 @@ interface CanvasState {
   onConnect: (c: Connection) => void;
   removeEdge: (id: string) => void;
   addNode: (data: PeaNodeData, position: { x: number; y: number }) => string;
-  updateNodeData: (id: string, patch: Partial<PeaNodeData>) => void;
+  updateNodeData: (id: string, patch: Partial<PeaNodeData>, recordHistory?: boolean) => void;
   select: (id: string | null) => void;
   toggleSelect: (id: string) => void;
   setSelection: (ids: string[]) => void;
+  // 框选「覆盖即选中」二次校正：用 CanvasEditor 在 mouseup 时算好的完整选区 rect
+  // （window.__lastSelRect，屏幕坐标→画布坐标）做 partial-intersection，把被覆盖但 RF 漏选的节点补进 selectedIds。
+  // 方向：只补不删（不打断 shift 反向框选）。
+  correctBoxSelection: () => void;
   clearSelection: () => void;
   markSaved: (version: number) => void;
   loadGraph: (nodes: Node<PeaNodeData>[], edges: Edge[], version: number) => void;
   openCanvas: (id: number) => Promise<void>;
   removeNode: (id: string) => void;
+  /** 批量删除节点（含组及其子节点的级联清理），合并为单条撤销项。 */
+  removeNodes: (ids: string[]) => void;
   duplicateNode: (id: string) => void;
   addConnected: (fromId: string) => void;
   copySelected: () => void;
@@ -98,10 +104,28 @@ interface CanvasState {
   groupNodes: (nodeIds: string[]) => string | null;
   /** 解组：移除 Group 容器，子节点脱离父级（保留绝对位置）。 */
   ungroupNode: (groupId: string) => void;
+  /**
+   * 把无父节点拖入某组 / 把已归属子节点拖出到外层（按节点的画布坐标中心判定）。
+   * 落在某组视觉边界内的 → 转 parentNode + 相对坐标 + 扩组；
+   * 已归属但中心已落到组边界外的 → 转绝对坐标并脱离。
+   * 返回本次发生的动作："added" | "removed" | null。
+   */
+  moveNodeToGroup: (nodeId: string) => 'added' | 'removed' | null;
   /** 切换组内布局：grid(宫格) / horizontal(水平)。 */
   reLayoutGroup: (groupId: string, layout: 'grid' | 'horizontal') => void;
   /** 下载组：将组内所有节点的数据打包导出为 JSON 文件。 */
   downloadGroup: (groupId: string) => void;
+  // ── 撤销 / 重做历史栈 ──
+  /** 历史栈：已提交的过往状态（可撤销）。 */
+  past: HistorySnapshot[];
+  /** 历史栈：被撤销后保留的将来状态（可重做）。 */
+  future: HistorySnapshot[];
+  /** 在「下一次结构性变更」前记录当前状态快照。传 label 可把连续同类操作合并为单条撤销项。 */
+  takeSnapshot: (label?: string) => void;
+  /** 撤销一步（Ctrl+Z）。还原上一次快照并保留当前状态到重做栈。 */
+  undo: () => void;
+  /** 重做一步（Ctrl+Shift+Z / Ctrl+Y）。 */
+  redo: () => void;
 }
 
 /** 基于当前 nodes 生成唯一 ID，防止模块级 seq 在热更新/加载画布后重复导致节点被覆盖。 */
@@ -113,6 +137,74 @@ const nextId = (nodes: Node<PeaNodeData>[]) => {
   });
   return `n${max + 1}`;
 };
+
+// ════════════════════════════════════════════════════════════════════════
+// 撤销 / 重做：基于快照的历史栈
+// 设计要点（团队代码质量基准）：
+//  - 只在「已提交的结构性变更」前记录快照，连续输入通过 label 合并为一条撤销项；
+//  - 快照只保存可持久化的最小字段（与 openCanvas/cleanGraph 同口径），不含 ReactFlow
+//    运行时字段（width/height/selected/measured…），还原时由 ReactFlow 重新测量；
+//  - 生成任务回写（applyJobResult / reconcileGeneratingNodes）走 set 直写、不调 takeSnapshot，
+//    因此「生成中 / 生成结果」不会污染历史栈，撤销只针对用户操作。
+// ════════════════════════════════════════════════════════════════════════
+
+/** 一条历史快照：节点/边的最小可还原表示 + 当时的选中态。 */
+type HistorySnapshot = {
+  nodes: any[];
+  edges: any[];
+  selectedIds: string[];
+  selectedId: string | null;
+};
+
+const HISTORY_LIMIT = 100;
+
+/** 深拷贝：节点数据均为可 JSON 序列化的纯对象，用 JSON 往返最稳妥。 */
+const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+
+/** 从当前状态提取最小快照（与 openCanvas/cleanGraph 口径一致）。 */
+const snapshotFromState = (s: {
+  nodes: Node<PeaNodeData>[];
+  edges: Edge[];
+  selectedIds: string[];
+  selectedId: string | null;
+}): HistorySnapshot => ({
+  nodes: s.nodes.map((n: any) => {
+    const base: any = {
+      id: n.id,
+      type: n.type || 'pea',
+      position: { x: n.position.x, y: n.position.y },
+      data: clone(n.data),
+    };
+    if (n.parentNode) {
+      base.parentNode = n.parentNode;
+      base.extent = n.extent;
+    }
+    // 组容器需保留尺寸与父子关系，否则撤销后分组丢失
+    if (n.type === 'group' && n.style) {
+      base.style = { width: n.style.width, height: n.style.height };
+    }
+    return base;
+  }),
+  edges: s.edges.map((e: any) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    sourceHandle: e.sourceHandle ?? null,
+    targetHandle: e.targetHandle ?? null,
+    type: e.type || 'pea',
+  })),
+  selectedIds: [...s.selectedIds],
+  selectedId: s.selectedId,
+});
+
+/** 把快照还原为受控节点（补回 selected 字段，与当前选中态对齐）。 */
+const nodesFromSnapshot = (snap: HistorySnapshot): Node<PeaNodeData>[] =>
+  snap.nodes.map((n: any) => ({ ...n, selected: snap.selectedIds.includes(n.id) }));
+
+/** 合并链标记：同 label 的连续 takeSnapshot 只记录一次，用于把「逐字编辑」并成一条撤销项。 */
+let lastHistoryLabel: string | null = null;
+/** 拖拽快照标记：一次拖拽只在「首次产生位移」时记一条撤销项；松开后复位。 */
+let dragSnapshotTaken = false;
 
 export const useCanvas = create<CanvasState>((set, get) => ({
   canvasId: null,
@@ -128,14 +220,106 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   clipboard: null,
   jobNodeMap: {},
   defaultAspectRatio: '9:16',   // 图片节点默认竖海报比例
+  past: [],
+  future: [],
 
   setDefaultAspectRatio: (ratio) => set({ defaultAspectRatio: ratio }),
+
+  // ── 撤销 / 重做：历史栈核心实现 ──
+  takeSnapshot: (label) => {
+    // 同 label 的连续调用（如逐字输入提示词）只记一次，避免历史被字符刷屏
+    if (label && label === lastHistoryLabel) return;
+    lastHistoryLabel = label ?? null;
+    const s = get();
+    const snap = snapshotFromState(s);
+    const past = [...s.past, snap];
+    if (past.length > HISTORY_LIMIT) past.shift();
+    set({ past, future: [] });
+  },
+  undo: () => {
+    const s = get();
+    if (s.past.length === 0) return;
+    const prev = s.past[s.past.length - 1];
+    const past = s.past.slice(0, -1);
+    const future = [...s.future, snapshotFromState(s)];
+    lastHistoryLabel = null; // 撤销后打断合并链，下一次编辑单独成项
+    set({
+      nodes: nodesFromSnapshot(prev),
+      edges: prev.edges,
+      selectedIds: [...prev.selectedIds],
+      selectedId: prev.selectedId,
+      past,
+      future,
+      dirty: true,
+    });
+  },
+  redo: () => {
+    const s = get();
+    if (s.future.length === 0) return;
+    const next = s.future[s.future.length - 1];
+    const future = s.future.slice(0, -1);
+    const past = [...s.past, snapshotFromState(s)];
+    if (past.length > HISTORY_LIMIT) past.shift();
+    lastHistoryLabel = null;
+    set({
+      nodes: nodesFromSnapshot(next),
+      edges: next.edges,
+      selectedIds: [...next.selectedIds],
+      selectedId: next.selectedId,
+      past,
+      future,
+      dirty: true,
+    });
+  },
+  removeNodes: (ids) => {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) return;
+    get().takeSnapshot(); // 一次批量删除合并为单条撤销项
+    set((s) => {
+      // 级联收集：组节点展开其子节点，并收集 parentNode 指向被删节点的孤立子节点
+      const removeSet = new Set<string>();
+      const collect = (id: string) => {
+        if (removeSet.has(id)) return;
+        removeSet.add(id);
+        const n = s.nodes.find((x) => x.id === id);
+        if (n?.type === 'group') {
+          ((n.data as any)?.childrenIds ?? [] as string[]).forEach(collect);
+        }
+        s.nodes.filter((x) => x.parentNode === id).forEach((c) => collect(c.id));
+      };
+      ids.forEach(collect);
+      return {
+        nodes: s.nodes.filter((n) => !removeSet.has(n.id)),
+        edges: s.edges.filter(
+          (e) => !removeSet.has(e.source) && !removeSet.has(e.target),
+        ),
+        selectedId: s.selectedId != null && removeSet.has(s.selectedId) ? null : s.selectedId,
+        selectedIds: s.selectedIds.filter((x) => !removeSet.has(x)),
+        dirty: true,
+      };
+    });
+  },
 
   setCanvasMeta: (id, version, title) =>
     set({ canvasId: id, version, ...(title !== undefined ? { title } : {}) }),
   onNodesChange: (changes) => {
     const next = applyNodeChanges(changes, get().nodes) as any;
     let ids = get().selectedIds;
+
+    // 拖拽快照：首次产生位移时记录「拖拽前」状态（一次拖拽 = 单条撤销项）。
+    // 放在 onNodesChange 而非 onNodeDragStart，是因为 onNodeDragStart 在 mousedown 即触发
+    //（纯点击也会触发），放在那里会为每次点击产生一条无意义的撤销项。
+    // 此时 get().nodes 仍是拖拽前的状态，takeSnapshot 能正确捕获。
+    const dragPos = changes.find((c: any) => c.type === 'position') as any;
+    if (dragPos) {
+      if (dragPos.dragging === true && !dragSnapshotTaken) {
+        dragSnapshotTaken = true;
+        get().takeSnapshot();
+      } else if (dragPos.dragging === false) {
+        dragSnapshotTaken = false;
+      }
+    }
+
 
     // 检测框选（box-selection）产生的 select 类型变更：
     // ReactFlow 在拖拽框选时会发出 type='select' 的 change，
@@ -145,6 +329,11 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     const hasSelectChanges = changes.some((c: any) => c.type === 'select');
     if (hasSelectChanges) {
       ids = next.filter((n: any) => n.selected).map((n: any) => n.id);
+      // 注：框选「覆盖即选中」的二次校正已从这里移除——
+      // ReactFlow 的 box-selection 仅在拖拽过程中（选中集合变化时）发出 select change，
+      // 此时 window.__lastSelRect 还是拖拽中途帧，校正只会用到不完整的选区。
+      // 正确的触发点是 mouseup（见 CanvasEditor 的 onUp：用原始 pointer 事件算出完整选区 rect
+      // 后 setTimeout(0) 调 correctBoxSelection），此时选区已是最终完整矩形。
     }
 
     // 受控选中：强制 node.selected 与 selectedIds 一致，
@@ -175,9 +364,10 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     );
     set({ edges: applyEdgeChanges(changes, get().edges), dirty: isUserChange ? true : get().dirty });
   },
-  onConnect: (conn) => set({ edges: addEdge({ ...conn, type: 'pea' }, get().edges), dirty: true }),
-  removeEdge: (id) => set({ edges: get().edges.filter((e) => e.id !== id), dirty: true }),
+  onConnect: (conn) => { get().takeSnapshot(); set({ edges: addEdge({ ...conn, type: 'pea' }, get().edges), dirty: true }); },
+  removeEdge: (id) => { get().takeSnapshot(); set({ edges: get().edges.filter((e) => e.id !== id), dirty: true }); },
   addNode: (data, position) => {
+    get().takeSnapshot();
     const nodes = get().nodes;
     const id = nextId(nodes);
     const node: Node<PeaNodeData> = { id, type: 'pea', position, data, selected: true };
@@ -189,13 +379,17 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     });
     return id;
   },
-  updateNodeData: (id, patch) =>
+  updateNodeData: (id, patch, recordHistory = true) => {
+    // 同一节点的连续编辑（如逐字输入提示词）合并为单条撤销项；
+    // 不同节点用不同 label，避免互相吞掉撤销项。
+    if (recordHistory) get().takeSnapshot('node-data:' + id);
     set({
       nodes: get().nodes.map((n) =>
         n.id === id ? { ...n, data: { ...n.data, ...patch } } : n,
       ),
       dirty: true,
-    }),
+    });
+  },
   select: (id) =>
     set((s) => ({
       selectedId: id,
@@ -219,6 +413,60 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       selectedId: ids.length ? ids[ids.length - 1] : null,
       nodes: s.nodes.map((n) => ({ ...n, selected: ids.includes(n.id) })),
     })),
+  correctBoxSelection: () => {
+    if (typeof window === 'undefined') return;
+    const last = (window as any).__lastSelRect as
+      | {
+          x: number; y: number; width: number; height: number;
+          screenLeft: number; screenTop: number; screenRight: number; screenBottom: number;
+          timestamp: number;
+        }
+      | null;
+    if (!last || (last.width < 1 && last.height < 1)) return;
+    // 仅当最近一次框选发生在 800ms 内（防止陈旧 rect 误校正）
+    if (performance.now() - last.timestamp > 800) return;
+    // ── 关键修复：纯屏幕坐标判断（不做 viewport transform 转换）──
+    // 之前用 canvas 坐标比对，必须把节点 screenRect 反变换到画布坐标；translate/scale 任一项
+    // 读错都会让选区「明明盖到节点、节点没被选中」。改为全屏幕坐标系下的 partial-intersection：
+    // 选区是 __lastSelRect 的 screenLeft/Top/Right/Bottom，节点是 getBoundingClientRect()，
+    // 两个都在 viewport 坐标系（CSS px），直接比较即可。viewport 缩放时两边同步缩放，结果一致。
+    const selL = last.screenLeft, selT = last.screenTop, selR = last.screenRight, selB = last.screenBottom;
+    const cur = get().selectedIds;
+    const curSet = new Set(cur);
+    const nodes = get().nodes;
+    const patched: string[] = [...cur];
+    for (const n of nodes) {
+      if (n.type === 'group') continue; // 跳过组容器，组本身不进 multi-select
+      if (curSet.has(n.id)) continue;
+      const el = document.querySelector<HTMLElement>(`.react-flow__node[data-id="${n.id}"]`);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      // 屏幕坐标 partial-intersection（节点矩形与选区矩形有任何重叠即视为「被覆盖」）
+      const overlap =
+        r.left < selR &&
+        r.right > selL &&
+        r.top < selB &&
+        r.bottom > selT;
+      if (overlap) {
+        patched.push(n.id);
+        curSet.add(n.id);
+      }
+    }
+    if (patched.length !== cur.length) get().setSelection(patched);
+
+    // ── 去掉边误选：框选结束时把全部 edges.selected 强制置 false ──
+    // ReactFlow v11 SelectionMode.Partial 默认会把"穿过选区"的连线也加入选中集，
+    // 表现为「box 盖到边 → 边高亮 + 触发边的 selected 逻辑」。
+    // 用户需求：选区只用于"框住同一组节点"，不动边。
+    const edges = get().edges;
+    const anyEdgeSel = edges.some((e: any) => e.selected);
+    if (anyEdgeSel) {
+      set({
+        edges: edges.map((e: any) => (e.selected ? { ...e, selected: false } : e)),
+      });
+    }
+  },
   clearSelection: () =>
     set((s) => ({
       selectedIds: [],
@@ -226,17 +474,22 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       nodes: s.nodes.map((n) => ({ ...n, selected: false })),
     })),
   markSaved: (version) => set({ version, dirty: false, lastSavedAt: Date.now(), saveCount: get().saveCount + 1 }),
-  loadGraph: (nodes, edges, version) =>
+  loadGraph: (nodes, edges, version) => {
+    lastHistoryLabel = null;
     set({
       nodes,
       edges: (edges ?? []).map((e: Edge) => (e.type ? e : { ...e, type: 'pea' })),
       version,
       dirty: false,
-    }),
+      past: [],
+      future: [],
+    });
+  },
   openCanvas: async (id) => {
     // 打开前先清空上一个画布的残留状态（nodes/edges/选中），
     // 防止切换项目时旧画布内容闪现，或请求失败时旧内容被误当作新画布展示。
-    set({ nodes: [], edges: [], selectedId: null, selectedIds: [], dirty: false, jobNodeMap: {} });
+    lastHistoryLabel = null;
+    set({ nodes: [], edges: [], selectedId: null, selectedIds: [], dirty: false, jobNodeMap: {}, past: [], future: [] });
     const g = await api.get(`/canvases/${id}`);
     const raw = g.data.graph_json;
     const graph =
@@ -282,30 +535,10 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     // 没 lastJobId 的旧节点直接置 false（无法重建关联的 job）。
     void get().reconcileGeneratingNodes();
   },
-  removeNode: (id) =>
-    set((s) => {
-      // 若删除的是组节点（type:'group'），必须同步清理其子节点；
-      // 否则子节点的 parentNode 仍指向已删除的组 id，
-      // ReactFlow 渲染时按 parentNode 查父节点找不到 → "Couldn't find parent node" / 白屏崩溃。
-      const target = s.nodes.find((n) => n.id === id);
-      const childIds: string[] =
-        target?.type === 'group' ? ((target.data as any)?.childrenIds ?? []) : [];
-      // 同时把 parentNode 指向该组的孤立子节点也一并移除（防御：childrenIds 可能漏记）
-      const orphanIds = s.nodes
-        .filter((n) => n.parentNode === id && !childIds.includes(n.id))
-        .map((n) => n.id);
-      const removeSet = new Set([id, ...childIds, ...orphanIds]);
-      return {
-        nodes: s.nodes.filter((n) => !removeSet.has(n.id)),
-        edges: s.edges.filter(
-          (e) => !removeSet.has(e.source) && !removeSet.has(e.target),
-        ),
-        selectedId: s.selectedId != null && removeSet.has(s.selectedId) ? null : s.selectedId,
-        selectedIds: s.selectedIds.filter((x) => !removeSet.has(x)),
-        dirty: true,
-      };
-    }),
+  // 单节点删除：委托给 removeNodes（级联清理 + 单条撤销项）。
+  removeNode: (id) => get().removeNodes([id]),
   duplicateNode: (id) => {
+    get().takeSnapshot();
     const src = get().nodes.find((n) => n.id === id);
     if (!src) return;
     const nid = nextId(get().nodes);
@@ -324,6 +557,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     });
   },
   addConnected: (fromId) => {
+    get().takeSnapshot();
     const src = get().nodes.find((n) => n.id === fromId);
     if (!src) return;
     const nid = nextId(get().nodes);
@@ -347,6 +581,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     if (sel) set({ clipboard: sel });
   },
   pasteNode: () => {
+    get().takeSnapshot();
     const clip = get().clipboard;
     if (!clip) return;
     const nid = nextId(get().nodes);
@@ -490,6 +725,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     const s = get();
     const selIds = s.selectedIds;
     if (selIds.length === 0) return null;
+    get().takeSnapshot();
 
     // 计算选中节点的包围盒中心（画布坐标）
     const selNodes = s.nodes.filter((n) => selIds.includes(n.id));
@@ -578,6 +814,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   groupNodes: (nodeIds) => {
     const s = get();
     if (nodeIds.length < 2) return null;
+    get().takeSnapshot();
     const ids = [...new Set(nodeIds)];
 
     // 计算子节点包围盒
@@ -602,32 +839,45 @@ export const useCanvas = create<CanvasState>((set, get) => ({
 
     const gid = `group_${Date.now()}`;
 
-    // 创建 Group 节点
+    // 创建 Group 节点（容器）
+    // - 显式 draggable/selectable：避免 ReactFlow 内部默认推断失败时子节点不跟随
+    // - 不再在容器内渲染 header（GroupNode 改用 portal 浮层），故容器 height 不需要为 header 留余
     const groupNode: any = {
       id: gid,
       type: 'group',
       position: { x: gx, y: gy },
       data: { label: '新建组', layout: 'grid', childrenIds: ids },
+      draggable: true,
+      selectable: true,
       // ReactFlow 父子容器属性
-      style: { width: gw, height: gh },
+      style: { width: gw, height: gh, padding: 0 },
     };
 
-    // 将子节点的 parentNode 指向 group，并把坐标转为相对于 group 原点。
-    // ReactFlow 的 subflow 中，子节点 position 是相对父容器而言的；保留绝对坐标会导致
-    // 子节点跑到容器外部，出现"打组后节点不在组内"的问题。
+    // 将子节点的 parentNode 强制指向 group，并把坐标转为相对 group 原点。
+    // 关键修复（拖动组时部分子节点不跟随）：
+    //   ReactFlow 的 subflow 行为依赖「子节点 parentNode === groupId」+「子节点 extent === 'parent'」，
+    //   拖动 group 时自动平移所有 parentNode 匹配的子节点。之前的实现是「如果节点已有 parentNode 就跳过」，
+    //   导致被打组节点中若混杂了「已属于其它 group 的子节点」，会保留旧 parentNode，新 group 拖动时它不会跟随。
+    //   现在显式对所有 ids 节点覆盖 parentNode/extent/position 相对坐标，确保每个子节点都正确归属新 group。
     const childUpdates = s.nodes.map((n) => {
       if (!ids.includes(n.id)) return n;
       return {
         ...n,
         parentNode: gid,
         extent: 'parent' as const,
+        draggable: true,
         position: { x: n.position.x - gx, y: n.position.y - gy },
         selected: false,
+        zIndex: 0,
       };
     });
 
     set({ nodes: [groupNode, ...childUpdates], dirty: true });
     get().clearSelection();
+    // 打组完成后主动选中 group 容器，让用户明确感知分组已创建；
+    // 同时配合 CSS「非多选时隐藏 nodesselection-rect」，避免旧选区框残留
+    // 与 group 容器边框叠加形成"两个框"。
+    get().select(gid);
     return gid;
   },
 
@@ -635,6 +885,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     const s = get();
     const groupNode = s.nodes.find((n) => n.id === groupId);
     if (!groupNode || groupNode.type !== 'group') return;
+    get().takeSnapshot();
 
     const grpData = groupNode.data as any;
     const childIds: string[] = grpData.childrenIds || [];
@@ -666,6 +917,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     const s = get();
     const gn = s.nodes.find((n) => n.id === groupId);
     if (!gn || gn.type !== 'group') return;
+    get().takeSnapshot();
 
     const grpData = gn.data as any;
     const childIds: string[] = grpData.childrenIds || [];
@@ -709,6 +961,203 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         dirty: true,
       });
     }
+  },
+
+  /**
+   * 处理"拖动节点使其进入/离开组"——根据节点当前画布坐标中心点判定：
+   * - 已无 parentNode：扫一遍所有 group 节点，若中心点在 [gx, gy, gx+gw, gy+gh] 内则入组；
+   *   若多个嵌套组都包含，取最深的（最小面积）以避免误归上级组。
+   * - 已有 parentNode：把当前 rect 反算成画布绝对坐标（本地坐标 + parent.position），
+   *   若中心点已落到父组视觉边界外，则脱离父级并转为绝对坐标。
+   * 入组/脱离都会触发组的 style 重新计算（包含全部 childrenIds 的最小包围盒 + 12px 内边距），
+   * 并同步 data.childrenIds。
+   */
+  moveNodeToGroup: (nodeId) => {
+    const s = get();
+    const node = s.nodes.find((n) => n.id === nodeId);
+    if (!node || node.type === 'group') return null;
+
+    // 计算节点的画布绝对中心（处理 parentNode 子节点情况）
+    const nodeW = (node as any).width ?? 240;
+    const nodeH = (node as any).height ?? 180;
+    const absCenter = node.parentNode
+      ? (() => {
+          let p = s.nodes.find((n) => n.id === node.parentNode);
+          let absX = node.position.x, absY = node.position.y;
+          // 递归向上累计（防嵌套组 + 只向上 1 级足够）
+          if (p) { absX += p.position.x; absY += p.position.y; }
+          return { x: absX + nodeW / 2, y: absY + nodeH / 2 };
+        })()
+      : { x: node.position.x + nodeW / 2, y: node.position.y + nodeH / 2 };
+
+    if (node.parentNode) {
+      // ── 已归属：判脱离 ──
+      const parent = s.nodes.find((n) => n.id === node.parentNode);
+      if (!parent || parent.type !== 'group') return null;
+      const pw = (parent.style as any)?.width ?? parent.width ?? 240;
+      const ph = (parent.style as any)?.height ?? parent.height ?? 160;
+      const inside =
+        absCenter.x >= parent.position.x &&
+        absCenter.x <= parent.position.x + pw &&
+        absCenter.y >= parent.position.y &&
+        absCenter.y <= parent.position.y + ph;
+      if (inside) return null; // 仍在组内，不动
+      // 脱离：相对坐标 → 绝对坐标
+      get().takeSnapshot();
+      const newChildren = ((parent.data as any).childrenIds || []).filter((cid: string) => cid !== nodeId);
+      const updatedParent = {
+        ...parent,
+        data: { ...(parent.data as any), childrenIds: newChildren },
+      };
+      // 重算 parent 包围盒
+      const refit = (() => {
+        const PAD = 12;
+        const remaining = s.nodes.filter((n) => newChildren.includes(n.id));
+        if (remaining.length === 0) return { x: parent.position.x, y: parent.position.y, w: Math.max(pw, 200), h: Math.max(ph, 140) };
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const c of remaining) {
+          const cw = (c as any).width ?? 240;
+          const ch = (c as any).height ?? 180;
+          // 子节点坐标是相对 parent 的，转绝对要加 parent 当前 position
+          const ax = c.position.x + parent.position.x;
+          const ay = c.position.y + parent.position.y;
+          minX = Math.min(minX, ax);
+          minY = Math.min(minY, ay);
+          maxX = Math.max(maxX, ax + cw);
+          maxY = Math.max(maxY, ay + ch);
+        }
+        // 同时把"待脱离的节点"原来的相对位置也按当前父 position 算绝对，作为新 origin 候选
+        return { x: minX - PAD, y: minY - PAD, w: maxX - minX + PAD * 2, h: maxY - minY + PAD * 2 };
+      })();
+      updatedParent.position = { x: refit.x, y: refit.y };
+      updatedParent.style = { ...(parent.style as any), width: refit.w, height: refit.h };
+      // 节点转为绝对
+      const detached: any = {
+        ...node,
+        parentNode: undefined,
+        extent: undefined,
+        position: {
+          x: node.position.x + parent.position.x,
+          y: node.position.y + parent.position.y,
+        },
+        data: { ...(node.data as any), relativeOffset: undefined },
+      };
+      // 子节点坐标也要从旧 parent.position 偏移到新 parent.position
+      const cascaded = s.nodes.map((n) => {
+        if (!((parent.data as any).childrenIds || []).includes(n.id)) return n;
+        if (n.id === nodeId) return detached;
+        return {
+          ...n,
+          position: {
+            x: n.position.x + parent.position.x - updatedParent.position.x,
+            y: n.position.y + parent.position.y - updatedParent.position.y,
+          },
+        };
+      });
+      cascaded.push(updatedParent as any);
+      // 去重（updatedParent 已加，parent 原 record 通过 map 已替换，但要确保更新（map 已用旧值返回）所以把原 parent 也替换）
+      const finalNodes = cascaded.map((n) => (n.id === parent.id ? (updatedParent as any) : n));
+      set({ nodes: finalNodes, dirty: true });
+      return 'removed';
+    }
+
+    // ── 无 parentNode：扫一遍所有组找最深的容纳组 ──
+    const groups = s.nodes.filter((n) => n.type === 'group');
+    const candidates: { id: string; area: number }[] = [];
+    for (const g of groups) {
+      const gw = (g.style as any)?.width ?? g.width ?? 240;
+      const gh = (g.style as any)?.height ?? g.height ?? 160;
+      if (
+        absCenter.x >= g.position.x &&
+        absCenter.x <= g.position.x + gw &&
+        absCenter.y >= g.position.y &&
+        absCenter.y <= g.position.y + gh
+      ) {
+        candidates.push({ id: g.id, area: gw * gh });
+      }
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => a.area - b.area); // 最深的（最小面积）
+    const targetId = candidates[0].id;
+    const target = s.nodes.find((n) => n.id === targetId);
+    if (!target) return null;
+
+    get().takeSnapshot();
+
+    // 把节点坐标转为相对 target
+    const newPos = {
+      x: node.position.x - target.position.x,
+      y: node.position.y - target.position.y,
+    };
+
+    // 更新 data.childrenIds
+    const oldChildIds: string[] = ((target.data as any).childrenIds || []);
+    const newChildIds = oldChildIds.includes(nodeId) ? oldChildIds : [...oldChildIds, nodeId];
+
+    // 重算 group 包围盒（按全部 childrenIds + 当前 group position）
+    const PAD = 12;
+    const allChildIds = newChildIds;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const cid of allChildIds) {
+      const c = s.nodes.find((n) => n.id === cid);
+      if (!c) continue;
+      const cw = (c as any).width ?? 240;
+      const ch = (c as any).height ?? 180;
+      // 子节点用相对坐标时，自身 position 即"组原点 + 偏移"中的"偏移"
+      minX = Math.min(minX, c.position.x);
+      minY = Math.min(minY, c.position.y);
+      maxX = Math.max(maxX, c.position.x + cw);
+      maxY = Math.max(maxY, c.position.y + ch);
+    }
+    // 也把新加入的节点加进来算
+    minX = Math.min(minX, newPos.x);
+    minY = Math.min(minY, newPos.y);
+    maxX = Math.max(maxX, newPos.x + nodeW);
+    maxY = Math.max(maxY, newPos.y + nodeH);
+
+    const newGw = Math.max((target.style as any)?.width ?? 240, maxX - minX + PAD * 2);
+    const newGh = Math.max((target.style as any)?.height ?? 160, maxY - minY + PAD * 2);
+    // 组原点偏移：保证所有 children 都在 [PAD..gw-PAD] 内
+    const newGx = target.position.x + minX - PAD;
+    const newGy = target.position.y + minY - PAD;
+
+    // 新节点相对坐标（按新组原点重新计算）
+    const relPosForNewNode = {
+      x: node.position.x - newGx,
+      y: node.position.y - newGy,
+    };
+
+    const updatedTarget = {
+      ...target,
+      position: { x: newGx, y: newGy },
+      data: { ...(target.data as any), childrenIds: newChildIds },
+      style: { ...((target.style as any) || {}), width: newGw, height: newGh },
+    };
+
+    // 已有 children 的坐标也要补偿（组原点变了）
+    const updatedNodes = s.nodes.map((n) => {
+      if (n.id === nodeId) {
+        return {
+          ...n,
+          parentNode: targetId,
+          extent: 'parent' as const,
+          position: relPosForNewNode,
+        };
+      }
+      if (oldChildIds.includes(n.id)) {
+        return {
+          ...n,
+          position: {
+            x: n.position.x + target.position.x - newGx,
+            y: n.position.y + target.position.y - newGy,
+          },
+        };
+      }
+      if (n.id === targetId) return updatedTarget;
+      return n;
+    });
+    set({ nodes: updatedNodes, dirty: true });
+    return 'added';
   },
 
   downloadGroup: (groupId) => {

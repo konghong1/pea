@@ -4,6 +4,9 @@ export default defineConfig({
     plugins: [react()],
     build: {
         sourcemap: false,
+        // 沙箱环境 safe-delete shim 无法 trash 文件，emptyOutDir 会失败；关闭后由 CI/部署脚本负责清理 dist。
+        // 关闭不影响产物正确性：新构建会写入带 hash 的新文件，index.html 只引用新 hash，旧文件不会被加载。
+        emptyOutDir: false,
         // 静态产物输出到 /static/ 而非默认的 /assets/, 避免与素材库 API 前缀 /assets 冲突
         // (否则 nginx 会把打包后的 JS/CSS 也代理到 BFF 导致 404 白屏)
         assetsDir: 'static',

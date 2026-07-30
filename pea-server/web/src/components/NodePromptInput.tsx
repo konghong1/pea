@@ -252,12 +252,29 @@ function stripLegacyRefBadges(editor: HTMLElement) {
   });
 }
 
+/**
+ * 把光标移动到富文本编辑器内容的末尾。
+ * 用途：还原/刷新后重新回填编辑框内容时，让光标停在文本末尾，
+ * 而不是浏览器默认的「内容起始位置」——否则用户继续输入会插到最前面。
+ */
+function placeCaretAtEnd(el: HTMLElement) {
+  el.focus();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false); // false = 折叠到末尾
+  const sel = window.getSelection();
+  if (sel) {
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+}
+
 export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function NodePromptInput(
   { nodeId, kind, placeholder = '描述你想生成的内容，或输入 @ 引用上游节点', initialHtml = '', onChange, onSubmit, onInsertReference },
   ref,
 ) {
   const editorRef = useRef<HTMLDivElement>(null);
-  const [html, setHtml] = useState(initialHtml);
+  const [html, setHtmlState] = useState(initialHtml);
   const [plainText, setPlainText] = useState('');
   const [showPicker, setShowPicker] = useState(false);
   const [pickerPos, setPickerPos] = useState<{ left: number; top: number } | null>(null);
@@ -265,7 +282,11 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
   const [activeIndex, setActiveIndex] = useState(0);
   const [upstream, setUpstream] = useState<UpstreamItem[]>([]);
   const [resolvedThumbs, setResolvedThumbs] = useState<Record<string, string>>({});
-  const lastHtmlRef = useRef(initialHtml);
+  // 关键修复：lastHtmlRef 初始必须为「与挂载内容不同」的哨兵值，
+  // 否则 didInit 把 initialHtml 写入编辑器后，syncFromEditor 会判定
+  // nextHtml === lastHtmlRef.current 而跳过 onChange —— 导致从 meta.editorText
+  // 还原的内容（如图片/视频节点刷新后恢复）不会触发 setHasInput，发送按钮持续置灰。
+  const lastHtmlRef = useRef('');
   const atTriggerRef = useRef<{ node: globalThis.Node; offset: number } | null>(null);
   const atTriggerActiveRef = useRef(false);
 
@@ -407,7 +428,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
     const nextText = editor.innerText || '';
     if (nextHtml !== lastHtmlRef.current) {
       lastHtmlRef.current = nextHtml;
-      setHtml(nextHtml);
+      setHtmlState(nextHtml);
       setPlainText(nextText);
       onChange?.(nextHtml, nextText);
     }
@@ -428,6 +449,10 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
       syncFromEditor();
       renumberRefChips(editor);
     }
+    // 还原内容后把光标停在末尾（修复：刷新/打开节点后光标停在开头，
+    // 用户继续输入会插到最前面）。仅在有内容时聚焦；空的新节点保持原行为
+    // （由节点切换 effect 的 setTimeout(focus) 处理，避免无谓抢焦点）。
+    if (init) placeCaretAtEnd(editor);
   }, [initialHtml, syncFromEditor]);
 
   useImperativeHandle(ref, () => ({
@@ -530,8 +555,18 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
       if (editor) {
         editor.innerHTML = h;
         stripLegacyRefBadges(editor);
-        syncFromEditor();
         renumberRefChips(editor);
+        // 还原/刷新后把光标放到内容末尾，而非浏览器默认的起始位置
+        // （修复：刷新/打开节点后光标停在开头，用户继续输入会插到最前面）。
+        placeCaretAtEnd(editor);
+        // 强制同步状态并触发 onChange：父组件切换节点恢复内容时，必须让外部
+        // 重新计算 canSend 等派生状态，否则发送按钮等会停留在旧状态。
+        const nextHtml = editor.innerHTML;
+        const nextText = editor.innerText || '';
+        lastHtmlRef.current = nextHtml;
+        setHtmlState(nextHtml);
+        setPlainText(nextText);
+        onChange?.(nextHtml, nextText);
       }
     },
     focus: () => editorRef.current?.focus(),
@@ -799,6 +834,65 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
     document.execCommand('insertText', false, text);
   };
 
+  // ── 关键修复：点击后强制把光标定位到「点击坐标所在位置」──
+  // 根因：浏览器默认的 click→caret 在以下场景失准——
+  //  ① 编辑框含 image 引用 token（<span contenteditable=false>）时，某些浏览器
+  //     （特别是含中文 IME 组合态的 WebKit/Blink）会把 caret 落到 token 邻近
+  //     文本节点的 offset 0，表现为「点击中段，caret 永远在第一个字符前」。
+  //  ② 父组件 NodeChatPrompt 频繁 re-render，DOM 同步/选择回填时序竞争，
+  //     偶尔也会把 caret 推回 0 位置。
+  // 方案：mouseup 后用 document.caretPositionFromPoint(x, y) 反算真实点击位置，
+  //      与浏览器默认设置一致时 no-op，不同时显式 setSelection 覆盖。
+  //      兼容旧版 Safari 用 document.caretRangeFromPoint。
+  const placeCaretFromPoint = useCallback((clientX: number, clientY: number) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    let targetNode: Node | null = null;
+    let targetOffset = 0;
+    // 直接以 document 为 this 调用（解构为独立 fn 会丢 this 触发 "Illegal invocation"）
+    const docAny = document as any;
+    if (typeof docAny.caretPositionFromPoint === 'function') {
+      const p = docAny.caretPositionFromPoint(clientX, clientY);
+      if (p && p.offsetNode && editor.contains(p.offsetNode)) {
+        targetNode = p.offsetNode;
+        targetOffset = p.offset;
+      }
+    } else if (typeof docAny.caretRangeFromPoint === 'function') {
+      const r = docAny.caretRangeFromPoint(clientX, clientY);
+      if (r && r.startContainer && editor.contains(r.startContainer)) {
+        targetNode = r.startContainer;
+        targetOffset = r.startOffset;
+      }
+    }
+    if (!targetNode) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const cur = sel.getRangeAt(0);
+    if (cur.startContainer === targetNode && cur.startOffset === targetOffset) return;
+    // 越界保护：pea-ref 内部（contenteditable=false）不作为 caret 落点
+    if ((targetNode as HTMLElement).getAttribute?.('data-pea-ref') === '1') {
+      // 落到 token 内时：默认放 token 后
+      const token = targetNode as HTMLElement;
+      const parent = token.parentNode;
+      if (parent) {
+        const idx = Array.prototype.indexOf.call(parent.childNodes, token);
+        targetNode = parent;
+        targetOffset = idx + 1;
+      }
+    }
+    const range = document.createRange();
+    range.setStart(targetNode, targetOffset);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }, []);
+
+  const handleMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    // 仅在编辑器内点击才矫正
+    if (e.target !== e.currentTarget && !(e.currentTarget as HTMLElement).contains(e.target as Node)) return;
+    placeCaretFromPoint(e.clientX, e.clientY);
+  };
+
   useEffect(() => {
     if (!showPicker) return;
     const onDoc = (e: MouseEvent) => {
@@ -827,6 +921,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
         onMouseDown={(e) => {
           e.stopPropagation();
         }}
+        onMouseUp={handleMouseUp}
       />
 
       {showPicker && pickerPos && createPortal(
@@ -854,6 +949,8 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
             >
               {isTextKind(item.kind) ? (
                 <span className="pea-ref-picker-icon">📝</span>
+              ) : item.kind === 'video' ? (
+                <VideoPickerThumb url={resolvedThumbs[item.node.id]} label={item.label} />
               ) : resolvedThumbs[item.node.id] ? (
                 <img
                   className="pea-ref-picker-thumb"
@@ -874,3 +971,84 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
     </div>
   );
 });
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 视频引用缩略图：hover 时在固定浮层内自动播放，替代之前的「问号」占位。
+ * ═════════════════════════════════════════════════════════════════════════════ */
+function VideoPickerThumb({ url, label }: { url?: string; label: string }) {
+  const thumbRef = useRef<HTMLVideoElement>(null);
+  const [showPopover, setShowPopover] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  const handleEnter = (e: React.MouseEvent) => {
+    thumbRef.current?.play().catch(() => {});
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const width = 220;
+    const height = 150;
+    let left = rect.left + rect.width / 2 - width / 2;
+    let top = rect.bottom + 10;
+    if (left + width > vw - 12) left = vw - width - 12;
+    if (left < 12) left = 12;
+    if (top + height > vh - 12) top = rect.top - height - 10;
+    setPos({ left, top });
+    setShowPopover(true);
+  };
+
+  const handleLeave = () => {
+    thumbRef.current?.pause();
+    setShowPopover(false);
+  };
+
+  if (!url) {
+    return <span className="pea-ref-picker-icon pea-ref-picker-thumb-fallback">🎬</span>;
+  }
+
+  return (
+    <>
+      <video
+        ref={thumbRef}
+        className="pea-ref-picker-thumb pea-ref-picker-video-thumb"
+        src={url}
+        muted
+        loop
+        playsInline
+        preload="metadata"
+        onMouseEnter={handleEnter}
+        onMouseLeave={handleLeave}
+      />
+      {showPopover && pos && createPortal(
+        <div
+          className="pea-ref-video-popover"
+          style={{ left: pos.left, top: pos.top, position: 'fixed', zIndex: 120 }}
+          onMouseEnter={() => setShowPopover(true)}
+          onMouseLeave={() => setShowPopover(false)}
+        >
+          <div className="pea-ref-video-popover-tag">
+            <span>@Video</span>
+            <span className="pea-ref-video-popover-label">{label}</span>
+          </div>
+          <video
+            className="pea-ref-video-popover-player"
+            src={url}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+          />
+          <div className="pea-ref-video-popover-toolbar">
+            <button type="button" title="全屏" aria-label="全屏" onClick={() => {
+              const el = document.querySelector('.pea-ref-video-popover-player') as HTMLVideoElement | null;
+              el?.requestFullscreen?.().catch(() => {});
+            }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}

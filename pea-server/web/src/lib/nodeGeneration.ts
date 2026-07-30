@@ -105,6 +105,7 @@ export async function retryNodeGeneration(nodeId: string) {
     });
     useCanvas.getState().registerJob(res.jobId, nodeId);
     // 重新进入 generating，并清除旧 error/旧结果，避免重试期间仍显示上次失败的图片
+    // recordHistory=false：生成重试属于异步任务回写，不计入撤销历史（撤销只针对用户操作）
     useCanvas.getState().updateNodeData(nodeId, {
       generating: true,
       error: undefined,
@@ -113,7 +114,7 @@ export async function retryNodeGeneration(nodeId: string) {
       resultIndex: 0,
       savedToLibrary: false,
       lastJobId: res.jobId,
-    });
+    }, false);
     toast.success('已重新发起生成');
     pollNodeJobResult(res.jobId);
   } catch (e: any) {

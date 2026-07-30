@@ -30,7 +30,6 @@ export default function MultiSelectToolbar() {
   const edges = useCanvas((s) => s.edges);
   const insertNodeForSelection = useCanvas((s) => s.insertNodeForSelection);
   const clearSelection = useCanvas((s) => s.clearSelection);
-  const removeNode = useCanvas((s) => s.removeNode);
   const groupNodes = useCanvas((s) => s.groupNodes);
   const viewport = useViewport();
 
@@ -143,10 +142,10 @@ export default function MultiSelectToolbar() {
   }, [insertNodeForSelection]);
 
   const handleDeleteSelected = useCallback(() => {
-    // 逐个删除选中节点（removeNode 会自动清理关联边）
+    // 一次性删除所有选中节点（合并为单条撤销项，removeNodes 会自动级联清理关联边与子节点）
     const ids = [...selectedIds];
-    ids.forEach((id) => removeNode(id));
-  }, [selectedIds, removeNode]);
+    useCanvas.getState().removeNodes(ids);
+  }, [selectedIds]);
 
   const handlePack = useCallback(() => {
     groupNodes(selectedIds);

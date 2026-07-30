@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import ReactFlow, {
   Background,
   BackgroundVariant,
   ReactFlowProvider,
   useReactFlow,
+  useStoreApi,
   useViewport,
   type Node,
   type Edge,
@@ -49,6 +51,8 @@ if (typeof window !== 'undefined' && (import.meta.env.DEV || localStorage.getIte
   window.__canvas = useCanvas;
   // @ts-ignore
   window.__ui = useUi;
+  // ReactFlow 内部 store 暴露（用于框选 DOM 二次校正读 userSelectionRect）
+  // 通过 useStoreApi hook 在 CanvasEditor 内部组件里赋值
 }
 import PeaEdge from './PeaEdge';
 import CanvasErrorBoundary from './ErrorBoundary';
@@ -857,7 +861,7 @@ function CanvasControls({
         title="快捷键帮助"
         onClick={() =>
           toast.info(
-            '快捷键：Ctrl+S 保存 / Delete 删除 / Esc 取消选中 / 双击空白添加节点 / 左键拖拽框选 / 右键拖拽平移画布',
+            '快捷键：Ctrl+S 保存 / Ctrl+Z 撤销 / Ctrl+Shift+Z 重做 / Delete 删除 / Esc 取消选中 / 双击空白添加节点 / 左键拖拽框选 / 右键拖拽平移画布',
           )
         }
       >
@@ -893,7 +897,195 @@ function BottomPrompt() {
   );
 }
 
+/**
+ * 自接管选区渲染：因为 .react-flow__selection 在本应用 viewport transform 下被截断（CSS 已隐藏），
+ * 我们用原始 pointer 事件算出的屏幕坐标重新画一个 blue rect。
+ * - 仅在 __lastSelRect 存在且非「上一拖拽的遗留」时显示（dragging=true 时），
+ *   拖拽结束（mouseup）后 250ms 自动 fade 消失（用 style.opacity 控制）。
+ * - 用 position: fixed 直接锚定屏幕坐标，不需要考虑 viewport transform。
+ */
+function SelectionOverlay() {
+  const [rect, setRect] = useState<{
+    l: number; t: number; w: number; h: number;
+    active: boolean;
+  } | null>(null);
+  // rAF 循环在挂载时只创建一次，必须读 ref 才能拿到最新 rect，否则闭包里的 rect 永远是 null，
+  // 导致拖拽结束后无法进入 fade-out 分支，选区 overlay 永久残留。
+  const rectRef = useRef(rect);
+  useEffect(() => {
+    rectRef.current = rect;
+  }, [rect]);
+
+  useEffect(() => {
+    let raf = 0;
+    let hideTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = () => {
+      const w = window as any;
+      const last = w.__lastSelRect as
+        | { screenLeft: number; screenTop: number; screenRight: number; screenBottom: number; timestamp: number }
+        | null;
+      const flag = !!w.__selDragging;
+      const currentRect = rectRef.current;
+
+      if (flag && last) {
+        if (hideTimer) {
+          clearTimeout(hideTimer);
+          hideTimer = null;
+        }
+        const wpx = last.screenRight - last.screenLeft;
+        const hpx = last.screenBottom - last.screenTop;
+        if (wpx >= 2 && hpx >= 2) {
+          setRect({
+            l: last.screenLeft,
+            t: last.screenTop,
+            w: wpx,
+            h: hpx,
+            active: true,
+          });
+        }
+      } else if (currentRect && currentRect.active) {
+        // 刚停止拖拽：保留最后一次绘制但置 inactive（触发 CSS opacity 过渡），随后移除 DOM
+        setRect({ ...currentRect, active: false });
+        if (!hideTimer) {
+          hideTimer = setTimeout(() => {
+            setRect(null);
+            hideTimer = null;
+          }, 120);
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      if (hideTimer) clearTimeout(hideTimer);
+    };
+  }, []);
+
+  if (!rect) return null;
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      className="pea-selection-overlay"
+      data-testid="pea-selection-overlay"
+      style={{
+        left: rect.l,
+        top: rect.t,
+        width: rect.w,
+        height: rect.h,
+        opacity: rect.active ? 1 : 0,
+      }}
+    />,
+    document.body,
+  );
+}
+
 function Flow() {
+  const rfStoreApi = useStoreApi();
+  // 暴露 ReactFlow 内部 store 到 window（仅 DEV 或 __peaDevHooks flag），供调试/E2E 验证使用。
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!(import.meta.env.DEV || localStorage.getItem('__peaDevHooks') === '1')) return;
+    (window as any).__rfStore = rfStoreApi;
+  }, [rfStoreApi]);
+  // ── 框选 rect 追踪：直接用原始 pointer 事件计算选区矩形 ──
+  // 关键发现：本应用 viewport 为 translate(150px,-102px)，ReactFlow 渲染的 .react-flow__selection
+  // 选区 DOM 在框选时会「截断」（实测只画到约 40% 宽度），导致读该 DOM 的校正也只选左列。
+  // 故不再依赖 RF 的选区 DOM，而是直接记录 pane 上的 mousedown 起点 + mousemove/mouseup 终点，
+  // 用原始 clientX/Y 计算完整选区 rect（屏幕坐标 → 画布坐标），100% 可靠。
+  // 选区结束后保留最近一次 rect 约 150ms（让 onNodesChange 的 setTimeout(0) 校正能读到），随后清空。
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    const w = window as any;
+    if (w.__lastSelRect === undefined) w.__lastSelRect = null;
+
+    const toCanvasRect = (x1: number, y1: number, x2: number, y2: number) => {
+      const vp = document.querySelector<HTMLElement>('.react-flow__viewport');
+      const cnr = document.querySelector<HTMLElement>('.react-flow__pane');
+      let tx = 0, ty = 0, ts = 1;
+      if (vp) {
+        const m = /translate\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px\)\s*scale\(\s*([\d.]+)\s*\)/.exec(vp.style.transform);
+        if (m) {
+          tx = parseFloat(m[1]);
+          ty = parseFloat(m[2]);
+          ts = parseFloat(m[3]);
+        }
+      }
+      const cnrR = cnr ? cnr.getBoundingClientRect() : { left: 0, top: 0 } as DOMRect;
+      const left = Math.min(x1, x2);
+      const top = Math.min(y1, y2);
+      const right = Math.max(x1, x2);
+      const bottom = Math.max(y1, y2);
+      w.__lastSelRect = {
+        x: (left - cnrR.left - tx) / ts,
+        y: (top - cnrR.top - ty) / ts,
+        width: (right - left) / ts,
+        height: (bottom - top) / ts,
+        screenLeft: left,
+        screenTop: top,
+        screenRight: right,
+        screenBottom: bottom,
+        timestamp: performance.now(),
+      };
+    };
+
+    let dragging = false;
+    let startX = 0, startY = 0, curX = 0, curY = 0;
+    let moved = false;
+
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      // 仅在画布 pane / renderer 上启动框选；点节点或边由各自处理。
+      if (t && (t.classList.contains('react-flow__pane') || t.classList.contains('react-flow__renderer'))) {
+        dragging = true;
+        w.__selDragging = true;
+        moved = false;
+        startX = e.clientX; startY = e.clientY;
+        curX = e.clientX; curY = e.clientY;
+        // 下一次按下清空上一帧的"残留 rect"，让 overlay 不被旧 rect 重影。
+        w.__lastSelRect = null;
+      }
+    };
+    const onMove = (e: MouseEvent) => {
+      if (!dragging) return;
+      curX = e.clientX; curY = e.clientY;
+      moved = true;
+      // 用屏幕坐标算 rect（不动 RF DOM，overlay 渲染直接用 screenLeft/Top/...）。
+      toCanvasRect(startX, startY, curX, curY);
+    };
+    const onUp = (e?: MouseEvent) => {
+      if (!dragging) return;
+      dragging = false;
+      w.__selDragging = false; // overlay 转入 fade-out 模式
+      // 用 mouseup 事件自身的 clientX/Y 作为终点（不依赖 curX/curY — 真实浏览器里
+      // 最后一次 mousemove 可能晚于 mouseup 到达，导致 curX/curY 滞后于鼠标指针）。
+      const endX = e ? e.clientX : curX;
+      const endY = e ? e.clientY : curY;
+      curX = endX; curY = endY;
+      toCanvasRect(startX, startY, endX, endY); // 最终一次
+      if (moved) {
+        // 触发「覆盖即选中」二次校正：setTimeout(0) 让 RF 先完成 mouseup 定稿（选中集合已确定），
+        // 此刻 window.__lastSelRect 是完整选区矩形 → 把被覆盖但 RF 漏选的节点补进 selectedIds。
+        setTimeout(() => {
+          try {
+            useCanvas.getState().correctBoxSelection();
+          } catch (e) {
+            /* noop */
+          }
+        }, 0);
+      }
+    };
+
+    window.addEventListener('mousedown', onDown, true);
+    window.addEventListener('mousemove', onMove, true);
+    window.addEventListener('mouseup', onUp, true);
+    return () => {
+      window.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('mousemove', onMove, true);
+      window.removeEventListener('mouseup', onUp, true);
+    };
+  }, []);
   const {
     nodes,
     edges,
@@ -1150,6 +1342,29 @@ function Flow() {
         saveNow();
         return;
       }
+      // 撤销 / 重做（Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y）。
+      // 焦点在文本输入框 / contentEditable 内时，放行给浏览器原生撤销，不拦截画布撤销。
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (editing) return;
+        e.preventDefault();
+        const st = useCanvas.getState();
+        if (e.shiftKey) {
+          if (st.future.length === 0) { toast.info('没有可重做的操作'); return; }
+          st.redo();
+        } else {
+          if (st.past.length === 0) { toast.info('没有可撤销的操作'); return; }
+          st.undo();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        if (editing) return;
+        e.preventDefault();
+        const st = useCanvas.getState();
+        if (st.future.length === 0) { toast.info('没有可重做的操作'); return; }
+        st.redo();
+        return;
+      }
       // 特例: 选中节点后 NodeChatPrompt 会自动聚焦其 contentEditable 输入栏,
       // 导致 editing 恒为 true, Delete 永远删不掉节点 (用户反复报障)。
       // 规则: 焦点在节点输入栏内且输入栏为空 → Delete 键仍视为「删除节点」;
@@ -1172,11 +1387,11 @@ function Flow() {
           removeEdge(selEdge.id);
           return;
         }
-        // 多选状态：一次性删除所有选中节点（与工具条"删除"行为一致）
+        // 多选状态：一次性删除所有选中节点（合并为单条撤销项，与工具条"删除"行为一致）
         const selIds = useCanvas.getState().selectedIds;
         if (selIds.length > 1) {
           e.preventDefault();
-          selIds.forEach((id) => removeNode(id));
+          useCanvas.getState().removeNodes(selIds);
           return;
         }
         // 单选状态：删除当前选中节点
@@ -1499,9 +1714,27 @@ function Flow() {
             e.shiftKey ? toggleSelect(n.id) : select(n.id);
           }}
           onNodeDragStart={(e) => {
-            // 记录按下坐标（用于区分单击/拖动）；用原生事件坐标
+            // 记录按下坐标（用于区分单击/拖动）；用原生事件坐标。
+            // 注意：拖拽前快照改在 store.onNodesChange 的「首次 dragging 位移」处记录，
+            // 因为 onNodeDragStart 在 mousedown 即触发（纯点击也会触发），
+            // 放这里会为每次点击产生一条无意义的撤销项。
             const me = e as unknown as MouseEvent;
             downPosRef.current = { x: me.clientX, y: me.clientY };
+          }}
+          onNodeDragStop={(_e, node) => {
+            // 拖完一个节点：依据节点最终画布坐标中心判定它应当进入/离开哪个组。
+            // - 当前无 parentNode 且中心点位于某组视觉边界内 → 入组（自动改 parentNode + 坐标转相对 + 扩组）
+            // - 已有 parentNode 且中心点已落到父组边界外 → 离组（坐标转绝对 + 缩组）
+            try {
+              const result = useCanvas.getState().moveNodeToGroup(node.id);
+              // 调试日志（仅 DEV / devhooks 开启），E2E 也通过此分支
+              if (result && (import.meta.env.DEV || localStorage.getItem('__peaDevHooks') === '1')) {
+                const w = window as any;
+                w.__lastGroupMove = { nodeId: node.id, action: result, ts: Date.now() };
+              }
+            } catch (e) {
+              /* noop */
+            }
           }}
           onPaneClick={() => {
             clearSelection();
@@ -1625,6 +1858,7 @@ export default function CanvasEditor() {
     <ReactFlowProvider>
       <CanvasErrorBoundary>
         <Flow />
+        <SelectionOverlay />
       </CanvasErrorBoundary>
     </ReactFlowProvider>
   );

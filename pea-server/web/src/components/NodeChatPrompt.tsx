@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState, useCallback, useMemo, forwardRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Node } from 'reactflow';
+
+/** 简易防抖：用于把编辑框内容持久化到节点 meta，避免逐字输入频繁写 store。 */
+function debounce<T extends (...args: any[]) => void>(fn: T, wait: number) {
+  let t: any;
+  return (...args: Parameters<T>) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), wait);
+  };
+}
 import { useCanvas, PeaNodeData } from '../store/canvas';
 import { useAgent } from '../store/agent';
 import { toast } from '../store/toast';
@@ -579,10 +588,12 @@ export default function NodeChatPrompt() {
   // 之前的回退 selectedId 会在多选（框选）时让下方输入栏错误弹出（需求2：框选不应触发节点弹框）。
   const single = selectedIds.length === 1 ? selectedIds[0] : null;
   const nodes = useCanvas((s) => s.nodes);
+  const canvasId = useCanvas((s) => s.canvasId);
   const update = useCanvas((s) => s.updateNodeData);
   const upstream = useCanvas((s) => (single ? s.getUpstreamInputs(single) : []));
   const push = useAgent((s) => s.push);
   const setOpen = useAgent((s) => s.setOpen);
+  const draftKey = canvasId && single ? `pea:draft:${canvasId}:${single}` : null;
 
   const sel = single ? nodes.find((n) => n.id === single) : null;
 
@@ -590,6 +601,18 @@ export default function NodeChatPrompt() {
   const prevSingleRef = useRef<string | null>(null);
   // 按节点 id 缓存输入草稿：切换节点再切回时"接着上次编辑的内容继续写"
   const draftRef = useRef<Record<string, string>>({});
+
+  // 防抖持久化 editorText 到节点 meta：未提交时刷新页面也能恢复输入内容（修复视频/图片节点刷新丢失）。
+  const persistEditorTextRef = useRef(
+    debounce((id: string, html: string) => {
+      const node = useCanvas.getState().nodes.find((n) => n.id === id);
+      if (!node) return;
+      const meta = { ...(node.data.meta ?? {}) } as Record<string, unknown>;
+      const current = (meta.editorText as string | undefined) ?? '';
+      if (current === html) return;
+      useCanvas.getState().updateNodeData(id, { meta: { ...meta, editorText: html } }, false);
+    }, 700),
+  );
 
   // 通过 +「从画布选择参考」显式添加的图片/视频节点 id(也包含 @ 选择器插入的图片)
   const [referencedNodeIds, setReferencedNodeIds] = useState<string[]>([]);
@@ -721,10 +744,20 @@ export default function NodeChatPrompt() {
     if (single !== prevSingleRef.current) {
       prevSingleRef.current = single;
       const node = nodes.find((n) => n.id === single);
-      // 还原编辑框：优先用本会话草稿（HTML），其次用持久化的 editorText（纯文本）。
+      // 还原编辑框优先级：本会话草稿 > localStorage（刷新未保存时）> 节点 meta.editorText。
       // 注意：不能用 node.data.prompt —— 那是「上游文本 + 用户文本」的合并结果，
       // 回填空会导致二次提交时上游文本被重复拼接。
-      const restored = draftRef.current[single] ?? (node?.data.meta?.editorText as string | undefined) ?? '';
+      let lsDraft = '';
+      try {
+        lsDraft = draftKey ? (localStorage.getItem(draftKey) ?? '') : '';
+      } catch {
+        lsDraft = '';
+      }
+      const restored =
+        draftRef.current[single] ??
+        lsDraft ??
+        (node?.data.meta?.editorText as string | undefined) ??
+        '';
       // 仅当 restored 是纯文本时才需要 escape；包含 <span data-pea-ref> 等 HTML 标签时直接作为 HTML 写入
       // （否则 token span 会被错误转义，以 `&lt;span&gt;` 形式显示为源码）。
       const isHtml = /<[a-z][^>]*data-pea-ref/i.test(restored) || /<br\b/i.test(restored);
@@ -736,6 +769,11 @@ export default function NodeChatPrompt() {
             .replace(/>/g, '&gt;')
             .replace(/\n/g, '<br>');
       inputRef.current?.setHtml(html);
+      // 强制计算 hasInput：setHtml 触发的 onChange 可能因 innerText 时序传回空文本，
+      // 导致发送按钮等派生状态未刷新（修复图片节点刷新后按钮仍置灰）。
+      const has =
+        restored.replace(/<[^>]+>/g, '').trim().length > 0 || restored.includes('data-pea-ref');
+      setHasInput(has);
       setTimeout(() => inputRef.current?.focus(), 60);
       // 恢复通过 + 选择器显式引用的节点 id
       const meta = (node?.data.meta ?? {}) as Record<string, unknown>;
@@ -1221,6 +1259,12 @@ useEffect(() => {
       params: mergedParams,
       meta: { ...(sel.data.meta ?? {}), ...metaPatch },
     });
+    // 提交成功后清除 localStorage 草稿，避免已提交内容重复恢复。
+    try {
+      if (draftKey) localStorage.removeItem(draftKey);
+    } catch {
+      /* ignore */
+    }
 
     // 以下为实际生成接入：需要模型可用
     if (!modelId || !selectedModel) {
@@ -1300,7 +1344,17 @@ useEffect(() => {
   };
 
   const onInputChange = (html: string, plainText: string) => {
-    if (single) draftRef.current[single] = html;
+    if (single) {
+      draftRef.current[single] = html;
+      // 防抖持久化 editorText 到节点 meta（随画布保存）
+      persistEditorTextRef.current(single, html);
+      // 同时写入 localStorage：未保存到后端前刷新页面也能恢复（修复视频/图片节点输入丢失）。
+      try {
+        if (draftKey) localStorage.setItem(draftKey, html);
+      } catch {
+        /* 隐私模式等场景可能禁用 localStorage */
+      }
+    }
     const has = plainText.trim().length > 0 || html.includes('data-pea-ref');
     setHasInput(has);
     // 注意：清空内容时不要 delete draftRef[single]，保留为空字符串。
@@ -1373,6 +1427,8 @@ useEffect(() => {
                       <line x1="5" y1="17" x2="13" y2="17" />
                     </svg>
                   </span>
+                ) : n.data.kind === 'video' ? (
+                  <VideoRefThumb url={thumbUrls[n.id]} label={n.data.label || '视频'} />
                 ) : (
                   <img
                     src={thumbUrls[n.id] || PLACEHOLDER_THUMB}
@@ -1614,4 +1670,85 @@ useEffect(() => {
   );
 
   return createPortal(editorRoot, anchorEl);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 引用条视频缩略图：hover 时自动播放并弹出预览浮层，避免视频 URL 被当成图片显示问号。
+ * ═════════════════════════════════════════════════════════════════════════════ */
+function VideoRefThumb({ url, label }: { url?: string; label: string }) {
+  const thumbRef = useRef<HTMLVideoElement>(null);
+  const [showPopover, setShowPopover] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  const handleEnter = (e: React.MouseEvent) => {
+    thumbRef.current?.play().catch(() => {});
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const width = 220;
+    const height = 150;
+    let left = rect.left + rect.width / 2 - width / 2;
+    let top = rect.bottom + 10;
+    if (left + width > vw - 12) left = vw - width - 12;
+    if (left < 12) left = 12;
+    if (top + height > vh - 12) top = rect.top - height - 10;
+    setPos({ left, top });
+    setShowPopover(true);
+  };
+
+  const handleLeave = () => {
+    thumbRef.current?.pause();
+    setShowPopover(false);
+  };
+
+  if (!url) {
+    return <span className="pea-ref-picker-icon pea-ref-picker-thumb-fallback">🎬</span>;
+  }
+
+  return (
+    <>
+      <video
+        ref={thumbRef}
+        className="node-ref-thumb-video"
+        src={url}
+        muted
+        loop
+        playsInline
+        preload="metadata"
+        onMouseEnter={handleEnter}
+        onMouseLeave={handleLeave}
+      />
+      {showPopover && pos && createPortal(
+        <div
+          className="pea-ref-video-popover"
+          style={{ left: pos.left, top: pos.top, position: 'fixed', zIndex: 120 }}
+          onMouseEnter={() => setShowPopover(true)}
+          onMouseLeave={() => setShowPopover(false)}
+        >
+          <div className="pea-ref-video-popover-tag">
+            <span>@Video</span>
+            <span className="pea-ref-video-popover-label">{label}</span>
+          </div>
+          <video
+            className="pea-ref-video-popover-player"
+            src={url}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+          />
+          <div className="pea-ref-video-popover-toolbar">
+            <button type="button" title="全屏" aria-label="全屏" onClick={() => {
+              const el = document.querySelector('.pea-ref-video-popover-player') as HTMLVideoElement | null;
+              el?.requestFullscreen?.().catch(() => {});
+            }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
 }

@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   DeleteOutlined,
   DownloadOutlined,
@@ -22,19 +23,29 @@ export interface GroupNodeData {
 
 type GridLayout = 'grid' | 'horizontal';
 
+/** 浮层 header 离 group 框顶部的间距(px)，与单节点工具条保持视觉同款。 */
+const HEADER_GAP = 8;
+/** 浮层 header 高度(px)，与 .pgn-header-portal 实际渲染一致。 */
+const HEADER_HEIGHT = 32;
+/** 浮层 header 相对 group 框左侧的偏移(px)，让浮层与框左边对齐并稍稍缩进。 */
+const HEADER_LEFT_OFFSET = 12;
+
 /**
  * GroupNode — 打组容器节点。
  *
- * 渲染为深色圆角容器，顶部工具栏含：
- *   - 整组执行 / 创建模板 / 布局切换(宫格|水平) / 解组 / 下载
- *
- * 子节点通过 ReactFlow 的 parentNode + extent:'parent' 机制
- * 自动成为本节点的子级，拖动组时子节点跟随移动。
+ * 视觉与交互：
+ * - 容器本身：透明背景 + 细边框 + padding 0，画布点阵透出（参考图样式）。
+ * - 顶部工具栏：createPortal 到 body，固定浮在 group 框**外顶部上方 8px**，
+ *   和单节点的 NodeChatPrompt 工具条同款（不再占容器内部空间）。
+ * - 子节点：通过 ReactFlow 的 parentNode + extent:'parent' 机制渲染在容器内，
+ *   拖动 group 时子节点由 ReactFlow subflow 自动跟随移动。
  */
 export default function GroupNode({ id, data, selected }: NodeProps) {
   const { ungroupNode, reLayoutGroup, downloadGroup, removeNode } =
     useCanvas();
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
+  const [portalReady, setPortalReady] = useState(false);
+  const [headerPos, setHeaderPos] = useState<{ left: number; top: number } | null>(null);
 
   const grp = data as any;
   const label: string = grp.label || '新建组';
@@ -59,69 +70,137 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
     downloadGroup(id);
   }, [id, downloadGroup]);
 
-  return (
-    <div className={`pea-group-node ${selected ? 'selected' : ''}`}>
-      {/* ====== 顶部工具栏 ====== */}
-      <div className="pgn-header">
-        <div className="pgn-header-left">
-          <span className="pgn-dot" />
-          <AppstoreOutlined className="pgn-icon" />
-          <span className="pgn-label">{label}</span>
-        </div>
+  // ── Portal 头部浮层位置：rAF 读 group 节点 DOM rect，跟随 group 移动/缩放 ──
+  useEffect(() => {
+    if (!selected) {
+      setHeaderPos(null);
+      return;
+    }
+    setPortalReady(true);
+    const rafRef = { id: 0 };
+    const update = () => {
+      const el = document.querySelector<HTMLElement>(
+        `.react-flow__node[data-id="${id}"]`,
+      );
+      if (el) {
+        const r = el.getBoundingClientRect();
+        setHeaderPos({
+          left: Math.round(r.left + HEADER_LEFT_OFFSET),
+          top: Math.round(r.top - HEADER_HEIGHT - HEADER_GAP),
+        });
+      }
+      rafRef.id = requestAnimationFrame(update);
+    };
+    rafRef.id = requestAnimationFrame(update);
+    return () => {
+      cancelAnimationFrame(rafRef.id);
+    };
+  }, [id, selected]);
 
-        <div className="pgn-header-actions">
-          {/* 整组执行 */}
-          <button className="pgn-btn" title="整组执行">
-            <PlayCircleOutlined />
-            <span>整组执行</span>
-          </button>
-
-          {/* 创建模板 */}
-          <button className="pgn-btn" title="创建模板">
-            <CopyOutlined />
-            <span>创建模板</span>
-          </button>
-
-          {/* 布局切换 / 解组 */}
-          <div className="pgn-layout-wrap">
-            <button
-              className={`pgn-btn pgn-layout-trigger ${showLayoutMenu ? 'active' : ''}`}
-              onClick={() => setShowLayoutMenu((v) => !v)}
-              title="布局 / 解组"
-            >
-              <UnorderedListOutlined />
-            </button>
-
-            {showLayoutMenu && (
-              <div className="pgn-layout-menu">
-                <button
-                  className={`pgn-layout-item ${layout === 'grid' ? 'active' : ''}`}
-                  onClick={() => handleLayout('grid')}
-                >
-                  <AppstoreOutlined /> 宫格布局
-                </button>
-                <button
-                  className={`pgn-layout-item ${layout === 'horizontal' ? 'active' : ''}`}
-                  onClick={() => handleLayout('horizontal')}
-                >
-                  <UnorderedListOutlined /> 水平布局
-                </button>
-                <div className="pgn-layout-sep" />
-                <button className="pgn-layout-item pgn-danger" onClick={handleUngroup}>
-                  <DeleteOutlined /> 解组
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* 下载 */}
-          <button className="pgn-btn" title="下载组" onClick={handleDownload}>
-            <DownloadOutlined />
-          </button>
-        </div>
+  // ── 浮层 header 内容（与单节点工具条同款视觉） ──
+  const headerNode = (
+    <div
+      className="pgn-header-portal"
+      style={
+        headerPos
+          ? { left: headerPos.left, top: headerPos.top }
+          : { left: -9999, top: -9999, visibility: 'hidden' }
+      }
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      data-group-id={id}
+    >
+      <div className="pgn-header-left">
+        <span className="pgn-dot" />
+        <AppstoreOutlined className="pgn-icon" />
+        <span className="pgn-label">{label}</span>
       </div>
 
-      {/* 子节点由 ReactFlow 通过 parentNode 渲染在此容器内 */}
+      <div className="pgn-header-actions">
+        {/* 整组执行 */}
+        <button className="pgn-btn" title="整组执行">
+          <PlayCircleOutlined />
+          <span>整组执行</span>
+        </button>
+
+        {/* 创建模板 */}
+        <button className="pgn-btn" title="创建模板">
+          <CopyOutlined />
+          <span>创建模板</span>
+        </button>
+
+        {/* 布局切换 / 解组 */}
+        <div className="pgn-layout-wrap">
+          <button
+            className={`pgn-btn pgn-layout-trigger ${showLayoutMenu ? 'active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowLayoutMenu((v) => !v);
+            }}
+            title="布局 / 解组"
+          >
+            <UnorderedListOutlined />
+          </button>
+
+          {showLayoutMenu && (
+            <div className="pgn-layout-menu" onClick={(e) => e.stopPropagation()}>
+              <button
+                className={`pgn-layout-item ${layout === 'grid' ? 'active' : ''}`}
+                onClick={() => handleLayout('grid')}
+              >
+                <AppstoreOutlined /> 宫格布局
+              </button>
+              <button
+                className={`pgn-layout-item ${layout === 'horizontal' ? 'active' : ''}`}
+                onClick={() => handleLayout('horizontal')}
+              >
+                <UnorderedListOutlined /> 水平布局
+              </button>
+              <div className="pgn-layout-sep" />
+              <button
+                className="pgn-layout-item pgn-danger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleUngroup();
+                }}
+              >
+                <DeleteOutlined /> 解组
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 下载 */}
+        <button
+          className="pgn-btn"
+          title="下载组"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleDownload();
+          }}
+        >
+          <DownloadOutlined />
+        </button>
+      </div>
     </div>
+  );
+
+  return (
+    <>
+      {/* group 容器本体：透明 + 细边框，子节点由 ReactFlow 自动渲染到内部。
+          容器本身不渲染任何内容（不留 header 占位），让画布点阵与子节点视觉贯通。 */}
+      <div
+        className={`pea-group-node ${selected ? 'selected' : ''}`}
+        data-group-container={id}
+      >
+        {/* 子节点由 ReactFlow 通过 parentNode 机制渲染在此容器内 */}
+      </div>
+
+      {/* Portal 浮层 header：createPortal 到 body，浮在 group 框外顶部。
+          选中 group 时才显示；不选中立即消失，避免和单节点工具条/多选工具条堆叠。 */}
+      {selected && portalReady && typeof document !== 'undefined'
+        ? createPortal(headerNode, document.body)
+        : null}
+    </>
   );
 }

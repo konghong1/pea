@@ -1292,11 +1292,9 @@ body {
 }
 
 /* ===== Shift 框选高亮（对齐 pea 品牌色） ===== */
-/* 框选矩形：在浅色/深色背景下都清晰可见。
-   pointer-events:none —— 选择框不拦截事件，拖拽期间经过节点的 hover/点击仍命中节点本身。
-   增强背景透明度至 10% + 加粗边框至 1.5px，确保浅色画布背景下选区框清晰可辨（之前 6%+1px 在白色背景几乎不可见）。 */
-.react-flow__selection,
-.react-flow__nodesselection-rect {
+/* 原生拖拽选区 .react-flow__selection：由 <SelectionOverlay> 自接管，原生 DOM 直接隐藏。
+   pointer-events:none —— 选择框不拦截事件，拖拽期间经过节点的 hover/点击仍命中节点本身。 */
+.react-flow__selection {
   /* !important 必须：ReactFlow 会在运行时注入默认样式（晚于本包样式、同特异性），不加 !important 会被覆盖 */
   background: rgba(31, 162, 220, 0.10) !important;
   border: 1.5px solid var(--pea-brand, #1fa2dc) !important;
@@ -2107,11 +2105,40 @@ body {
   z-index: 30 !important;
 }
 
-/* 多选选择框 / 框选矩形：必须在选中节点之上，保证边框完整可见 */
-.react-flow__nodesselection-rect,
-.react-flow__selection {
+/* 多选选择框 / 框选矩形：必须在选中节点之上，保证边框完整可见。
+   注意：.react-flow__selection（拖拽时的虚线框）由我们自己接管渲染，
+   原因：本应用 viewport transform 含偏移（translate(150px,-102px)），
+   RF 内部算出的 rect 会被截断（约实际宽度 40%），原生 DOM 不可信。
+   由 <SelectionOverlay>（createPortal 到 body）用 raw mouse 坐标重绘。 */
+.react-flow__nodesselection-rect {
   z-index: 35 !important;
 }
+/* 彻底隐藏 ReactFlow 的选中集合矩形：
+   - 单选时节点自身选中边框已足够；
+   - 多选时该矩形会与每个节点的选中边框叠加，出现明显的"两个框"；
+   - 框选过程中由 <SelectionOverlay> 用原始鼠标坐标绘制选区，无需再保留 RF 的集合矩形。
+   因此无论单选/多选/框选，都关闭 nodesselection-rect。 */
+.react-flow__selection,
+.react-flow__nodesselection-rect {
+  display: none !important;
+}
+
+/* 自接管选区：实线蓝色框，半透明蓝填充，跟随鼠标水平/竖直/对角拖动都不会被截断
+   z-index 必须足够高：本应用 ReactFlow 内部节点/边/Nodesselection 都用了 transform 制造
+   stacking context，常规 z-index:35 会被压在节点后面（表现为「框被节点遮住、只露出边角」），
+   拉到 9999 + isolation:isolate 确保选区覆盖层浮在所有节点/边之上。 */
+.pea-selection-overlay {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9999;
+  isolation: isolate;
+  border: 1.5px solid #1f8eff;
+  background: rgba(31, 142, 255, 0.18);
+  border-radius: 4px;
+  box-sizing: border-box;
+  transition: opacity 120ms ease;
+}
+.pea-selection-overlay[hidden] { display: none !important; }
 
 /* ===== React Flow 边颜色 ===== */
 .react-flow__edge-path {
@@ -5661,6 +5688,84 @@ body {
   flex-shrink: 0;
 }
 
+/* picker 中视频缩略图：用 video 替代 img，默认显示第一帧 */
+.pea-ref-picker-video-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #000;
+  flex-shrink: 0;
+  pointer-events: auto;
+}
+
+/* 视频引用 hover 预览浮层（参考截图 2：@Video + 播放视频 + 底部工具栏） */
+.pea-ref-video-popover {
+  width: 220px;
+  background: rgba(22, 22, 28, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(24px) saturate(180%);
+  overflow: hidden;
+  pointer-events: auto;
+  animation: popover-fade-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes popover-fade-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.pea-ref-video-popover-tag {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.pea-ref-video-popover-label {
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.55);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.pea-ref-video-popover-player {
+  width: 100%;
+  height: 124px;
+  object-fit: cover;
+  display: block;
+  background: #000;
+}
+.pea-ref-video-popover-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.pea-ref-video-popover-toolbar button {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.pea-ref-video-popover-toolbar button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
 /* 节点左侧输入状态小点 */
 .pea-node-input-badge {
   position: absolute;
@@ -5739,11 +5844,19 @@ body {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
-.node-ref-thumb img {
+.node-ref-thumb img,
+.node-ref-thumb video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+}
+/* 引用条中的视频缩略图 */
+.node-ref-thumb-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
 }
 /* 文本节点引用：显示文本图标（区别于图片缩略图） */
 .node-ref-thumb-text {
@@ -6214,17 +6327,21 @@ body {
   min-width: 180px;
   min-height: 140px;
   border-radius: 16px;
-  background: rgba(18, 20, 24, 0.85);
-  backdrop-filter: blur(24px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* 透明背景：让画布点阵网格透出（参考图样式）。
+     取消 backdrop-filter 和 overflow:hidden，避免遮住/裁掉子节点。
+     仍保留细边框制造「容器」感。 */
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.10);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  box-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  overflow: visible;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  /* 关键：让 group 内部子节点能正常接收事件，
+     自身不拦截（子节点由 .pea-group-node > * 选择器重新启用）。 */
+  pointer-events: none;
 }
+.pea-group-node > * { pointer-events: auto; }
 
 .pea-group-node.selected {
   border-color: rgba(31, 162, 220, 0.5);
@@ -6234,16 +6351,52 @@ body {
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-/* ── 顶部工具栏 ── */
-.pgn-header {
+/* ── 顶部工具栏（portal 浮层版本）── */
+/* 浮在 group 框外顶部上方 8px，createPortal 到 body。和单节点 NodeChatPrompt 同款。 */
+.pgn-header-portal {
+  position: fixed;
+  z-index: 60;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
-  min-height: 38px;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  flex-shrink: 0;
+  padding: 6px 10px;
+  min-height: 32px;
+  background: rgba(28, 30, 36, 0.88);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  /* 微微入场动画，和单节点工具条手感一致 */
+  animation: pgn-fade-in 0.14s ease-out;
+}
+.pgn-header-portal::before {
+  /* 左侧小三角，指向 group 框左上沿，强化「这是组的标题」语义 */
+  content: '';
+  position: absolute;
+  left: 18px;
+  bottom: -5px;
+  width: 10px;
+  height: 10px;
+  background: rgba(28, 30, 36, 0.88);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  transform: rotate(45deg);
+}
+@keyframes pgn-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.light .pgn-header-portal {
+  background: rgba(252, 252, 254, 0.92);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.12);
+}
+.light .pgn-header-portal::before {
+  background: rgba(252, 252, 254, 0.92);
+  border-right-color: rgba(0, 0, 0, 0.08);
+  border-bottom-color: rgba(0, 0, 0, 0.08);
 }
 
 .pgn-header-left {
@@ -6389,17 +6542,15 @@ body {
 
 /* ── 亮色适配 ── */
 .light .pea-group-node {
-  background: rgba(255, 255, 255, 0.75);
-  border-color: rgba(0, 0, 0, 0.07);
-  box-shadow:
-    0 4px 20px rgba(0, 0, 0, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  background: transparent;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.03) inset;
 }
 .light .pea-group-node.selected {
-  border-color: rgba(31, 162, 220, 0.35);
+  border-color: rgba(31, 162, 220, 0.45);
   box-shadow:
-    0 4px 20px rgba(0, 0, 0, 0.1),
-    0 0 0 2px rgba(31, 162, 220, 0.1);
+    0 0 0 1px rgba(31, 162, 220, 0.15) inset,
+    0 0 0 1px rgba(31, 162, 220, 0.25);
 }
 .light .pgn-header {
   background: rgba(0, 0, 0, 0.02);
