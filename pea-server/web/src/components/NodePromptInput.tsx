@@ -60,9 +60,9 @@ async function resolveNodeMediaUrl(node: FlowNode<PeaNodeData>): Promise<string 
   const d = node.data;
   const urls = d.resultUrls?.length ? d.resultUrls : d.resultUrl ? [d.resultUrl] : [];
   const firstUrl = urls[0] || d.url;
-  // blob: URL 仅当前会话有效，刷新后失效；如果被持久化到 DB 重新加载后就是废链接。
-  // 检测到 blob: 时跳过，继续尝试 fileKey → 签名 URL 路径。
-  if (firstUrl && !firstUrl.startsWith('blob:')) return firstUrl;
+  // blob: URL 仅当前会话有效，刷新后失效；相对路径 /media/... 仅 nginx 反代可达，
+  // 外部模型(Agnes)无法访问。检测到两者时跳过，继续尝试 fileKey → 签名 URL 路径。
+  if (firstUrl && firstUrl.startsWith('http') && !firstUrl.startsWith('//')) return firstUrl;
   if (d.fileKey) {
     // 显示用途优先走 BFF 代理的 blob URL（同源，浏览器必然可加载，且不受 MinIO 内网/
     // CORS 限制影响）；仅当 BFF 代理失败时才退回预签名直链（可能被内网隔离导致浏览器加载失败）。
@@ -480,10 +480,10 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
               url = urls[0] || d.url || null;
             }
           }
-          // blob: 仅浏览器内显示用，模型侧无法下载（编排器会静默丢弃），
+          // blob: 和相对路径(/media/...) 仅浏览器内/反代可达，模型侧无法下载（编排器会静默丢弃），
           // 参考图真实可外传地址由 resolveUpstreamMediaUrl 的预签名直链提供，
-          // 因此这里不把 blob: 纳入 reference_images，避免发送无效参考。
-          if (url && !url.startsWith('blob:') && !referenceImages.includes(url)) referenceImages.push(url);
+          // 因此这里不把非 http(s) URL 纳入 reference_images，避免发送无效参考。
+          if (url && url.startsWith('http') && !url.startsWith('//') && !referenceImages.includes(url)) referenceImages.push(url);
         }
       });
       let text = '';

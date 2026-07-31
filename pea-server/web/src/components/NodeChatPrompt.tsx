@@ -94,7 +94,11 @@ async function resolveUpstreamMediaUrl(node: Node<PeaNodeData>): Promise<string 
   const d = node.data;
   const urls = d.resultUrls?.length ? d.resultUrls : d.resultUrl ? [d.resultUrl] : [];
   const firstUrl = urls[0] || d.url;
-  if (firstUrl) return firstUrl;
+  // ★ 关键修复：必须校验 scheme。
+  // AI 生成图的 resultUrl 是相对路径 /media/...（PEA_CDN_BASE_URL=/media），
+  // blob: URL 仅浏览器内可达——两者发给外部模型(Agnes)都会被编排器静默丢弃，
+  // 导致"参考图传了但视频和图完全无关"。强制走 fileKey → getPresignedUrl 获取真实签名 URL。
+  if (firstUrl && firstUrl.startsWith('http')) return firstUrl;
   if (d.fileKey) {
     // 优先返回可外传的真实签名 URL（参考图需发给外部模型）；失败再退化为 blob 仅作显示。
     try {

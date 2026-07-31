@@ -4,11 +4,14 @@ import { useViewport } from 'reactflow';
 import { useCanvas } from '../store/canvas';
 
 /**
- * 持久选中包围框：单选/多选时，用选中节点的 DOM 包围盒（min/max 四边）
- * 绘制一个带透明填充的矩形框，明确标示当前选中了哪些节点。
+ * 持久选中包围框：仅在**多选**（>=2 个节点）时绘制。
  *
  * 设计要点：
- * - 仅根据实际 selectedIds 计算，不会把「被拖拽选区扫过但未选中」的节点包含进来。
+ * - 单选时节点自身的 1.5px 蓝边 + box-shadow 已经清楚地表达了"已选中"，
+ *   再叠一个外层蓝框会出现"两个框"（用户反馈：拖走节点后还能看到框）。
+ *   因此单选（selectedIds.length === 1）直接返回 null，把视觉重心留给节点本身。
+ * - 多选时仍按选中节点的 DOM 包围盒（min/max 四边）绘制一个透明填充矩形框，
+ *   明确标示当前选中了哪些节点。
  * - 实时 rAF 跟随节点拖动 / 视口缩放，保证框始终贴合选中节点。
  * - pointer-events:none + portal 到 body，不拦截节点交互。
  */
@@ -22,7 +25,9 @@ export default function SelectionBoundsBox() {
   const lastKeyRef = useRef('');
 
   useEffect(() => {
-    if (selectedIds.length === 0) {
+    // 单选：节点自身已有 1.5px 蓝边 + ring box-shadow，足够表达选中态。
+    // 多选时才需要这个外层 bounds 框把多个节点圈出来。
+    if (selectedIds.length < 2) {
       setBounds(null);
       lastKeyRef.current = '';
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -79,7 +84,7 @@ export default function SelectionBoundsBox() {
     };
   }, [selectedIds.join(','), nodes.length, x, y, zoom]);
 
-  if (!bounds || selectedIds.length === 0) return null;
+  if (!bounds || selectedIds.length < 2) return null;
   if (typeof document === 'undefined') return null;
 
   return createPortal(

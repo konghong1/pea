@@ -28,6 +28,8 @@ import requests
 from app.config import settings
 from app.llm_router import GenerationResult
 from app.param_adapters import normalize_image_params, get_image_adapter, _normalize_refs
+import base64
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ def _swap_host(url: str, new_base: str) -> str:
 
 def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
                      max_attempts: int = 3, backoff_base: int = 4,
+                     backoff_cap: int = 20,
                      fallback_url: str | None = None):
     """POST JSON 到外部提供商, 对瞬时错误自动重试。
 
@@ -88,7 +91,7 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
                 target = fallback_url
                 print(f"[agnes] attempt {attempt} primary unreachable, fallback to gateway {fallback_url}")
                 if attempt < max_attempts:
-                    time.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                    time.sleep(min(backoff_base * (2 ** (attempt - 1)), backoff_cap))
                     continue
             elif attempt < max_attempts:
                 wait = min(backoff_base * (2 ** (attempt - 1)), 20)
@@ -109,6 +112,7 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
 
 async def _apost_with_retry(client, url, payload, headers, timeout,
                             max_attempts: int = 3, backoff_base: int = 4,
+                            backoff_cap: int = 20,
                             fallback_url: str | None = None):
     """异步版 POST (httpx): 仅对连接级错误与瞬时 5xx 重试, 不对读取超时重试。
 
@@ -130,10 +134,10 @@ async def _apost_with_retry(client, url, payload, headers, timeout,
                 target = fallback_url
                 print(f"[agnes] attempt {attempt} primary unreachable, fallback to gateway {fallback_url}")
                 if attempt < max_attempts:
-                    await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                    await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), backoff_cap))
                     continue
             elif attempt < max_attempts:
-                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), backoff_cap))
                 continue
             raise RuntimeError(
                 f"provider connection failed ({type(e).__name__}): {url}"
@@ -141,7 +145,7 @@ async def _apost_with_retry(client, url, payload, headers, timeout,
         except httpx.TimeoutException as e:  # 超时(含读取超时) -> 同址重试, 不切换
             last_err = e
             if attempt < max_attempts:
-                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), backoff_cap))
                 continue
             raise RuntimeError(
                 f"provider timeout failed ({type(e).__name__}): {url}"
@@ -149,7 +153,7 @@ async def _apost_with_retry(client, url, payload, headers, timeout,
         if resp.status_code in transient_5xx:  # 瞬时过载 / Cloudflare 源站异常 -> 重试
             last_err = RuntimeError(f"provider HTTP {resp.status_code}")
             if attempt < max_attempts:
-                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), 20))
+                await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), backoff_cap))
                 continue
             return resp
         return resp
@@ -313,6 +317,66 @@ class OpenAICompatibleProvider:
             usage=data.get("usage") or {},
         )
 
+
+def _ensure_http_refs_for_video(refs: list[str]) -> list[str]:
+    """确保视频参考图全部为 http(s) URL（Agnes 视频 API 的 image 字段只接受可下载 URL）。
+
+    _normalize_refs 对内部 URL(localhost/私有IP/容器别名)会降级成 base64 data URI，
+    这对图片接口（extra_body.image[] 数组）可以工作，但视频接口的顶层 image 字符串
+    字段只接受 http(s) URL，data URI 会被静默忽略 → 视频与参考图无关。
+
+    策略：检测到 data: URI 时，解码后通过 storage.store_bytes 上传到公开 gen/ 前缀，
+    返回 CDN URL。若 cdn_base_url 仍为 localhost（未配置公网入口），记录明确告警。
+    """
+    if not refs:
+        return refs
+
+    out: list[str] = []
+    for r in refs:
+        if r.startswith("data:"):
+            # 解码 data URI → 上传到公开存储 → 得到 HTTP URL
+            try:
+                match = re.match(r"data:([^;]+);base64,(.+)", r, re.DOTALL)
+                if not match:
+                    logger.warning("[video-ref] 无法解析 data URI 格式, 跳过 (前80字符): %s", r[:80])
+                    continue
+                mime = match.group(1)
+                b64_body = match.group(2)
+                # 补齐 base64 padding
+                padding = 4 - len(b64_body) % 4
+                if padding != 4:
+                    b64_body += "=" * padding
+                image_data = base64.b64decode(b64_body)
+                media_type = "image" if mime.startswith("image/") else "image"
+
+                # 延迟导入避免循环依赖
+                from app import storage
+                public_url = storage.store_bytes(image_data, media_type, content_type=mime)
+                out.append(public_url)
+                logger.info(
+                    "[video-ref] data URI (%d bytes) 已转存为公开 URL: %s",
+                    len(image_data), public_url[:120],
+                )
+            except Exception as exc:
+                logger.warning("[video-ref] data URI 转 HTTP URL 失败, 该参考图将被跳过: %s", exc)
+                continue
+        else:
+            out.append(r)
+
+    # 检查 CDN URL 是否真正可达（localhost 对外部模型不可达）
+    cdn = settings.cdn_base_url or ""
+    if out and ("localhost" in cdn or "127.0.0.1" in cdn or cdn.startswith("/")):
+        logger.warning(
+            "[video-ref] ⚠️ PEA_CDN_BASE_URL=%s 含 localhost 或相对路径 —— "
+            "Agnes 等**外部模型**可能无法下载转存后的参考图 URL。"
+            "生产环境需将 PEA_CDN_BASE_URL 设为公网可达地址（如 https://your-domain.com/media）。"
+            "当前 %d 张参考图可能仍被 Agnes 忽略。",
+            cdn, len(out),
+        )
+
+    return out
+
+
     # ── 视频 (异步提交 + 轮询) ───────────────────────────────────────
     def _build_video_payload(self, req: dict):
         params: dict = req.get("params") or {}
@@ -339,6 +403,11 @@ class OpenAICompatibleProvider:
         # 注意: 旧实现完全忽略 gen_mode, 导致 UI 选择的生成模式无效。
         gen_mode = (params.get("gen_mode") or params.get("mode") or "").lower()
         refs = _normalize_refs(params.get("reference_images"))
+        # ★ 关键修复：视频接口的 image 字段只接受可下载的 http(s) URL，
+        # 不接受 data: URI（图片接口 extra_body.image[] 数组可以）。
+        # _normalize_refs 对内部 URL(localhost等)会降级成 base64 data URI，
+        # 这里必须把 data URI 再转存到公开 gen/ 前缀，返回 Agnes 可访问的 CDN URL。
+        refs = _ensure_http_refs_for_video(refs)
         payload: dict[str, Any] = {
             "model": self.model_name,
             "prompt": req["prompt"],
@@ -375,7 +444,13 @@ class OpenAICompatibleProvider:
         resp = _post_with_retry(
             submit_url, payload, self._headers(),
             timeout=(settings.provider_http_connect_timeout_s, settings.provider_video_submit_timeout_s),
-            max_attempts=2,
+            # 视频队列在晚高峰常被上游打满 (video_queue_full, HTTP 503, 上游明示 "retry later")。
+            # 原 max_attempts=2 只重试 1 次(4s)就放弃 -> 立即 FAILED+退款, 把可自愈的瞬时饱和
+            # 误判成永久故障。这里放大到 5 次、退避 15/30/60/60s (封顶 60s), 总等待 ~165s,
+            # 足以桥接观察到的数分钟级饱和窗口; 若持续满则照常 FAILED+退款(用户不为失败付费)。
+            max_attempts=5,
+            backoff_base=15,
+            backoff_cap=60,
             fallback_url=submit_fb,
         )
         _raise_for_provider(resp, "video-submit")

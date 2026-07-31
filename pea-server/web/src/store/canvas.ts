@@ -179,9 +179,12 @@ const snapshotFromState = (s: {
       base.parentNode = n.parentNode;
       base.extent = n.extent;
     }
-    // 组容器需保留尺寸与父子关系，否则撤销后分组丢失
+    // 组容器需保留尺寸、背景色与父子关系，否则撤销后分组丢失
     if (n.type === 'group' && n.style) {
       base.style = { width: n.style.width, height: n.style.height };
+      if ((n.style as any).backgroundColor) {
+        (base.style as any).backgroundColor = (n.style as any).backgroundColor;
+      }
     }
     return base;
   }),
@@ -910,11 +913,15 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       };
     });
 
-    // 移除 Group 节点
+    // 移除 Group 节点，并同步清空选中态（避免解组后残留选择框）
     set({
       nodes: updated.filter((n) => n.id !== groupId),
       dirty: true,
+      selectedId: null,
+      selectedIds: [],
     });
+    // 强制 ReactFlow 节点 selected 字段与 store 一致
+    get().select(null);
   },
 
   reLayoutGroup: (groupId, layout) => {
@@ -928,29 +935,37 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     if (childIds.length === 0) return;
 
     const children = s.nodes.filter((n) => childIds.includes(n.id));
-    const PAD = 0;
-    const GAP = 16;
+    const PAD = 24;   // 容器内边距，留出视觉呼吸空间
+    const GAP = 32;   // 子节点间距（调大，避免拥挤）
+
+    // ── 取节点实测尺寸（ReactFlow 渲染后写入 node.width/height）─────
+    // 默认值对齐 CSS .pea-node { width: 340px } 及各类型节点的典型高度
+    const nodeW = (n: any) => n.width ?? 340;
+    const nodeH = (n: any) => n.height ?? 340;
 
     if (layout === 'horizontal') {
       // ── 水平布局：单行横向排列 ──
       let cx = PAD;
       children.forEach((n) => {
-        const w = (n as any).width ?? 200;
+        const w = nodeW(n);
         Object.assign(n, { position: { x: cx, y: PAD } });
         cx += w + GAP;
       });
       const totalW = cx - GAP + PAD;
-      const maxH = Math.max(...children.map((n) => ((n as any).height ?? 160))) + PAD * 2;
+      const maxH = Math.max(...children.map((n) => nodeH(n))) + PAD * 2;
       set({
         nodes: s.nodes.map((n) => (n.id === gn.id ? { ...n, data: { ...gn.data, layout }, style: { width: totalW, height: maxH } } : children.find((c) => c.id === n.id) ?? n)),
         dirty: true,
       });
     } else {
-      // ── 宫格布局：尽量均分到 3 列（或更少） ──
-      const cols = Math.min(3, childIds.length);
+      // ── 宫格布局：按 √n 列数网格（更方正的常规宫格），最多 4 列 ──
+      // 用 √n 而非 Math.min(3,n)：节点少时（如 3 个）也能排成 2 列（2上1下），
+      // 与"水平单行"明显区分；最多 4 列避免窄屏过宽。
+      const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(childIds.length))));
       const rows = Math.ceil(childIds.length / cols);
-      const cellW = 220; // 近似节点宽度
-      const cellH = 180; // 近似节点高度
+      // 用所有子节点中的最大宽高作为单元格尺寸，确保不重叠
+      const cellW = Math.max(...children.map((n) => nodeW(n)));
+      const cellH = Math.max(...children.map((n) => nodeH(n)));
       children.forEach((n, i) => {
         const col = i % cols;
         const row = Math.floor(i / cols);

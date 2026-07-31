@@ -1,8 +1,7 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   DownloadOutlined,
-  AppstoreOutlined,
   UnorderedListOutlined,
   PlayCircleOutlined,
   CopyOutlined,
@@ -19,34 +18,51 @@ export interface GroupNodeData {
   label: string;
   layout: GridLayout;
   childrenIds: string[];
+  bgColor?: string;
 }
 
-type GridLayout = 'grid' | 'horizontal';
+export type GridLayout = 'grid' | 'horizontal';
 
 /** 浮层 header 离 group 框顶部的间距(px)。 */
-const HEADER_GAP = 12;
+const HEADER_GAP = 18;
 /** 浮层 header 高度(px)，与 .pgn-header-portal 实际渲染一致。 */
 const HEADER_HEIGHT = 36;
+
+/** 可选的组背景色（与图3色板对应）。 */
+const COLOR_PRESETS: { color: string; label: string }[] = [
+  { color: 'transparent', label: '透明' },
+  { color: 'rgba(255,255,255,0.08)', label: '浅白' },
+  { color: 'rgba(31,162,220,0.16)', label: '蓝' },
+  { color: 'rgba(239,68,68,0.16)', label: '红' },
+  { color: 'rgba(34,197,94,0.16)', label: '绿' },
+  { color: 'rgba(234,179,8,0.16)', label: '黄' },
+  { color: 'rgba(168,85,247,0.16)', label: '紫' },
+  { color: 'rgba(249,115,22,0.16)', label: '橙' },
+];
 
 /**
  * GroupNode — 打组容器节点。
  *
  * 视觉与交互：
- * - 容器本身：透明背景 + 细边框 + padding 0，画布点阵透出（参考图样式）。
- * - 顶部工具栏：createPortal 到 body，固定浮在 group 框**外顶部上方 8px**,
- *   和单节点的 NodeChatPrompt 工具条同款（不再占容器内部空间）。
+ * - 容器本身：可选半透明背景 + 细边框 + padding 0，画布点阵透出（参考图样式）。
+ * - 组名称：显示在容器左上角，无图标（参考图2）。
+ * - 顶部工具栏：createPortal 到 body，固定浮在 group 框**外顶部上方**，
+ *   仅保留操作按钮，不再显示组名。
  * - 子节点：通过 ReactFlow 的 parentNode + extent:'parent' 机制渲染在容器内,
  *   拖动 group 时子节点由 ReactFlow subflow 自动跟随移动。
  */
 export default function GroupNode({ id, data, selected }: NodeProps) {
-  const { ungroupNode, reLayoutGroup, downloadGroup } = useCanvas();
+  const { ungroupNode, reLayoutGroup, downloadGroup, updateNodeData } = useCanvas();
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
+  const [showColorPicker, setShowColorPicker] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const [headerPos, setHeaderPos] = useState<{ left: number; top: number } | null>(null);
+  const colorBtnRef = useRef<HTMLButtonElement>(null);
 
   const grp = data as any;
   const label: string = grp.label || '新建组';
   const layout: GridLayout = grp.layout || 'grid';
+  const bgColor: string = grp.bgColor || 'transparent';
 
   // ── 布局切换 ──
   const handleLayout = useCallback(
@@ -66,6 +82,29 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
   const handleDownload = useCallback(() => {
     downloadGroup(id);
   }, [id, downloadGroup]);
+
+  // ── 背景色切换 ──
+  const handleSetBgColor = useCallback(
+    (color: string) => {
+      updateNodeData(id, { bgColor: color } as Partial<any>, true);
+      setShowColorPicker(false);
+    },
+    [id, updateNodeData],
+  );
+
+  // 点击面板外部关闭颜色选择器
+  useEffect(() => {
+    if (!showColorPicker) return;
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (colorBtnRef.current && colorBtnRef.current.contains(target)) return;
+      const panel = document.querySelector('.pgn-color-panel');
+      if (panel && panel.contains(target)) return;
+      setShowColorPicker(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [showColorPicker]);
 
   // ── Portal 头部浮层位置：rAF 读 group 节点 DOM rect，跟随 group 移动/缩放 ──
   useEffect(() => {
@@ -94,7 +133,7 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
     };
   }, [id, selected]);
 
-  // ── 浮层 header 内容（与单节点工具条同款视觉） ──
+  // ── 浮层 header 内容（仅操作按钮，组名已移至框内左上角） ──
   const headerNode = (
     <div
       className="pgn-header-portal"
@@ -107,37 +146,54 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
       onClick={(e) => e.stopPropagation()}
       data-group-id={id}
     >
-      <div className="pgn-header-left">
-        <AppstoreOutlined className="pgn-icon" />
-        <span className="pgn-label">{label}</span>
-      </div>
-
       <div className="pgn-header-actions">
         {/* 第一组：选择框背景颜色 + 切换布局 */}
-        <button
-          className="pgn-btn pgn-color-btn"
-          title="切换选择框背景颜色"
-          onClick={(e) => {
-            e.stopPropagation();
-            // TODO: 打开颜色选择器，修改当前组选择框背景色
-            console.log('[GroupNode] open color picker for selection box:', id);
-          }}
-        >
-          <svg
-            className="pgn-color-icon"
-            width="14"
-            height="14"
-            viewBox="0 0 14 14"
-            fill="none"
-            aria-hidden
+        <div className="pgn-color-wrap">
+          <button
+            ref={colorBtnRef}
+            className={`pgn-btn pgn-color-btn ${showColorPicker ? 'active' : ''}`}
+            title="切换背景"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowColorPicker((v) => !v);
+            }}
           >
-            <path
-              d="M2 9.5V11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V9.5L7 4 2 9.5z"
-              fill="currentColor"
+            <span
+              className="pgn-color-swatch"
+              style={{
+                background: bgColor === 'transparent' ? 'transparent' : bgColor,
+                borderColor:
+                  bgColor === 'transparent'
+                    ? 'rgba(255,255,255,0.35)'
+                    : bgColor,
+              }}
             />
-            <path d="M2 9.5h10" stroke="currentColor" strokeWidth="1.2" />
-          </svg>
-        </button>
+            <span>切换背景</span>
+          </button>
+
+          {showColorPicker && (
+            <div className="pgn-color-panel" onClick={(e) => e.stopPropagation()}>
+              {COLOR_PRESETS.map((preset) => (
+                <button
+                  key={preset.color}
+                  className={`pgn-color-option ${bgColor === preset.color ? 'active' : ''}`}
+                  title={preset.label}
+                  onClick={() => handleSetBgColor(preset.color)}
+                >
+                  <span
+                    className="pgn-color-dot"
+                    style={{
+                      background:
+                        preset.color === 'transparent'
+                          ? 'linear-gradient(135deg, rgba(255,255,255,0.25) 45%, transparent 45%, transparent 55%, rgba(255,255,255,0.25) 55%)'
+                          : preset.color,
+                    }}
+                  />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* 布局切换 */}
         <div className="pgn-layout-wrap">
@@ -158,13 +214,13 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
                 className={`pgn-layout-item ${layout === 'grid' ? 'active' : ''}`}
                 onClick={() => handleLayout('grid')}
               >
-                <AppstoreOutlined /> 宫格布局
+                <span className="pgn-layout-icon pgn-layout-icon-grid" /> 宫格布局
               </button>
               <button
                 className={`pgn-layout-item ${layout === 'horizontal' ? 'active' : ''}`}
                 onClick={() => handleLayout('horizontal')}
               >
-                <UnorderedListOutlined /> 水平布局
+                <span className="pgn-layout-icon pgn-layout-icon-list" /> 水平布局
               </button>
             </div>
           )}
@@ -214,12 +270,14 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
 
   return (
     <>
-      {/* group 容器本体：透明 + 细边框，子节点由 ReactFlow 自动渲染到内部。
-          容器本身不渲染任何内容（不留 header 占位），让画布点阵与子节点视觉贯通。 */}
+      {/* group 容器本体：可选半透明背景 + 细边框，子节点由 ReactFlow 自动渲染到内部。 */}
       <div
         className={`pea-group-node ${selected ? 'selected' : ''}`}
         data-group-container={id}
+        style={{ background: bgColor }}
       >
+        {/* 组名称：左上角，无图标（参考图2） */}
+        <div className="pea-group-node-label">{label}</div>
         {/* 子节点由 ReactFlow 通过 parentNode 机制渲染在此容器内 */}
       </div>
 

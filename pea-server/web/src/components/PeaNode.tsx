@@ -1044,6 +1044,15 @@ function formatBytes(n: number) {
 /** 把后端原始错误归类为 { title, hint, detail }. */
 function parseGenError(raw: string): { title: string; hint: string; detail: string | null } {
   const s = String(raw || '').trim();
+  // 视频上游队列满 (video_queue_full): 上游明示 "retry later", 是可自愈的限流,
+  // 不应误显示成「生成服务暂不可用 / 已自动退款」(编排器已放大重试桥接饱和窗口)。
+  if (/video_queue_full/i.test(s)) {
+    return {
+      title: '视频生成队列繁忙',
+      hint: '上游视频服务暂时满负荷，已自动重试；若持续请稍后再试。',
+      detail: s,
+    };
+  }
   // HTTP 5xx / Cloudflare 5xx — 上游异常
   const http = s.match(/HTTP\s*(\d{3})/i);
   if (http) {

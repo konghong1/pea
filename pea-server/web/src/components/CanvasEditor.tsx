@@ -1066,7 +1066,6 @@ function Flow() {
     onConnect,
     addNode,
     select,
-    toggleSelect,
     setSelection,
     clearSelection,
     selectedIds,
@@ -1687,7 +1686,12 @@ function Flow() {
                 return;
               }
             }
-            e.shiftKey ? toggleSelect(n.id) : select(n.id);
+            // Shift+点击 多选交给 ReactFlow（multiSelectionKeyCode="Shift"）处理：
+            // 若这里再调 toggleSelect，会与 ReactFlow 自身发出的 select change 在
+            // onNodesChange 的 hasSelectChanges 分支互相覆盖，导致 selectedIds=[]。
+            // 所以 Shift 时直接放行，让 ReactFlow 负责多选取并同步到 selectedIds。
+            if (e.shiftKey) return;
+            select(n.id);
           }}
           onNodeDragStart={(e) => {
             // 记录按下坐标（用于区分单击/拖动）；用原生事件坐标。
@@ -1731,6 +1735,11 @@ function Flow() {
           panOnScroll
           selectionOnDrag
           selectionMode={SelectionMode.Partial}
+          // 多选键：Shift+点击 节点 = 加入/移出多选集合（交给 ReactFlow 处理，
+          // onNodeClick 在 shiftKey 时放行，不再调 toggleSelect，避免与 ReactFlow
+          // 的 select change 在 onNodesChange 中互相覆盖）。框选仍走 selectionOnDrag。
+          multiSelectionKeyCode="Shift"
+          selectionKeyCode={null}
           // 禁用键盘删除：退格/Delete 只用于编辑输入框文本（如节点聊天输入框），
           // 不再误删选中的节点。节点删除统一走右键菜单 -> 删除。
           deleteKeyCode={null}

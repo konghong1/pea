@@ -24,6 +24,29 @@
   --pea-warn: #f59e0b;          /* 优雅琥珀，替代饱和红 */
   --pea-warn-soft: #ffb454;
   --pea-success: #34d399;
+
+  /* ── 连线令牌（亮色背景 #f4f4f7）───────────────────────────────────────
+     空闲连线要"退到背景里"：低饱和的冷灰蓝 + 低透明 + 微模糊；
+     激活（选中边 / 选中或拖动端点节点）才切到品牌蓝并发光。 */
+  --pea-edge-idle: rgba(88, 106, 128, 0.34);
+  --pea-edge-idle-w: 1.5px;
+  --pea-edge-idle-blur: 0.45px;
+  --pea-edge-hover: rgba(31, 162, 220, 0.55);
+  --pea-edge-active: rgba(31, 162, 220, 0.92);
+  --pea-edge-active-w: 2.1px;
+  --pea-edge-halo: rgba(31, 162, 220, 0.22);
+  --pea-edge-glow: rgba(31, 162, 220, 0.5);
+  /* 方向渐变：source 端淡 → target 端亮 */
+  --pea-edge-flow-from: rgba(31, 162, 220, 0);
+  --pea-edge-flow-mid: rgba(31, 162, 220, 0.55);
+  --pea-edge-flow-to: rgba(11, 134, 189, 0.95);
+  --pea-edge-comet: #0b86bd;
+  --pea-edge-comet-glow: rgba(31, 162, 220, 0.85);
+  /* 删除芯片 */
+  --pea-edge-chip-bg: rgba(255, 255, 255, 0.92);
+  --pea-edge-chip-stroke: rgba(31, 162, 220, 0.7);
+  --pea-edge-chip-ink: #2b6b8c;
+  --pea-edge-chip-shadow: rgba(16, 40, 60, 0.22);
 }
 
 .dark {
@@ -45,6 +68,27 @@
   --pea-warn: #f59e0b;
   --pea-warn-soft: #ffb454;
   --pea-success: #34d399;
+
+  /* ── 连线令牌（暗色背景 #0a0a0a）───────────────────────────────────────
+     暗底上"融入背景"= 压低亮度而不是压低对比度过头，
+     否则线会彻底消失。取冷灰蓝的高明度低透明版本。 */
+  --pea-edge-idle: rgba(150, 178, 200, 0.26);
+  --pea-edge-idle-w: 1.5px;
+  --pea-edge-idle-blur: 0.5px;
+  --pea-edge-hover: rgba(92, 198, 236, 0.6);
+  --pea-edge-active: rgba(92, 198, 236, 0.95);
+  --pea-edge-active-w: 2.1px;
+  --pea-edge-halo: rgba(31, 162, 220, 0.3);
+  --pea-edge-glow: rgba(92, 198, 236, 0.65);
+  --pea-edge-flow-from: rgba(92, 198, 236, 0);
+  --pea-edge-flow-mid: rgba(92, 198, 236, 0.6);
+  --pea-edge-flow-to: rgba(168, 232, 255, 1);
+  --pea-edge-comet: #d6f4ff;
+  --pea-edge-comet-glow: rgba(92, 198, 236, 0.95);
+  --pea-edge-chip-bg: rgba(14, 20, 27, 0.9);
+  --pea-edge-chip-stroke: rgba(92, 198, 236, 0.75);
+  --pea-edge-chip-ink: #a8e8ff;
+  --pea-edge-chip-shadow: rgba(0, 0, 0, 0.6);
 }
 
 html,
@@ -242,7 +286,11 @@ body {
   /* 统一手型光标：鼠标移到任意节点上都显示"抓手"(grab)，提示可拖动；
      按下拖动时变 grabbing，编辑文本态单独用 text 光标（见 .pea-node-text-edit.is-editing）。 */
   cursor: grab;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  /* ⚠️ 不要给 .pea-node 加 transform 过渡：ReactFlow 拖拽时每帧直接给节点写
+     `transform: translate3d(x, y, 0)`，CSS 过渡会强行插值这个 transform，
+     导致节点明显滞后于鼠标、画布整体观感"卡顿"，用户会把这种抖动误判为
+     "工具栏/缩放条在乱跑"。hover 反馈只用 box-shadow，与拖拽 transform 互不冲突。 */
+  transition: box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -287,10 +335,9 @@ body {
   }
 }
 .pea-node:hover {
-  /* 轻微上浮效果，增强交互反馈。
-     注意：不要给外层加 box-shadow 实心描边 —— 在浅色画布上会显出比 body-card 大一圈的"半透明框"，
-     让用户觉得像多了一层。深色投影在浅色画布几乎不可见，所以只保留 transform。 */
-  transform: translateY(-2px);
+  /* 反馈只在 body-card 上做（box-shadow 微变），绝不在 .pea-node 自身加 transform：
+     拖拽时 ReactFlow 直接写 transform，CSS transform 过渡会与之冲突造成拖拽卡顿。
+     这里把 hover 反馈下沉到 body-card，见 .pea-node-body-card:hover。 */
 }
 .pea-node:active {
   cursor: grabbing;
@@ -330,16 +377,58 @@ body {
   align-items: center;
   justify-content: center;
   padding: 14px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  /* transition 写在**默认态**：进入/退出选中都有同样的过渡。
+     修复：原先把 transition 写在 .selected 里，导致"进入选中"那一帧没有过渡直接跳变，
+     视觉上感觉"咔"一下生硬；退出选中才有过渡。 */
+  transition:
+    border-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
   overflow: hidden; /* 图片节点需要让图片完全贴合 body-card 圆角 */
 }
-.pea-node.selected .pea-node-body-card {
-  /* 选中只给一条浅蓝细边, 不再加外光晕/内高光 —— 用户反馈"边框太重, 知道选中就行" */
-  border-color: var(--pea-brand, #38e1ff);
-  border-width: 1.5px;
+.pea-node-body-card:hover {
+  /* hover 反馈下沉到 body-card：轻微外发光，与 .pea-node 自身的 transition 互补。
+     不用 transform，避免和 ReactFlow 拖拽 transform 打架。 */
   box-shadow:
-    0 22px 50px rgba(0, 0, 0, 0.55);   /* 只保留原深投影, 去掉 4px 外光晕和 1px 内高光 */
-  transition: all 0.2s ease;
+    0 22px 48px rgba(0, 0, 0, 0.50),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+/* 选中：1.5px 蓝边 + ring（box-shadow 0 0 0 1.5px）+ 略加深的投影。
+   ring 用 box-shadow 而不是 border 扩展，是因为 1px→1.5px 的 border 变化会顶动内层 1px，
+   让 box-card 的视觉尺寸有 0.5px 抖动；用 box-shadow 模拟 ring 不影响布局。
+   单选时不再画 .pea-selection-bounds 外框（见 SelectionBoundsBox.tsx），
+   选中反馈全部由节点自身的 ring + 投影承担。 */
+.pea-node.selected .pea-node-body-card {
+  border-color: var(--pea-brand, #38e1ff);
+  box-shadow:
+    0 0 0 1.5px var(--pea-brand, #38e1ff),
+    0 0 18px 0 rgba(56, 225, 255, 0.28),
+    0 22px 50px rgba(0, 0, 0, 0.55);
+}
+/* 进入选中时跑一次 ripple：在 0.3s 内 ring 由"无"扩散到 1.5px 蓝光，
+   让"选中"从单纯变色升级为有动画。ripple 只跑一次（.selected 加上后触发，
+   同一节点重复点击因为 .selected 状态没变化不会重跑，符合预期）。 */
+.pea-node.selected .pea-node-body-card {
+  animation: pea-node-select 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pea-node-select {
+  0% {
+    box-shadow:
+      0 0 0 0 rgba(56, 225, 255, 0.0),
+      0 0 0 0 rgba(56, 225, 255, 0.0),
+      0 18px 40px rgba(0, 0, 0, 0.45);
+  }
+  60% {
+    box-shadow:
+      0 0 0 4px rgba(56, 225, 255, 0.35),
+      0 0 22px 2px rgba(56, 225, 255, 0.32),
+      0 22px 50px rgba(0, 0, 0, 0.55);
+  }
+  100% {
+    box-shadow:
+      0 0 0 1.5px rgba(56, 225, 255, 1.0),
+      0 0 18px 0 rgba(56, 225, 255, 0.28),
+      0 22px 50px rgba(0, 0, 0, 0.55);
+  }
 }
 
 /* 选中外层光晕 - 已在 .pea-node.selected .pea-node-body-card 中通过 box-shadow 实现 */
@@ -2303,37 +2392,207 @@ body {
   transition: opacity 120ms ease;
 }
 
-/* ===== React Flow 边颜色 ===== */
-.react-flow__edge-path {
-  stroke: var(--pea-brand);
-  stroke-width: 1.8;
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 科技感连线（PeaEdge 分层渲染）
+ * 层级：halo(辉光) → line(主线) → flow(方向虚线) → beads(流动光珠串) → interaction(命中区)
+ * 空闲：低对比 + 微模糊，融入背景；激活：品牌蓝高亮 + 方向流动。
+ * ═════════════════════════════════════════════════════════════════════════ */
+
+/* ② 主线 —— 空闲态：低透明 + 轻微模糊，"退到背景里" */
+.pea-edge-line {
+  stroke: var(--pea-edge-idle);
+  stroke-width: var(--pea-edge-idle-w);
+  stroke-linecap: round;
+  filter: blur(var(--pea-edge-idle-blur));
+  transition: stroke 0.22s ease, stroke-width 0.22s ease, filter 0.22s ease;
 }
-.react-flow__edge.selected .react-flow__edge-path,
-.react-flow__edge:focus .react-flow__edge-path {
-  stroke: var(--pea-brand);
-  stroke-width: 2.4;
+/* 激活态（选中边 / 选中或拖动端点节点）：提亮、加粗、去模糊、发光 */
+.pea-edge-line.is-active {
+  stroke: var(--pea-edge-active);
+  stroke-width: var(--pea-edge-active-w);
+  filter: drop-shadow(0 0 3px var(--pea-edge-glow));
+}
+/* 鼠标悬停连线（命中区在上，:hover 冒泡到组） —— 轻提示 */
+.react-flow__edge:hover .pea-edge-line:not(.is-active) {
+  stroke: var(--pea-edge-hover);
+  filter: none;
 }
 
-/* ===== 选中连线中点的删除按钮 ===== */
+/* ① 辉光垫底 —— 宽而柔，衬托激活主线 */
+.pea-edge-halo {
+  stroke: var(--pea-edge-halo);
+  stroke-width: 7px;
+  stroke-linecap: round;
+  filter: blur(3px);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* ③ 方向流动虚线 —— 短划 + dashoffset 负向位移，营造 source→target 流动 */
+.pea-edge-flow {
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-dasharray: 5 11;
+  stroke-dashoffset: 0;
+  pointer-events: none;
+  animation: pea-edge-flow-move 0.9s linear infinite;
+}
+@keyframes pea-edge-flow-move {
+  to {
+    stroke-dashoffset: -16; /* = dasharray 周期(5+11)，一个完整循环，无缝衔接 */
+  }
+}
+
+/* ④ 流动光珠串 —— 极短 round dash = 一颗圆点，按固定周期铺满整条路径。
+   ⚠️ 不做 pathLength 归一化：dash 周期落在画布坐标系上，于是
+      「珠子数量 ∝ 连线长度、间距恒定、速度恒定」，长线自然更多珠子（用户要的密度感）。
+      若归一化成 100，则无论多长都只有固定颗数、且速度随长度漂移。
+   周期 18（1.2 实 + 16.8 空）→ 每 18px 一颗珠，160px 线 ≈ 8 颗、500px 线 ≈ 27 颗，
+   形成明显的「流动珠串」而非零星几点。 */
+.pea-edge-beads {
+  stroke: var(--pea-edge-comet);
+  stroke-width: 3.2px;
+  stroke-linecap: round;
+  stroke-dasharray: 1.2 16.8;
+  stroke-dashoffset: 0;
+  pointer-events: none;
+  filter: drop-shadow(0 0 4px var(--pea-edge-comet-glow));
+  animation: pea-edge-beads-move 0.5s linear infinite;
+}
+@keyframes pea-edge-beads-move {
+  to {
+    /* 只位移一个 dash 周期即无缝循环（-18 = 1.2+16.8）；
+       负向 = 顺 source→target 方向流动。约 36px/s。 */
+    stroke-dashoffset: -18;
+  }
+}
+
+/* 命中区：透明、可点、加粗，细线也点得中 */
+.react-flow__edge-interaction {
+  cursor: pointer;
+  pointer-events: stroke;
+}
+/* 视觉层全部让位给命中区，保证「点线上任意位置」都由 interaction 接住，
+   从而能准确记录落点给删除芯片定位。 */
+.pea-edge-line,
+.pea-edge-halo,
+.pea-edge-flow,
+.pea-edge-beads {
+  pointer-events: none;
+}
+
+/* 方向渐变的三个 stop（跟随主题令牌） */
+.pea-edge-grad-from { stop-color: var(--pea-edge-flow-from); }
+.pea-edge-grad-mid  { stop-color: var(--pea-edge-flow-mid); }
+.pea-edge-grad-to   { stop-color: var(--pea-edge-flow-to); }
+
+/* 兜底：ReactFlow 自身默认边样式（避免万一走到原生 edge-path 时是蓝黑硬线） */
+.react-flow__edge-path {
+  stroke: var(--pea-edge-idle);
+  stroke-width: var(--pea-edge-idle-w);
+}
+
+/* 无障碍 / 省电：关闭连线上的所有动画（渐变梯度仍在，方向可读） */
+@media (prefers-reduced-motion: reduce) {
+  .pea-edge-flow { animation: none; opacity: 0.85; }
+  .pea-edge-beads { animation: none; opacity: 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 断开连接按钮 —— 科技感 HUD 六边芯片（替代旧红圆 ×）
+ * 结构：旋转扫描环 + 六边玻璃核心 + HUD 刻线 + 圆头 ×
+ * counter-scale 已在 PeaEdge 内联 transform 处理，这里只管观感。
+ * ═════════════════════════════════════════════════════════════════════════ */
+/* 定位锚：承载 EdgeLabelRenderer 的坐标平移 + counter-scale（内联写入） */
+.pea-edge-del-anchor {
+  width: 30px;
+  height: 30px;
+  transform-origin: center center;
+  will-change: transform;
+}
+
 .pea-edge-del {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1.5px solid #fff;
-  background: #e5484d;
-  color: #fff;
-  font-size: 16px;
-  line-height: 1;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  transition: transform 0.12s ease, background 0.12s ease;
   z-index: 30;
+  filter: drop-shadow(0 3px 8px var(--pea-edge-chip-shadow));
+  transition: transform 0.16s cubic-bezier(0.16, 1, 0.3, 1), filter 0.16s ease;
+  transform-origin: center center;
 }
+.pea-edge-del svg { display: block; overflow: visible; }
+
+/* 六边玻璃核心 */
+.pea-edge-del-hex {
+  fill: var(--pea-edge-chip-bg);
+  stroke: var(--pea-edge-chip-stroke);
+  stroke-width: 1.4;
+  transition: stroke 0.16s ease, fill 0.16s ease;
+}
+/* 外圈扫描环：虚线圆环缓慢自转 */
+.pea-edge-del-ring {
+  fill: none;
+  stroke: var(--pea-edge-chip-stroke);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.55;
+  transform-origin: 15px 15px;
+  animation: pea-edge-del-spin 6s linear infinite;
+}
+@keyframes pea-edge-del-spin {
+  to { transform: rotate(360deg); }
+}
+/* HUD 上下刻线 */
+.pea-edge-del-tick {
+  stroke: var(--pea-edge-chip-stroke);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  opacity: 0.8;
+}
+/* 断开符号 × */
+.pea-edge-del-x {
+  stroke: var(--pea-edge-chip-ink);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  transition: stroke 0.16s ease;
+}
+
+/* hover：升起 + 转为琥珀警示（表达"即将断开"），扫描环加速 */
 .pea-edge-del:hover {
-  background: #c93b40;
+  transform: scale(1.14);
+  filter: drop-shadow(0 4px 12px rgba(245, 158, 11, 0.4));
+}
+.pea-edge-del:hover .pea-edge-del-hex {
+  stroke: var(--pea-warn, #f59e0b);
+}
+.pea-edge-del:hover .pea-edge-del-ring {
+  stroke: var(--pea-warn, #f59e0b);
+  opacity: 0.9;
+  animation-duration: 2.4s;
+}
+.pea-edge-del:hover .pea-edge-del-x,
+.pea-edge-del:hover .pea-edge-del-tick {
+  stroke: var(--pea-warn, #f59e0b);
+}
+.pea-edge-del:active {
+  transform: scale(0.94);
+}
+/* 键盘可达性：显式焦点环 */
+.pea-edge-del:focus-visible {
+  outline: none;
+}
+.pea-edge-del:focus-visible .pea-edge-del-hex {
+  stroke: var(--pea-edge-active);
+  stroke-width: 2;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pea-edge-del-ring { animation: none; }
 }
 
 /* ===== 顶部 "免费体验" 按钮 ===== */
@@ -6482,6 +6741,7 @@ body {
    ═══════════════════════════════════════════════════════════════ */
 
 .pea-group-node {
+  position: relative;
   width: 100%;
   height: 100%;
   min-width: 180px;
@@ -6506,6 +6766,22 @@ body {
 .pea-group-node.selected {
   border-color: rgba(31, 162, 220, 0.55);
   box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.08) inset;
+}
+
+/* 组名称：浮在容器外左上角，无图标，白字阴影保证可读性（参考图2） */
+.pea-group-node-label {
+  position: absolute;
+  top: -24px;
+  left: 2px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 0.3px;
+  z-index: 20;
 }
 
 /* ── 顶部工具栏（portal 浮层版本）── */
@@ -6552,17 +6828,77 @@ body {
   padding-right: 4px;
 }
 
-/* 选择框背景颜色按钮：油漆桶图标，提示用户可切换组选择框的填充色 */
+/* 选择框背景颜色按钮：当前色块 + 文字，点击展开色板（参考图3） */
+.pgn-color-wrap {
+  position: relative;
+}
+
 .pgn-color-btn {
-  padding: 6px 9px;
+  padding: 5px 10px 5px 8px;
   color: rgba(255, 255, 255, 0.75);
 }
-.pgn-color-btn:hover {
+.pgn-color-btn:hover,
+.pgn-color-btn.active {
   color: #ffffff;
+  background: rgba(255, 255, 255, 0.10);
 }
-.pgn-color-icon {
+
+.pgn-color-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
   flex-shrink: 0;
-  opacity: 0.92;
+}
+
+/* 颜色选择面板：竖排圆点色板 */
+.pgn-color-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+  border-radius: 999px;
+  background: rgba(28, 30, 36, 0.96);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  animation: pgn-pop-in 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.pgn-color-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.pgn-color-option:hover {
+  transform: scale(1.08);
+}
+
+.pgn-color-option.active {
+  border-color: rgba(255, 255, 255, 0.8);
+}
+
+.pgn-color-dot {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .pgn-icon {
@@ -6646,6 +6982,28 @@ body {
   color: #5bc8f7;
 }
 
+.pgn-layout-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+.pgn-layout-icon-grid {
+  background:
+    linear-gradient(currentColor 0 0) 2px 2px / 3px 3px no-repeat,
+    linear-gradient(currentColor 0 0) 6px 2px / 3px 3px no-repeat,
+    linear-gradient(currentColor 0 0) 2px 6px / 3px 3px no-repeat,
+    linear-gradient(currentColor 0 0) 6px 6px / 3px 3px no-repeat;
+}
+.pgn-layout-icon-list {
+  background:
+    linear-gradient(currentColor 0 0) 2px 3px / 7px 1.5px no-repeat,
+    linear-gradient(currentColor 0 0) 2px 6.5px / 7px 1.5px no-repeat,
+    linear-gradient(currentColor 0 0) 2px 10px / 7px 1.5px no-repeat;
+}
+
 .pgn-layout-menu {
   position: absolute;
   top: calc(100% + 6px);
@@ -6726,6 +7084,7 @@ body {
   background: rgba(0, 0, 0, 0.02);
   border-bottom-color: rgba(0, 0, 0, 0.05);
 }
+.light .pea-group-node-label { color: rgba(0, 0, 0, 0.82); text-shadow: none; }
 .light .pgn-label { color: rgba(0, 0, 0, 0.82); }
 .light .pgn-icon { color: rgba(0, 0, 0, 0.38); }
 .light .pgn-btn { color: rgba(0, 0, 0, 0.55); }
@@ -6733,8 +7092,24 @@ body {
 .light .pgn-color-btn {
   color: rgba(0, 0, 0, 0.65);
 }
-.light .pgn-color-btn:hover {
+.light .pgn-color-btn:hover,
+.light .pgn-color-btn.active {
   color: rgba(0, 0, 0, 0.9);
+  background: rgba(0, 0, 0, 0.05);
+}
+.light .pgn-color-swatch {
+  border-color: rgba(0, 0, 0, 0.25);
+}
+.light .pgn-color-panel {
+  background: rgba(255, 255, 255, 0.97);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.12);
+}
+.light .pgn-color-option.active {
+  border-color: rgba(0, 0, 0, 0.55);
+}
+.light .pgn-color-dot {
+  border-color: rgba(0, 0, 0, 0.08);
 }
 .light .pgn-actions-sep { background: rgba(0, 0, 0, 0.08); }
 .light .pgn-ungroup:hover { background: rgba(239, 68, 68, 0.10); color: #dc2626; }
