@@ -831,7 +831,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       maxY = Math.max(maxY, n.position.y + h);
     });
 
-    const PAD = 28; // 容器内边距
+    const PAD = 0; // 严格按节点最左/右/上/下包裹，不留缝隙
     const gw = maxX - minX + PAD * 2;
     const gh = maxY - minY + PAD * 2;
     const gx = minX - PAD;
@@ -864,7 +864,11 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       return {
         ...n,
         parentNode: gid,
-        extent: 'parent' as const,
+        // 关键修复（问题1）：移除 extent:'parent'。
+        // 该约束会把子节点"焊死"在组框内，鼠标拖不出边界，从而永远触发不了"拖出即解组"。
+        // ReactFlow 的父子跟随（拖组时子节点自动平移）由 parentNode 决定、与 extent 无关，
+        // 因此移除 extent 后：拖组子节点仍跟随、子节点也能自由拖出组外。
+        extent: undefined,
         draggable: true,
         position: { x: n.position.x - gx, y: n.position.y - gy },
         selected: false,
@@ -924,7 +928,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     if (childIds.length === 0) return;
 
     const children = s.nodes.filter((n) => childIds.includes(n.id));
-    const PAD = 28;
+    const PAD = 0;
     const GAP = 16;
 
     if (layout === 'horizontal') {
@@ -969,8 +973,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
    *   若多个嵌套组都包含，取最深的（最小面积）以避免误归上级组。
    * - 已有 parentNode：把当前 rect 反算成画布绝对坐标（本地坐标 + parent.position），
    *   若中心点已落到父组视觉边界外，则脱离父级并转为绝对坐标。
-   * 入组/脱离都会触发组的 style 重新计算（包含全部 childrenIds 的最小包围盒 + 12px 内边距），
-   * 并同步 data.childrenIds。
+   * 入组/脱离只更新父子关系与 childrenIds，组容器大小保持不变（用户要求打组后选择框固定）。
    */
   moveNodeToGroup: (nodeId) => {
     const s = get();
@@ -982,9 +985,8 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     const nodeH = (node as any).height ?? 180;
     const absCenter = node.parentNode
       ? (() => {
-          let p = s.nodes.find((n) => n.id === node.parentNode);
+          const p = s.nodes.find((n) => n.id === node.parentNode);
           let absX = node.position.x, absY = node.position.y;
-          // 递归向上累计（防嵌套组 + 只向上 1 级足够）
           if (p) { absX += p.position.x; absY += p.position.y; }
           return { x: absX + nodeW / 2, y: absY + nodeH / 2 };
         })()
@@ -1002,36 +1004,15 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         absCenter.y >= parent.position.y &&
         absCenter.y <= parent.position.y + ph;
       if (inside) return null; // 仍在组内，不动
-      // 脱离：相对坐标 → 绝对坐标
+
+      // 脱离：只解除父子关系，组容器大小保持不变
       get().takeSnapshot();
       const newChildren = ((parent.data as any).childrenIds || []).filter((cid: string) => cid !== nodeId);
       const updatedParent = {
         ...parent,
         data: { ...(parent.data as any), childrenIds: newChildren },
       };
-      // 重算 parent 包围盒
-      const refit = (() => {
-        const PAD = 12;
-        const remaining = s.nodes.filter((n) => newChildren.includes(n.id));
-        if (remaining.length === 0) return { x: parent.position.x, y: parent.position.y, w: Math.max(pw, 200), h: Math.max(ph, 140) };
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const c of remaining) {
-          const cw = (c as any).width ?? 240;
-          const ch = (c as any).height ?? 180;
-          // 子节点坐标是相对 parent 的，转绝对要加 parent 当前 position
-          const ax = c.position.x + parent.position.x;
-          const ay = c.position.y + parent.position.y;
-          minX = Math.min(minX, ax);
-          minY = Math.min(minY, ay);
-          maxX = Math.max(maxX, ax + cw);
-          maxY = Math.max(maxY, ay + ch);
-        }
-        // 同时把"待脱离的节点"原来的相对位置也按当前父 position 算绝对，作为新 origin 候选
-        return { x: minX - PAD, y: minY - PAD, w: maxX - minX + PAD * 2, h: maxY - minY + PAD * 2 };
-      })();
-      updatedParent.position = { x: refit.x, y: refit.y };
-      updatedParent.style = { ...(parent.style as any), width: refit.w, height: refit.h };
-      // 节点转为绝对
+      // 节点转为绝对坐标（保留当前视觉位置）
       const detached: any = {
         ...node,
         parentNode: undefined,
@@ -1042,21 +1023,11 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         },
         data: { ...(node.data as any), relativeOffset: undefined },
       };
-      // 子节点坐标也要从旧 parent.position 偏移到新 parent.position
-      const cascaded = s.nodes.map((n) => {
-        if (!((parent.data as any).childrenIds || []).includes(n.id)) return n;
+      const finalNodes = s.nodes.map((n) => {
+        if (n.id === parent.id) return updatedParent;
         if (n.id === nodeId) return detached;
-        return {
-          ...n,
-          position: {
-            x: n.position.x + parent.position.x - updatedParent.position.x,
-            y: n.position.y + parent.position.y - updatedParent.position.y,
-          },
-        };
+        return n;
       });
-      cascaded.push(updatedParent as any);
-      // 去重（updatedParent 已加，parent 原 record 通过 map 已替换，但要确保更新（map 已用旧值返回）所以把原 parent 也替换）
-      const finalNodes = cascaded.map((n) => (n.id === parent.id ? (updatedParent as any) : n));
       set({ nodes: finalNodes, dirty: true });
       return 'removed';
     }
@@ -1084,73 +1055,27 @@ export const useCanvas = create<CanvasState>((set, get) => ({
 
     get().takeSnapshot();
 
-    // 把节点坐标转为相对 target
+    // 把节点坐标转为相对 target（保留当前视觉位置），组容器大小保持不变
     const newPos = {
       x: node.position.x - target.position.x,
       y: node.position.y - target.position.y,
     };
 
-    // 更新 data.childrenIds
     const oldChildIds: string[] = ((target.data as any).childrenIds || []);
     const newChildIds = oldChildIds.includes(nodeId) ? oldChildIds : [...oldChildIds, nodeId];
 
-    // 重算 group 包围盒（按全部 childrenIds + 当前 group position）
-    const PAD = 12;
-    const allChildIds = newChildIds;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const cid of allChildIds) {
-      const c = s.nodes.find((n) => n.id === cid);
-      if (!c) continue;
-      const cw = (c as any).width ?? 240;
-      const ch = (c as any).height ?? 180;
-      // 子节点用相对坐标时，自身 position 即"组原点 + 偏移"中的"偏移"
-      minX = Math.min(minX, c.position.x);
-      minY = Math.min(minY, c.position.y);
-      maxX = Math.max(maxX, c.position.x + cw);
-      maxY = Math.max(maxY, c.position.y + ch);
-    }
-    // 也把新加入的节点加进来算
-    minX = Math.min(minX, newPos.x);
-    minY = Math.min(minY, newPos.y);
-    maxX = Math.max(maxX, newPos.x + nodeW);
-    maxY = Math.max(maxY, newPos.y + nodeH);
-
-    const newGw = Math.max((target.style as any)?.width ?? 240, maxX - minX + PAD * 2);
-    const newGh = Math.max((target.style as any)?.height ?? 160, maxY - minY + PAD * 2);
-    // 组原点偏移：保证所有 children 都在 [PAD..gw-PAD] 内
-    const newGx = target.position.x + minX - PAD;
-    const newGy = target.position.y + minY - PAD;
-
-    // 新节点相对坐标（按新组原点重新计算）
-    const relPosForNewNode = {
-      x: node.position.x - newGx,
-      y: node.position.y - newGy,
-    };
-
     const updatedTarget = {
       ...target,
-      position: { x: newGx, y: newGy },
       data: { ...(target.data as any), childrenIds: newChildIds },
-      style: { ...((target.style as any) || {}), width: newGw, height: newGh },
     };
 
-    // 已有 children 的坐标也要补偿（组原点变了）
     const updatedNodes = s.nodes.map((n) => {
       if (n.id === nodeId) {
         return {
           ...n,
           parentNode: targetId,
-          extent: 'parent' as const,
-          position: relPosForNewNode,
-        };
-      }
-      if (oldChildIds.includes(n.id)) {
-        return {
-          ...n,
-          position: {
-            x: n.position.x + target.position.x - newGx,
-            y: n.position.y + target.position.y - newGy,
-          },
+          extent: undefined,
+          position: newPos,
         };
       }
       if (n.id === targetId) return updatedTarget;

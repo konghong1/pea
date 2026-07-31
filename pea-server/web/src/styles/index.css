@@ -317,7 +317,8 @@ body {
 /* 节点主体卡片（节点下方深色圆角框） */
 .pea-node-body-card {
   position: relative;
-  margin-top: 14px;
+  /* 顶部空间改由 .pea-node-chrome 负责，不再用 margin-top 撑大节点框 */
+  margin-top: 0;
   width: 100%;          /* 撑满 .pea-node 父节点，不被内容（audio/video 等）撑窄 */
   box-sizing: border-box;
   border-radius: 18px;
@@ -361,29 +362,178 @@ body {
   aspect-ratio: 16 / 9;
 }
 
-/* 节点顶部标签：透明小字（参考截图1），紧贴 body-card 上方居中浮起 */
-.pea-node-tag-pill {
+/* 节点 Chrome 层：承载标识、功能条、上传条，整体浮在节点框上方。
+   - ⚠️ 外层**绝不**做 counter-scale（不要再加 transform: scale(var(--pea-inv-zoom))）。
+     历史 bug：外层 counter-scale 会让标题徽章在屏幕上恒定 131px，而节点框从 85px 涨到 1020px，
+     标题/节点比例在 zoom 0.25~3 间变化 12 倍，缩小时标题比节点还宽。
+     现在外层保持纯 flow 坐标 → 标题与节点框严格等比缩放（相对大小恒定）。
+   - 需要"屏幕大小恒定"的交互控件请放进 .pea-node-chrome-fixed 子层（绝对定位 + counter-scale）。
+   - pointer-events:none 防止 chrome 容器拦截事件，子元素单独恢复 auto。
+   - chrome 不参与 .pea-node 文档流，因此不撑大 .react-flow__node 的 bounding box。
+   - 结构（自下而上）：body-card 上方 11px → 徽章（自然 flow） → 8px → chrome-fixed（counter-scale）。
+     用绝对定位 + bottom 计算，避免 column-reverse + margin 互相打架导致间距漂移。 */
+.pea-node-chrome {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* 距离节点框顶部 11px（flow 像素）→ 徽章直接落在节点框上方 */
+  bottom: calc(100% + 11px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+.pea-node-chrome > * {
+  pointer-events: auto;
+}
+
+/* 交互控件子层：功能条 / 上传条 / 文本工具条。
+   - 绝对定位在徽章上方：bottom: 100% + 8px（屏幕像素），
+     通过 * invZoom 把 8px 屏幕像素换算成 flow 像素，缩放时视觉间距永远 8px。
+   - 唯一的 counter-scale 位置，缩放源优先取节点内联 --pea-node-inv-zoom
+     （PeaNode 按节点写入，订阅 ReactFlow store 的实时 zoom），退化到全局 --pea-inv-zoom。
+   - transform-origin: bottom center → 缩放时底边贴住徽章上沿，不会漂移。
+   - 空时不占位（display:none），避免在徽章与节点之间挤出多余间距。 */
+.pea-node-chrome-fixed {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px * var(--pea-node-inv-zoom, var(--pea-inv-zoom, 1)));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  transform: translateX(-50%) scale(var(--pea-node-inv-zoom, var(--pea-inv-zoom, 1)));
+  transform-origin: bottom center;
+}
+.pea-node-chrome-fixed > * {
+  pointer-events: auto;
+}
+.pea-node-chrome-fixed:empty {
+  display: none;
+}
+
+/* 节点顶部独立徽章：深色玻璃胶囊，浮在节点框上方，不与 body-card 一体
+   - 现在作为 chrome 的 flex 子元素，不再使用 absolute，随节点统一缩放
+   - z-index 低于功能条(30)与上传条(30)，避免选中时遮挡工具交互
+   - 左侧色条随 kind 变化，强化节点类型识别 */
+.pea-node-badge {
+  position: relative;
+  z-index: 5;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
-  border: none;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  background: rgba(24, 24, 30, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px) saturate(140%);
+  color: rgba(255, 255, 255, 0.88);
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.55);
-  position: absolute;
-  top: -8px;
-  left: 50%;
-  transform: translateX(-50%);
-  white-space: nowrap;
-  z-index: 2;
+  font-weight: 500;
   letter-spacing: 0.2px;
+  white-space: nowrap;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
-.pea-node-tag-icon {
-  font-size: 12px;
-  line-height: 1;
-  color: rgba(255, 255, 255, 0.7);
+.pea-node-badge::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--pea-node-badge-color, var(--pea-brand));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--pea-node-badge-color, var(--pea-brand)) 60%, transparent);
+  opacity: 0.9;
+}
+.pea-node-badge-icon {
+  width: 13px;
+  height: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  color: var(--pea-node-badge-color, var(--pea-brand));
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--pea-node-badge-color, var(--pea-brand)) 55%, transparent));
+}
+.pea-node-badge-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  max-width: 140px;
+}
+.pea-node-badge-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.pea-node-badge-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.35);
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.pea-node-badge:hover .pea-node-badge-edit {
+  opacity: 1;
+}
+.pea-node-badge-label:hover .pea-node-badge-edit {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.08);
+}
+.pea-node-badge-input {
+  width: 90px;
+  padding: 0 4px;
+  margin: 0 -4px;
+  border: none;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  outline: none;
+  text-align: center;
+}
+.pea-node-badge-input:focus {
+  background: rgba(255, 255, 255, 0.12);
+}
+/* 状态徽标：生成（闪电）/ 上传（箭头） */
+.pea-node-badge-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.pea-node-badge-dot.generated {
+  color: var(--pea-warn-soft, #ffb454);
+}
+.pea-node-badge-dot.uploaded {
+  color: var(--pea-accent-soft, #5cc6ec);
 }
 /* 空媒体节点的安静上传区（取代原先悬浮的大黑“上传”药丸，与结果态标签风格统一） */
 .pea-node-media-placeholder-icon {
@@ -538,15 +688,11 @@ body {
   border-radius: 12px;
 }
 
-/* ===== 图片节点空白态上传悬浮条：与 ResultToolbar 完全同一浮空位置（节点外部上方），互斥 =====
-   仅空白图片节点显示；有图后消失，ResultToolbar 接管同一位置 */
+/* ===== 图片节点空白态上传悬浮条：与 ResultToolbar 同一视觉位置（节点外部上方），互斥 =====
+   仅空白媒体节点显示；有图后消失，ResultToolbar 接管同一位置。
+   现在作为 .pea-node-chrome 的 flex 子元素，随节点统一缩放。 */
 .pea-node-top-upload-bar {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  /* 与 ResultToolbar 完全一致：浮在节点顶外、恒定屏幕大小、随缩放 counter-scale */
-  transform: translate(-50%, calc(-100% - 12px * var(--pea-inv-zoom, 1))) scale(var(--pea-inv-zoom, 1));
-  transform-origin: bottom center;
+  position: relative;
   z-index: 30; /* 同 ResultToolbar，高于连接手柄 */
   display: inline-flex;
   align-items: center;
@@ -1330,14 +1476,16 @@ body {
 .pea-selecting .pea-node-result-toolbar,
 .pea-selecting .pea-node-top-upload-bar,
 .pea-selecting .node-chat-prompt,
-.pea-selecting .text-node-toolbar {
+.pea-selecting .text-node-toolbar,
+.pea-selecting .tnt-bar {
   opacity: 0 !important;
   pointer-events: none !important;
 }
 /* 多选状态（框选完成后）：同样抑制单个节点的功能条和上传条，只保留整体多选工具条。
    打组后 / 点击取消多选即恢复正常单节点交互。 */
 .pea-multi-select .pea-node-result-toolbar,
-.pea-multi-select .pea-node-top-upload-bar {
+.pea-multi-select .pea-node-top-upload-bar,
+.pea-multi-select .tnt-bar {
   opacity: 0 !important;
   pointer-events: none !important;
 }
@@ -2132,13 +2280,28 @@ body {
   pointer-events: none;
   z-index: 9999;
   isolation: isolate;
-  border: 1.5px solid #1f8eff;
-  background: rgba(31, 142, 255, 0.18);
+  border: 2px solid var(--pea-brand, #1fa2dc);
+  background: rgba(31, 162, 220, 0.12);
   border-radius: 4px;
   box-sizing: border-box;
   transition: opacity 120ms ease;
 }
 .pea-selection-overlay[hidden] { display: none !important; }
+
+/* 持久选中节点包围框：单选/多选时根据实际选中节点的 DOM 包围盒（最左/最右/最上/最下）绘制。
+   - 仅包围已选中的节点，不会把「被拖拽选区扫过但未选中」的节点包含进来；
+   - 透明填充，保留参考图中的「半透明选区」观感；
+   - 层级在节点之上、多选工具条/拖拽选区之下，不拦截事件。 */
+.pea-selection-bounds {
+  position: fixed;
+  pointer-events: none;
+  z-index: 40;
+  border: 1px solid var(--pea-brand, #1fa2dc);
+  background: rgba(31, 162, 220, 0.06);
+  border-radius: 4px;
+  box-sizing: border-box;
+  transition: opacity 120ms ease;
+}
 
 /* ===== React Flow 边颜色 ===== */
 .react-flow__edge-path {
@@ -4905,16 +5068,12 @@ body {
   outline: 1px solid rgba(31, 162, 220, 0.85);
 }
 
-/* 功能条：相对 .pea-node 自身定位，真正悬浮在节点顶部之外（不覆盖任何节点内容）
-   - top:0 + translate(-50%, calc(-100% - 12px)) → 节点顶端上方 12px
+/* 功能条：作为 .pea-node-chrome 的 flex 子元素，浮在节点框上方。
+   - 父层 .pea-node-chrome 已统一做 counter-scale，因此功能条屏幕大小恒定、随节点平移，
+     与 NodeChatPrompt 编辑框行为一致，避免缩放时错位覆盖标识。
    - 用 :has() 兼容"鼠标移到 toolbar 上时仍保持显示"，避免节点外 hover 失效 */
 .pea-node-result-toolbar {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  /* 抵消画布缩放：常驻节点上方、恒定屏幕大小，与下方编辑框视觉语言一致 */
-  transform: translate(-50%, calc(-100% - 12px * var(--pea-inv-zoom, 1))) scale(var(--pea-inv-zoom, 1));
-  transform-origin: bottom center;
+  position: relative;
   /* 必须高于连接手柄(z-index:10)，否则在矮节点上手柄会盖住工具栏按钮、拦截点击 */
   z-index: 30;
   display: inline-flex;
@@ -4931,8 +5090,9 @@ body {
   transition: opacity 0.18s ease;
   white-space: nowrap;
 }
-/* hover 触发：节点 hover / 节点选中 / 工具条自身 hover（:has 兼容） */
-.pea-node:hover .pea-node-result-toolbar,
+/* 选中触发：仅在节点被点击选中后显示功能条；hover 不再触发，
+   避免鼠标划过选择框/组框时误显子节点工具条。
+   保留 :has 兼容，鼠标移到已显示的工具条上时保持显示以便点击。 */
 .pea-node.selected .pea-node-result-toolbar,
 .pea-node:has(.pea-node-result-toolbar:hover) .pea-node-result-toolbar {
   opacity: 1;
@@ -6326,16 +6486,16 @@ body {
   height: 100%;
   min-width: 180px;
   min-height: 140px;
-  border-radius: 16px;
+  border-radius: 18px;
   /* 透明背景：让画布点阵网格透出（参考图样式）。
      取消 backdrop-filter 和 overflow:hidden，避免遮住/裁掉子节点。
-     仍保留细边框制造「容器」感。 */
+     边框极细极淡，仅作为容器的微弱轮廓。 */
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   flex-direction: column;
   overflow: visible;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
   /* 关键：让 group 内部子节点能正常接收事件，
      自身不拦截（子节点由 .pea-group-node > * 选择器重新启用）。 */
@@ -6344,124 +6504,136 @@ body {
 .pea-group-node > * { pointer-events: auto; }
 
 .pea-group-node.selected {
-  border-color: rgba(31, 162, 220, 0.5);
-  box-shadow:
-    0 4px 24px rgba(0, 0, 0, 0.4),
-    0 0 0 2px rgba(31, 162, 220, 0.15),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  border-color: rgba(31, 162, 220, 0.55);
+  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.08) inset;
 }
 
 /* ── 顶部工具栏（portal 浮层版本）── */
-/* 浮在 group 框外顶部上方 8px，createPortal 到 body。和单节点 NodeChatPrompt 同款。 */
+/* 浮在 group 框外顶部上方，createPortal 到 body，水平居中于选择框。 */
 .pgn-header-portal {
   position: fixed;
   z-index: 60;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
-  min-height: 32px;
-  background: rgba(28, 30, 36, 0.88);
-  backdrop-filter: blur(18px) saturate(160%);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  gap: 18px;
+  padding: 5px 6px 5px 14px;
+  min-height: 36px;
+  background: rgba(24, 26, 32, 0.92);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 999px;
+  box-shadow:
+    0 4px 22px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
   pointer-events: auto;
   /* 微微入场动画，和单节点工具条手感一致 */
-  animation: pgn-fade-in 0.14s ease-out;
-}
-.pgn-header-portal::before {
-  /* 左侧小三角，指向 group 框左上沿，强化「这是组的标题」语义 */
-  content: '';
-  position: absolute;
-  left: 18px;
-  bottom: -5px;
-  width: 10px;
-  height: 10px;
-  background: rgba(28, 30, 36, 0.88);
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  transform: rotate(45deg);
+  animation: pgn-fade-in 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes pgn-fade-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 .light .pgn-header-portal {
-  background: rgba(252, 252, 254, 0.92);
+  background: rgba(255, 255, 255, 0.96);
   border-color: rgba(0, 0, 0, 0.08);
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.12);
-}
-.light .pgn-header-portal::before {
-  background: rgba(252, 252, 254, 0.92);
-  border-right-color: rgba(0, 0, 0, 0.08);
-  border-bottom-color: rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 4px 22px rgba(0, 0, 0, 0.12),
+    0 0 0 1px rgba(0, 0, 0, 0.03) inset;
 }
 
 .pgn-header-left {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
+  padding-right: 4px;
 }
 
-.pgn-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #1fa2dc, #22b8f0);
+/* 选择框背景颜色按钮：油漆桶图标，提示用户可切换组选择框的填充色 */
+.pgn-color-btn {
+  padding: 6px 9px;
+  color: rgba(255, 255, 255, 0.75);
+}
+.pgn-color-btn:hover {
+  color: #ffffff;
+}
+.pgn-color-icon {
   flex-shrink: 0;
-  box-shadow: 0 0 6px rgba(31, 162, 220, 0.5);
+  opacity: 0.92;
 }
 
 .pgn-icon {
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.45);
   flex-shrink: 0;
 }
 
 .pgn-label {
   font-size: 12.5px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.82);
+  color: rgba(255, 255, 255, 0.88);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   letter-spacing: 0.3px;
+  max-width: 120px;
 }
 
 /* ── 右侧操作区 ── */
 .pgn-header-actions {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   flex-shrink: 0;
 }
 
 .pgn-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 9px;
+  gap: 5px;
+  padding: 6px 12px;
   border: none;
-  border-radius: 6px;
+  border-radius: 999px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.65);
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.12s cubic-bezier(0.16, 1, 0.3, 1);
   line-height: 1;
 }
 
 .pgn-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.88);
+  background: rgba(255, 255, 255, 0.10);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.pgn-btn:active {
+  transform: translateY(0) scale(0.96);
 }
 
 .pgn-btn span {
   font-size: 11.5px;
+}
+
+.pgn-actions-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.10);
+  margin: 0 4px;
+}
+
+.pgn-ungroup:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ff9d9d;
 }
 
 /* ── 布局切换下拉 ── */
@@ -6543,24 +6715,29 @@ body {
 /* ── 亮色适配 ── */
 .light .pea-group-node {
   background: transparent;
-  border-color: rgba(0, 0, 0, 0.08);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.03) inset;
+  border-color: rgba(0, 0, 0, 0.06);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.02) inset;
 }
 .light .pea-group-node.selected {
   border-color: rgba(31, 162, 220, 0.45);
-  box-shadow:
-    0 0 0 1px rgba(31, 162, 220, 0.15) inset,
-    0 0 0 1px rgba(31, 162, 220, 0.25);
+  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.08) inset;
 }
 .light .pgn-header {
   background: rgba(0, 0, 0, 0.02);
   border-bottom-color: rgba(0, 0, 0, 0.05);
 }
-.light .pgn-label { color: rgba(0, 0, 0, 0.75); }
-.light .pgn-icon { color: rgba(0, 0, 0, 0.35); }
-.light .pgn-btn { color: rgba(0, 0, 0, 0.45); }
-.light .pgn-btn:hover { background: rgba(0, 0, 0, 0.05); color: rgba(0, 0, 0, 0.75); }
-.light .pgn-dot { box-shadow: 0 0 5px rgba(31, 162, 220, 0.35); }
+.light .pgn-label { color: rgba(0, 0, 0, 0.82); }
+.light .pgn-icon { color: rgba(0, 0, 0, 0.38); }
+.light .pgn-btn { color: rgba(0, 0, 0, 0.55); }
+.light .pgn-btn:hover { background: rgba(0, 0, 0, 0.06); color: rgba(0, 0, 0, 0.88); }
+.light .pgn-color-btn {
+  color: rgba(0, 0, 0, 0.65);
+}
+.light .pgn-color-btn:hover {
+  color: rgba(0, 0, 0, 0.9);
+}
+.light .pgn-actions-sep { background: rgba(0, 0, 0, 0.08); }
+.light .pgn-ungroup:hover { background: rgba(239, 68, 68, 0.10); color: #dc2626; }
 .light .pgn-layout-menu {
   background: rgba(255, 255, 255, 0.97);
   border-color: rgba(0, 0, 0, 0.08);

@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Handle, Position, NodeProps, useViewport } from 'reactflow';
+import { Handle, Position, NodeProps, useStore } from 'reactflow';
 import { useCanvas, PeaNodeData } from '../store/canvas';
 import { toast } from '../store/toast';
 import { useAuth } from '../store/auth';
 import { api } from '../api/client';
 import { getFileUrl } from '../api/files';
 import { NODE_DEF_OF, PeaNodeKind } from '../constants/nodeTypes';
+import NodeIcon, { GeneratingBadge, UploadBadge, kindColor } from './NodeIcon';
+import TextNodeToolbar from './TextNodeToolbar';
 import TechLoader from './TechLoader';
 import { retryNodeGeneration } from '../lib/nodeGeneration';
 
@@ -38,6 +40,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   // 多选（框选 / Shift 多选）时抑制单节点自身的「选中边框 + 功能条」，
   // 只保留透明组选框 + 多选工具条，避免多个节点功能框堆叠干扰（需求3）。
   const isMulti = selectedIdsArr.length > 1;
+  const isSingleSelected = selected && !isMulti;
   const [hovered, setHovered] = useState(false);
   // 文本节点的编辑态：与 selected 解耦。
   // - 单击节点 → 只选中（可拖动，不会进编辑）
@@ -47,6 +50,10 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const [editing, setEditing] = useState(false);
   const editRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const chromeRef = useRef<HTMLDivElement>(null);
+  // 交互控件宿主（counter-scale 子层）：ResultToolbar 通过 portal 挂到这里，
+  // 不能挂到外层 chrome，否则功能条会跟着画布缩放变得点不动。
+  const chromeFixedRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const kind = data.kind;
@@ -59,14 +66,30 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
     : !!(data.url || data.fileKey || data.resultUrl || data.resultUrls?.length);
   // 用户上传的图片（非 AI 生成结果）——不需要接收其他节点输入，隐藏左手柄
   const isUserUploadedImage = kind === 'image' && !!(data.fileKey || data.url) && !(data.resultUrl || data.resultUrls?.length);
-  const def = NODE_DEF_OF(kind);
   const tagLabel = tagLabelOf(kind);
 
   // ── 连接点随画布缩放（不再 counter-scale）──────────────────────────────
   // 用户反馈：缩小时连接点相对节点框显得很大，要求像节点框一样随画布缩放。
   // 因此去掉 scale(1/zoom)：手柄 width/height 13px 是 flow 坐标值，视觉上随 zoom
   // 自然缩放；中心距框 HANDLE_GAP+HANDLE_HALF 也是 flow 坐标恒定值。
-  const { zoom = 1 } = useViewport();
+  //
+  // ── chrome 层缩放策略（2026-07-31 重构，勿回退）──────────────────────────
+  // 历史问题：整个 .pea-node-chrome（标题徽章 + 功能条 + 上传条）被统一 counter-scale，
+  // 导致「标题屏幕大小恒定、节点框随画布缩放」→ 标题/节点的比例在 zoom 0.25~3 之间
+  // 变化 12 倍（实测 badge/card = 0.77 → 0.13），缩小时标题甚至比节点框还宽。
+  //
+  // 现在拆成两层，各自独立：
+  //   1. 外层 .pea-node-chrome —— 不做任何 counter-scale，纯 flow 坐标，
+  //      标题徽章因此与节点框严格等比缩放（相对大小恒定）。
+  //   2. 内层 .pea-node-chrome-fixed —— 只包交互控件（功能条 / 上传条 / 文本工具条），
+  //      仍做 counter-scale 保证按钮在任何缩放下都是可点击的屏幕尺寸。
+  //
+  // counter-scale 的缩放源只有一个：本组件按节点写入的 --pea-node-inv-zoom
+  // （订阅 ReactFlow 内部 store transform[2]，比 useViewport 在节点内更可靠）。
+  // 全局 --pea-inv-zoom 仅作 fallback，避免两套机制互相覆盖导致「改了没生效」。
+  const zoom = useStore((s) => s.transform[2]) || 1;
+  const invZoom = zoom ? 1 / zoom : 1;
+  const chromeStyle = { '--pea-node-inv-zoom': String(invZoom) } as React.CSSProperties;
   const handleOffset = -(HANDLE_GAP + HANDLE_HALF);
 
   // 将 data.aspectRatio（如 "9:16"）映射为节点尺寸
@@ -288,12 +311,33 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
         <HandleGlyph />
       </Handle>
 
-      {/* 顶部标签：所有节点始终显示 */}
-      <div className="pea-node-tag-pill">
-        <span className="pea-node-tag-icon" aria-hidden>
-          {def.icon}
-        </span>
-        <span>{tagLabel}</span>
+      {/* 节点 Chrome 层：标识、功能条（portal）、上传条统一放在节点框之外，
+          不撑大 .react-flow__node 的 bounding box。
+          - 外层不做 counter-scale → 标题徽章与节点框等比缩放（相对大小恒定）；
+          - 内层 .pea-node-chrome-fixed 做 counter-scale → 交互控件屏幕大小恒定。 */}
+      <div className="pea-node-chrome" ref={chromeRef} style={chromeStyle} data-zoom={zoom.toFixed(2)}>
+        <NodeBadge id={id} kind={kind} data={data} />
+        <div className="pea-node-chrome-fixed" ref={chromeFixedRef}>
+          {isText && isSingleSelected && <TextNodeToolbar editorRef={editRef} />}
+          {isMedia && !hasMediaContent && !data.generating && (
+            <div className="pea-node-top-upload-bar" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="pea-node-upload-btn"
+                onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}
+                aria-label="上传图片"
+                title="上传图片"
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                  <path d="M12 3v12" />
+                  <path d="M7 8l5-5 5 5" />
+                  <path d="M5 21h14" />
+                </svg>
+                <span>上传</span>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {isMedia && (
@@ -335,32 +379,11 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
             />
           </div>
         ) : isMedia ? (
-          <MediaNodeBody id={id} kind={kind} data={data} hasImage={hasImage} onRequestUpload={() => fileRef.current?.click()} />
+          <MediaNodeBody id={id} kind={kind} data={data} hasImage={hasImage} onRequestUpload={() => fileRef.current?.click()} chromeRef={chromeFixedRef} />
         ) : (
-          <GenericNodeBody id={id} data={data} tagLabel={tagLabel} def={def} />
+          <GenericNodeBody id={id} data={data} tagLabel={tagLabel} kind={kind} />
         )}
       </div>
-
-      {/* 媒体节点空白态：上传悬浮条（与 ResultToolbar 完全同一浮空位置，互斥）
-          仅在所有媒体无内容时显示，浮在节点外部上方；有内容后消失 */}
-      {isMedia && !hasMediaContent && !data.generating && (
-        <div className="pea-node-top-upload-bar" onClick={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            className="pea-node-upload-btn"
-            onClick={(e) => { e.stopPropagation(); fileRef.current?.click(); }}
-            aria-label="上传图片"
-            title="上传图片"
-          >
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-              <path d="M12 3v12" />
-              <path d="M7 8l5-5 5 5" />
-              <path d="M5 21h14" />
-            </svg>
-            <span>上传</span>
-          </button>
-        </div>
-      )}
 
       {/* 编辑框锚点：NodeChatPrompt 会把节点输入栏 portal 进这个容器
           （data-pea-anchor 用于按选中节点精确匹配）。该元素缺失会导致点击节点后
@@ -379,15 +402,16 @@ function MediaNodeBody({
   data,
   hasImage,
   onRequestUpload,
+  chromeRef,
 }: {
   id: string;
   kind: PeaNodeKind;
   data: PeaNodeData;
   hasImage: boolean;
   onRequestUpload: () => void;
+  chromeRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const update = useCanvas((s) => s.updateNodeData);
-  const def = NODE_DEF_OF(kind);
   const tagLabel = tagLabelOf(kind);
   const resultUrls = data.resultUrls?.length ? data.resultUrls : data.resultUrl ? [data.resultUrl] : [];
   const index = Math.max(0, Math.min(data.resultIndex ?? 0, resultUrls.length - 1));
@@ -418,7 +442,7 @@ function MediaNodeBody({
       <div className="pea-node-media-card">
         {showMediaLabel && (
           <span className="pea-node-media-label">
-            {def.icon} {tagLabel}
+            <NodeIcon kind={kind} size={12} /> {tagLabel}
           </span>
         )}
         <div className="pea-node-generating" aria-label="生成中">
@@ -433,7 +457,7 @@ function MediaNodeBody({
       <div className="pea-node-media-card">
         {showMediaLabel && (
           <span className="pea-node-media-label">
-            {def.icon} {tagLabel}
+            <NodeIcon kind={kind} size={12} /> {tagLabel}
           </span>
         )}
         <NodeGenFailure id={id} error={data.error} />
@@ -454,6 +478,7 @@ function MediaNodeBody({
         onReplace={onRequestUpload}
         canReplace={false}
         showMediaLabel={showMediaLabel}
+        chromeRef={chromeRef}
       />
     );
   }
@@ -471,6 +496,7 @@ function MediaNodeBody({
         onReplace={onRequestUpload}
         canReplace={true}
         showMediaLabel={showMediaLabel}
+        chromeRef={chromeRef}
       />
     );
   }
@@ -480,7 +506,7 @@ function MediaNodeBody({
     <div className="pea-node-media-card">
       {showMediaLabel && (
         <span className="pea-node-media-label">
-          {def.icon} {tagLabel}
+          <NodeIcon kind={kind} size={12} /> {tagLabel}
         </span>
       )}
       <div className="pea-node-media-placeholder">
@@ -524,6 +550,7 @@ function ResultMediaView({
   onReplace,
   canReplace,
   showMediaLabel,
+  chromeRef,
 }: {
   id: string;
   kind: PeaNodeKind;
@@ -535,7 +562,10 @@ function ResultMediaView({
   /** 仅用户上传媒体显示"替换"按钮；AI 生成结果按约定不显示替换 */
   canReplace: boolean;
   showMediaLabel: boolean;
+  chromeRef: React.RefObject<HTMLDivElement | null>;
 }) {
+  const [chromeReady, setChromeReady] = useState(false);
+  useLayoutEffect(() => { setChromeReady(true); }, []);
   const update = useCanvas((s) => s.updateNodeData);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -574,7 +604,7 @@ function ResultMediaView({
       <div className={wrapClass}>
         {showMediaLabel && (
           <span className="pea-node-media-label">
-            {NODE_DEF_OF(kind).icon} {tagLabelOf(kind)}
+            <NodeIcon kind={kind} size={12} /> {tagLabelOf(kind)}
           </span>
         )}
 
@@ -685,13 +715,16 @@ function ResultMediaView({
         )}
       </div>
 
-      {/* 功能条 */}
-      <ResultToolbar
-        currentUrl={currentUrl}
-        onSave={handleSaveToLibrary}
-        saved={!!data.savedToLibrary}
-        onFullscreen={handleFullscreen}
-      />
+      {/* 功能条：portal 到节点 Chrome 层，与标识/上传条统一堆叠在节点框外 */}
+      {chromeReady && chromeRef.current && createPortal(
+        <ResultToolbar
+          currentUrl={currentUrl}
+          onSave={handleSaveToLibrary}
+          saved={!!data.savedToLibrary}
+          onFullscreen={handleFullscreen}
+        />,
+        chromeRef.current
+      )}
 
       {/* 全屏查看 */}
       {lightboxOpen && typeof document !== 'undefined' && (
@@ -1110,17 +1143,17 @@ function GenericNodeBody({
   id,
   data,
   tagLabel,
-  def,
+  kind,
 }: {
   id: string;
   data: PeaNodeData;
   tagLabel: string;
-  def: { icon: string; label: string };
+  kind: PeaNodeKind;
 }) {
   return (
     <div className="pea-node-generic-card">
           <div className="pea-node-generic-icon" aria-hidden>
-            {def.icon}
+            <NodeIcon kind={kind} size={36} />
           </div>
           <div className="pea-node-generic-label">{tagLabel}</div>
           {data.generating ? (
@@ -1142,6 +1175,142 @@ function GenericNodeBody({
   );
 }
 
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 节点顶部独立徽章：图标 + 可编辑名称
+ * - 浮在节点框上方，不与 body-card 一体
+ * - 名称 hover 显示编辑笔，点击后 inline 编辑（无编辑框外观）
+ * - 媒体节点根据 AI 生成 / 用户上传显示不同默认名与状态徽标
+ * ═════════════════════════════════════════════════════════════════════════════ */
+function NodeBadge({
+  id,
+  kind,
+  data,
+}: {
+  id: string;
+  kind: PeaNodeKind;
+  data: PeaNodeData;
+}) {
+  const update = useCanvas((s) => s.updateNodeData);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // 媒体节点：判断是 AI 生成结果还是用户上传
+  const hasResult = !!(data.resultUrl || data.resultUrls?.length);
+  const isUserUploadedMedia =
+    (kind === 'image' || kind === 'video' || kind === 'audio') &&
+    !!(data.fileKey || data.url) &&
+    !hasResult;
+  const isGeneratedMedia =
+    (kind === 'image' || kind === 'video' || kind === 'audio') && hasResult;
+
+  // 默认标签：上传媒体偏“资源”语义，生成媒体偏“生成”语义
+  const defaultLabel = useMemo(() => {
+    if (isGeneratedMedia) {
+      const map: Record<string, string> = { image: '图片生成', video: '视频生成', audio: '音频生成' };
+      return map[kind] || tagLabelOf(kind);
+    }
+    if (isUserUploadedMedia) {
+      const map: Record<string, string> = { image: '图片', video: '视频', audio: '音频' };
+      return map[kind] || tagLabelOf(kind);
+    }
+    return tagLabelOf(kind);
+  }, [kind, isGeneratedMedia, isUserUploadedMedia]);
+
+  const displayLabel = data.label || defaultLabel;
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const startEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDraft(displayLabel);
+    setEditing(true);
+  };
+
+  const commit = () => {
+    const value = draft.trim();
+    if (value && value !== defaultLabel) {
+      update(id, { label: value });
+    } else {
+      // 清空或等于默认值：恢复自动标签
+      update(id, { label: undefined });
+    }
+    setEditing(false);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      commit();
+    } else if (e.key === 'Escape') {
+      setEditing(false);
+    }
+  };
+
+  const onBlur = () => {
+    commit();
+  };
+
+  const color = kindColor(kind);
+  const isGenerated = isGeneratedMedia || kind === 'generate';
+
+  return (
+    <div
+      className={`pea-node-badge ${isGenerated ? 'is-generated' : ''} ${isUserUploadedMedia ? 'is-uploaded' : ''}`}
+      style={{ '--pea-node-badge-color': color } as React.CSSProperties}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
+      <span className="pea-node-badge-icon" aria-hidden>
+        <NodeIcon kind={kind} size={13} color={color} />
+      </span>
+
+      {editing ? (
+        <input
+          ref={inputRef}
+          type="text"
+          className="pea-node-badge-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
+          onBlur={onBlur}
+          onClick={(e) => e.stopPropagation()}
+          maxLength={18}
+        />
+      ) : (
+        <button
+          type="button"
+          className="pea-node-badge-label"
+          onClick={startEdit}
+          title="点击修改名称"
+        >
+          <span className="pea-node-badge-text">{displayLabel}</span>
+          {isGeneratedMedia && (
+            <span className="pea-node-badge-dot generated" aria-hidden>
+              <GeneratingBadge size={9} />
+            </span>
+          )}
+          {isUserUploadedMedia && (
+            <span className="pea-node-badge-dot uploaded" aria-hidden>
+              <UploadBadge size={9} />
+            </span>
+          )}
+          <span className="pea-node-badge-edit" aria-hidden>
+            <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+            </svg>
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
+
 /* 连接点图标：科技感「连接端口」——外环 + 旋转虚线转子 + 发光核心。
    缩小时仍清晰可辨，悬停/连线时转子旋转。 */
 function HandleGlyph() {
@@ -1155,20 +1324,6 @@ function HandleGlyph() {
 }
 
 function tagLabelOf(k: string): string {
-  const map: Record<string, string> = {
-    text: 'Text',
-    image: 'Image',
-    video: 'Video',
-    audio: 'Audio',
-    generate: 'Generate',
-    agent: 'Agent',
-    story: 'Story',
-    world3d: '3D World',
-    camera: 'Camera',
-    light: 'Light',
-    playlist: 'Playlist',
-    replace: 'Replace',
-    ref: 'Ref',
-  };
-  return map[k] ?? NODE_DEF_OF(k).label;
+  // 与 nodeTypes.ts 的中文标签保持一致，作为徽章默认名称的唯一来源
+  return NODE_DEF_OF(k).label;
 }

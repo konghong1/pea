@@ -41,6 +41,7 @@ import { useTheme } from '../store/theme';
 import { canvasesApi } from '../api/canvases';
 import PeaNode from './PeaNode';
 import GroupNode from './GroupNode';
+import NodeIcon from './NodeIcon';
 
 // dev/E2E 钩子：暴露 zustand store 到 window，方便 verify 脚本注入测试数据。
 // - dev 模式始终暴露；
@@ -59,8 +60,8 @@ import CanvasErrorBoundary from './ErrorBoundary';
 import SidePanel from './SidePanel';
 import MaterialPanel from './MaterialPanel';
 import NodeChatPrompt from './NodeChatPrompt';
-import TextNodeToolbar from './TextNodeToolbar';
 import MultiSelectToolbar from './MultiSelectToolbar';
+import SelectionBoundsBox from './SelectionBoundsBox';
 import {
   NODE_DEF_OF,
   PeaNodeKind,
@@ -458,17 +459,17 @@ function NodeLibrary({
   }, [onClose]);
 
   const items: Array<
-    | { group: '添加节点'; kind: PeaNodeKind; icon: string; label: string; sub?: string; dot?: boolean; tag?: string }
-    | { group: '辅助工具'; kind: PeaNodeKind; icon: string; label: string; sub?: string; tag?: string }
-    | { group: '添加资源'; action: 'upload'; icon: string; label: string }
+    | { group: '添加节点'; kind: PeaNodeKind; icon: React.ReactNode; label: string; sub?: string; dot?: boolean; tag?: string }
+    | { group: '辅助工具'; kind: PeaNodeKind; icon: React.ReactNode; label: string; sub?: string; tag?: string }
+    | { group: '添加资源'; action: 'upload'; icon: React.ReactNode; label: string }
   > = [
-    { group: '添加节点', kind: 'text', icon: '≡', label: '文本' },
-    { group: '添加节点', kind: 'image', icon: '🖼', label: '图片', sub: '宣传图、海报、封面' },
-    { group: '添加节点', kind: 'video', icon: '▷', label: '视频' },
-    { group: '添加节点', kind: 'audio', icon: '♫', label: '音频', dot: true },
-    { group: '添加节点', kind: 'world3d', icon: '🌐', label: '3D 世界', tag: 'Beta' },
-    { group: '辅助工具', kind: 'playlist', icon: '▦', label: '播放列表', tag: 'Beta' },
-    { group: '添加资源', action: 'upload', icon: '↑', label: '上传' },
+    { group: '添加节点', kind: 'text', icon: <NodeIcon kind="text" size={16} />, label: '文本' },
+    { group: '添加节点', kind: 'image', icon: <NodeIcon kind="image" size={16} />, label: '图片', sub: '宣传图、海报、封面' },
+    { group: '添加节点', kind: 'video', icon: <NodeIcon kind="video" size={16} />, label: '视频' },
+    { group: '添加节点', kind: 'audio', icon: <NodeIcon kind="audio" size={16} />, label: '音频', dot: true },
+    { group: '添加节点', kind: 'world3d', icon: <NodeIcon kind="world3d" size={16} />, label: '3D 世界', tag: 'Beta' },
+    { group: '辅助工具', kind: 'playlist', icon: <NodeIcon kind="playlist" size={16} />, label: '播放列表', tag: 'Beta' },
+    { group: '添加资源', action: 'upload', icon: <NodeIcon kind="image" size={16} />, label: '上传' },
   ];
 
   const groups = ['添加节点', '辅助工具', '添加资源'] as const;
@@ -557,57 +558,28 @@ function EdgeNodeMenu({
       kind: 'text',
       label: '文本生成',
       sub: '脚本、广告词、品牌文案',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <path d="M4 6h16M4 12h10M4 18h7" />
-        </svg>
-      ),
+      icon: <NodeIcon kind="text" size={18} />,
     },
     {
       kind: 'image',
       label: '图片生成',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <rect x="3" y="4" width="18" height="16" rx="2" />
-          <circle cx="8.5" cy="9.5" r="1.5" />
-          <path d="M3 16l5-5 4 4 3-3 6 6" />
-        </svg>
-      ),
+      icon: <NodeIcon kind="image" size={18} />,
     },
     {
       kind: 'video',
       label: '视频生成',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <rect x="3" y="5" width="18" height="14" rx="2" />
-          <path d="M10 9l5 3-5 3z" fill="currentColor" stroke="none" />
-        </svg>
-      ),
+      icon: <NodeIcon kind="video" size={18} />,
     },
     {
       kind: 'audio',
       label: '音频',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <path d="M3 10v4" />
-          <path d="M7 7v10" />
-          <path d="M11 4v16" />
-          <path d="M15 8v8" />
-          <path d="M19 10v4" />
-        </svg>
-      ),
+      icon: <NodeIcon kind="audio" size={18} />,
     },
     {
       kind: 'world3d',
       label: '3D 世界',
       tag: 'Beta',
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-          <circle cx="12" cy="12" r="10" />
-          <path d="M2 12h20" />
-          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-        </svg>
-      ),
+      icon: <NodeIcon kind="world3d" size={18} />,
     },
   ];
 
@@ -1185,8 +1157,12 @@ function Flow() {
         const vp = getViewport();
         setViewport({ ...vp, zoom: Math.max(0.25, Math.min(3, z)) }, { duration: 0 });
       };
+      // @ts-ignore
+      window.__peaFitView = (opts?: { padding?: number; maxZoom?: number }) => {
+        fitView({ duration: 0, padding: opts?.padding ?? 0.2, maxZoom: opts?.maxZoom ?? 1 });
+      };
     }
-  }, [getViewport, setViewport]);
+  }, [getViewport, setViewport, fitView]);
   const { message } = App.useApp();
   const saveTimer = useRef<number>();
   const [sideOpen, setSideOpen] = useState(false);
@@ -1742,6 +1718,13 @@ function Flow() {
           }}
           onNodeContextMenu={onNodeCtx}
           onPaneContextMenu={onPaneCtx}
+          // 实时把画布缩放倒数(1/zoom)写入 --pea-inv-zoom，供节点上的编辑框/功能条/标识
+          // 做 counter-scale（恒定屏幕大小）。用 onMove 直接拿到实时 viewport，不依赖 useViewport 的上下文，最稳妥。
+          onMove={(_e: any, vp: any) => {
+            if (vp && typeof vp.zoom === 'number') {
+              document.documentElement.style.setProperty('--pea-inv-zoom', String(1 / vp.zoom));
+            }
+          }}
           zoomOnDoubleClick={false}
           // Figma 风格：滚轮平移，拖拽=框选，Space+拖拽=平移
           panOnDrag={false}
@@ -1783,9 +1766,9 @@ function Flow() {
       </div>
 
       <ZoomVarSync />
-      <TextNodeToolbar />
       <NodeChatPrompt />
       <MultiSelectToolbar />
+      <SelectionBoundsBox />
 
       {menu && (
         <>

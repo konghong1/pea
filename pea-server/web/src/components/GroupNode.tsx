@@ -1,12 +1,12 @@
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  DeleteOutlined,
   DownloadOutlined,
   AppstoreOutlined,
   UnorderedListOutlined,
   PlayCircleOutlined,
   CopyOutlined,
+  GroupOutlined,
 } from '@ant-design/icons';
 import type { NodeProps } from 'reactflow';
 import { useCanvas } from '../store/canvas';
@@ -23,26 +23,23 @@ export interface GroupNodeData {
 
 type GridLayout = 'grid' | 'horizontal';
 
-/** 浮层 header 离 group 框顶部的间距(px)，与单节点工具条保持视觉同款。 */
-const HEADER_GAP = 8;
+/** 浮层 header 离 group 框顶部的间距(px)。 */
+const HEADER_GAP = 12;
 /** 浮层 header 高度(px)，与 .pgn-header-portal 实际渲染一致。 */
-const HEADER_HEIGHT = 32;
-/** 浮层 header 相对 group 框左侧的偏移(px)，让浮层与框左边对齐并稍稍缩进。 */
-const HEADER_LEFT_OFFSET = 12;
+const HEADER_HEIGHT = 36;
 
 /**
  * GroupNode — 打组容器节点。
  *
  * 视觉与交互：
  * - 容器本身：透明背景 + 细边框 + padding 0，画布点阵透出（参考图样式）。
- * - 顶部工具栏：createPortal 到 body，固定浮在 group 框**外顶部上方 8px**，
+ * - 顶部工具栏：createPortal 到 body，固定浮在 group 框**外顶部上方 8px**,
  *   和单节点的 NodeChatPrompt 工具条同款（不再占容器内部空间）。
- * - 子节点：通过 ReactFlow 的 parentNode + extent:'parent' 机制渲染在容器内，
+ * - 子节点：通过 ReactFlow 的 parentNode + extent:'parent' 机制渲染在容器内,
  *   拖动 group 时子节点由 ReactFlow subflow 自动跟随移动。
  */
 export default function GroupNode({ id, data, selected }: NodeProps) {
-  const { ungroupNode, reLayoutGroup, downloadGroup, removeNode } =
-    useCanvas();
+  const { ungroupNode, reLayoutGroup, downloadGroup } = useCanvas();
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [portalReady, setPortalReady] = useState(false);
   const [headerPos, setHeaderPos] = useState<{ left: number; top: number } | null>(null);
@@ -85,7 +82,7 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
       if (el) {
         const r = el.getBoundingClientRect();
         setHeaderPos({
-          left: Math.round(r.left + HEADER_LEFT_OFFSET),
+          left: Math.round(r.left + r.width / 2),
           top: Math.round(r.top - HEADER_HEIGHT - HEADER_GAP),
         });
       }
@@ -111,25 +108,38 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
       data-group-id={id}
     >
       <div className="pgn-header-left">
-        <span className="pgn-dot" />
         <AppstoreOutlined className="pgn-icon" />
         <span className="pgn-label">{label}</span>
       </div>
 
       <div className="pgn-header-actions">
-        {/* 整组执行 */}
-        <button className="pgn-btn" title="整组执行">
-          <PlayCircleOutlined />
-          <span>整组执行</span>
+        {/* 第一组：选择框背景颜色 + 切换布局 */}
+        <button
+          className="pgn-btn pgn-color-btn"
+          title="切换选择框背景颜色"
+          onClick={(e) => {
+            e.stopPropagation();
+            // TODO: 打开颜色选择器，修改当前组选择框背景色
+            console.log('[GroupNode] open color picker for selection box:', id);
+          }}
+        >
+          <svg
+            className="pgn-color-icon"
+            width="14"
+            height="14"
+            viewBox="0 0 14 14"
+            fill="none"
+            aria-hidden
+          >
+            <path
+              d="M2 9.5V11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V9.5L7 4 2 9.5z"
+              fill="currentColor"
+            />
+            <path d="M2 9.5h10" stroke="currentColor" strokeWidth="1.2" />
+          </svg>
         </button>
 
-        {/* 创建模板 */}
-        <button className="pgn-btn" title="创建模板">
-          <CopyOutlined />
-          <span>创建模板</span>
-        </button>
-
-        {/* 布局切换 / 解组 */}
+        {/* 布局切换 */}
         <div className="pgn-layout-wrap">
           <button
             className={`pgn-btn pgn-layout-trigger ${showLayoutMenu ? 'active' : ''}`}
@@ -137,7 +147,7 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
               e.stopPropagation();
               setShowLayoutMenu((v) => !v);
             }}
-            title="布局 / 解组"
+            title="切换布局"
           >
             <UnorderedListOutlined />
           </button>
@@ -156,21 +166,38 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
               >
                 <UnorderedListOutlined /> 水平布局
               </button>
-              <div className="pgn-layout-sep" />
-              <button
-                className="pgn-layout-item pgn-danger"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleUngroup();
-                }}
-              >
-                <DeleteOutlined /> 解组
-              </button>
             </div>
           )}
         </div>
 
-        {/* 下载 */}
+        <div className="pgn-actions-sep" />
+
+        {/* 第二组：剩余功能（整组执行 / 创建模板 / 解组） */}
+        <button className="pgn-btn" title="整组执行">
+          <PlayCircleOutlined />
+          <span>整组执行</span>
+        </button>
+
+        <button className="pgn-btn" title="创建模板">
+          <CopyOutlined />
+          <span>创建模板</span>
+        </button>
+
+        <button
+          className="pgn-btn pgn-ungroup"
+          title="解组"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleUngroup();
+          }}
+        >
+          <GroupOutlined />
+          <span>解组</span>
+        </button>
+
+        <div className="pgn-actions-sep" />
+
+        {/* 第三组：下载 */}
         <button
           className="pgn-btn"
           title="下载组"
