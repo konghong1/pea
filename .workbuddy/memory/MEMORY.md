@@ -1,5 +1,9 @@
 # pea Creative OS — 长期记忆（精简）
 
+## ⚠️ 生成文档目录纪律（勿犯）
+- **AI 产出的所有报告/概览/验证文档（`*_overview.md`、`*_report.md`、`*_fix.md`、`*_debug_report.md` 等）一律放 `.workbuddy/artifacts/`**，严禁散落在项目根目录。参照：e5-e9 验证报告、overview.md 已在该目录。
+- 设计类文档（PRD/ARCH/ADR）归属 `pea-design/`；代码 README 归属 `pea-server/`，不在此列。
+
 ## 目录/品牌/技术栈
 - `pea-design/`=原型/PRD/ARCH；`pea-server/`=代码（web/ + services/{bff,generation-orchestrator,shared} + infra/），两者平级勿嵌套。品牌统一 **pea**，禁 tapnow。
 - 栈：React18+TS+ReactFlow+Zustand+Tailwind+antd v5+Vite；BFF NestJS；编排 Python FastAPI；MySQL8(JSON+生成列)；生成走外部大模型(LiteLLM)。
@@ -7,6 +11,9 @@
 ## 启动/部署
 - 根 `start.sh`/`start.cmd` → `cd pea-server && docker compose up --build`；web 宿主端口 **8088**。
 - 快速迭代 web：本地 `npm run build` → `docker cp web/dist/. pea-server-web-1:/usr/share/nginx/html/ && docker exec pea-server-web-1 nginx -s reload`。
+- **⚠️ 验证纪律（勿犯）**：`npm run build` = `tsc -b && vite build`。直连 `vite build` 会绕过 tsc 类型检查给假绿灯（曾漏掉 CanvasEditor 漏 import `useMemo`）。改 TS 后务必跑完整 `npm run build`，或至少 `node_modules/typescript/bin/tsc -b` 先过。
+- **⚠️ Python 编排器镜像烤死（勿回退）**：`generation-orchestrator` 容器 `Mounts:[]`，源码无挂载，跑的是构建时烤进的镜像。改 `services/generation-orchestrator/**` 后**必须** `docker compose up -d --build generation-orchestrator` 重建镜像才固化；单纯 `docker restart` 用旧镜像会回退 bug。`docker cp` 只能临时修运行中的容器。镜像 Dockerfile=`infra/docker/orchestrator.Dockerfile`（把 `services/generation-orchestrator/` 拷进 `/app`）。
+- **容器内验证语法/方法归属**：`python -c "..."` 多行 + `| head` 会因 SIGPIPE 吞掉输出。改用 `docker cp` 脚本进容器，再 `docker exec ... sh -c "cd /app && PYTHONPATH=/app python /tmp/x.py"`。判断"方法是否真在类里"用 `ast.parse` 后列 `ClassDef.body` 的 `FunctionDef.lineno`（`py_compile` 通过≠方法在类里，游离/嵌套都合法）。
 - Windows .bat/.cmd 必须纯 ASCII+CRLF，否则 GBK 拆坏 UTF-8。
 
 ## ⚠️ 出网/代理（勿回退）
@@ -55,13 +62,15 @@
 - 根因：ReactFlow「受控选中」双重驱动——应用 `onNodeClick` 的 `toggleSelect` 与 `onNodesChange` 响应 ReactFlow 自身 `select` change（`canvas.ts` 的 `hasSelectChanges` 分支）互相覆盖，Shift+点击 时 ReactFlow 的 select change 把 `toggleSelect` 的结果清空。
 - 修复（`CanvasEditor.tsx`）：`multiSelectionKeyCode="Shift"` + `selectionKeyCode={null}`（框选仍走 `selectionOnDrag`），且 `onNodeClick` 在 `e.shiftKey` 时直接 `return`（不再调 `toggleSelect`），把 Shift+点击 多选完全交给 ReactFlow 处理并同步到 `selectedIds`。已验证 `selectedIds=['n1','n2']` 且 `.pea-selection-bounds` 出现。
 
-## 连线科技感分层（PeaEdge，勿回退）
-- 分层 SVG path 全部共用贝塞尔 d：①`.pea-edge-halo` ②`.pea-edge-line` ③`.pea-edge-flow` ④`.pea-edge-comet` ⑤`.react-flow__edge-interaction`(22px 命中区)。
-- `active` = 当前边被选中 或 source/target 节点在 `selectedIds` / `n.dragging=true`；只有 active 才挂 ①③④，空闲只画 ②⑤ → 性能。
-- **方向性**：方向渐变 `linearGradient gradientUnits="userSpaceOnUse"` `x1=sX,y1=sY`（source 端淡）→ `x2=tX,y2=tY`（target 端亮）。渐变 ID = `pea-edge-grad-${id}`，随边 ID 唯一化。
-- **流动**：`stroke-dasharray:5 11` + 动画 `stroke-dashoffset:0→-16`（=一个 dasharray 周期，无缝）；**彗星**：`pathLength=100` 归一化 + `dasharray:0.6 99.4` + `dashoffset:0→-100`。归一化是关键——拖动节点时 d 每帧变，SMIL `animateMotion` 会重置时间线闪烁，CSS dashoffset 不会。
-- 命中区需透明 path + `strokeWidth=22` + 透明度命中。
-- 主题令牌 `--pea-edge-idle`/`-hover`/`-active`/`-halo`/`-flow-*`/`-comet` 在 `:root` / `.dark` 各取不同值；空闲色背景 alpha 0.26~0.34 浮起融入。
+## 连线科技感分层（PeaEdge v2，勿回退）
+- **7 层**（共用贝塞尔 d）：①`.pea-edge-halo` ②`.pea-edge-line`(+arrow marker) ③`.pea-edge-flow` ④`.pea-edge-beads` ⑤`.pea-edge-comet` ⑥`.pea-edge-src-pulse` ⑦`.react-flow__edge-interaction`(22px 命中区)。
+- `active` = 当前边被选中 或 source/target 节点在 `selectedIds` / `n.dragging=true`；只有 active 才挂 ①③④⑤⑥，空闲只画 ②⑦ → 性能。
+- **方向三重保障**：① target 端 chevron 箭头(SVG marker, orient=auto) ② 彗星脉冲(单颗亮粒子全程飞行) ③ 方向渐变(source 淡→target 亮)。
+- **方向箭头**：`<marker id=gradId-arrow>` chevron path `M 1 1 L 8 5 L 1 9`，`markerUnits=userSpaceOnUse`，主线 `markerEnd=active?url(#arrow):markerEnd`。
+- **彗星脉冲**（⑤）：`pathLength=100` + `dasharray:5 95` + `dashoffset:0→-100`，4px stroke + `drop-shadow(0 0 5px glow)`。归一化是关键——拖动节点时 d 每帧变，CSS dashoffset 不重置不闪烁。
+- **数据光点**（④ beads）：`dasharray:2 22` 3px stroke，**无 drop-shadow**（v2 移除模糊→锐利）。辉光感交给彗星层。
+- **源点脉冲**（⑥）：`<circle>` + `transform:scale(0.6→3)` + `opacity:0.7→0`，`transform-box:fill-box`。
+- **流动虚线**（③ flow）：`dasharray:6 14` 2.5px stroke + `dashoffset:0→-20`。
+- 主题令牌 `--pea-edge-idle`/`-hover`/`-active`/`-halo`/`-flow-*`/`-comet`/`-arrow`/`-src-pulse` 在 `:root` / `.dark` 各取不同值。
 - 删除芯片 = `<div class="pea-edge-del-anchor">`（仅定位 + counter-scale 内联 transform，**内联样式吃样式表 transform** → hover 缩放必须放内层 `<button class="pea-edge-del">` 上）+ 30×30 SVG：`.pea-edge-del-ring`(扫描环自转) + `.pea-edge-del-hex`(六边玻璃核) + `.pea-edge-del-tick`(HUD 上下刻) + `.pea-edge-del-x`(圆头×)；hover 转琥珀 `--pea-warn`。
-- `prefers-reduced-motion`：自动关 flow/comet 动画 + 扫描环；渐变梯度仍在，方向可读。
-- 验证脚本：`verify/verify_edge_scifi.py`（22/22 PASS）。
+- `prefers-reduced-motion`：自动关 flow/beads/comet/src-pulse 动画 + 扫描环；渐变梯度+箭头仍在，方向可读。
