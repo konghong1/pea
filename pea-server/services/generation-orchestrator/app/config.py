@@ -30,7 +30,12 @@ class Settings(BaseSettings):
     minio_secret_key: str = "minioadmin"
     minio_secure: bool = False
     minio_bucket: str = "pea-media"
+    # 前端展示/内部落库使用的基址。生产可用公网 CDN，但在花生壳等内网穿透场景下，
+    # 前端走相对路径 /media（本站 nginx 反代 MinIO）更稳定；外部模型参考图见下方。
     cdn_base_url: str = "http://localhost:9000/pea-media"
+    # 外部模型（Agnes）下载参考图时需要的公网可达基址；为空则回退到 cdn_base_url。
+    # 开发/内网穿透：cdn_base_url 可保持 /media，external_ref_base_url 设为 ngrok/花生壳公网域名。
+    external_ref_base_url: str = ""
 
     # 生成护栏
     per_user_concurrency: int = 12  # 决策④: 每用户同时进行任务上限 (原 3)
@@ -93,7 +98,7 @@ class Settings(BaseSettings):
     failure_alert_window_s: int = 300
     failure_alert_threshold: int = 5
 
-    # 开发/联调极速开关: 逗号分隔的 type 列表 (如 "image,video") 强制走 MockProvider。
+    # 开发/联调极速开关: 逗号分隔的 type 列表 (如 "image,video") 强制走 MockAdapter。
     # 真实图像/视频提供商 (Agnes 等) 单张出图 18~77s, 物理上无法达到 1~3s; 联调/演示期
     # 用 mock 可在 ~0.5s 内返回占位图。生产务必留空以走真实提供商。
     # 取值示例: "" (关闭, 走真实) | "image,video" (图像/视频走 mock) | "image,video,text"

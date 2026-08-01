@@ -88,7 +88,12 @@ services:
       PEA_MINIO_USE_SSL: "false"
       PEA_MINIO_BUCKET: pea-media
       PEA_MINIO_PUBLIC_ENDPOINT: "localhost:9000"
+      # 前端展示/内部落库使用的基址：相对路径 /media 走本站 nginx -> MinIO，
+      # 避免花生壳等内网穿透域名在浏览器端证书/解析异常导致裂图。
       PEA_CDN_BASE_URL: "/media"
+      # 外部模型（Agnes）下载参考图需要的公网可达地址；必须保留 /media 前缀，
+      # 因为 nginx 把 /media/ 反代到 MinIO，丢前缀会落到 SPA 回退 404。
+      PEA_EXTERNAL_REF_BASE_URL: "https://720lp31wa108.vicp.fun/media"
       PEA_ORCHESTRATOR_URL: "http://generation-orchestrator:8000"
       PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
       PEA_FREE_TAPIES: "1000"
@@ -139,7 +144,10 @@ services:
       PEA_MINIO_ACCESS_KEY: ${PEA_MINIO_ACCESS_KEY:-minioadmin}
       PEA_MINIO_SECRET_KEY: ${PEA_MINIO_SECRET_KEY:-minioadmin}
       PEA_MINIO_BUCKET: pea-media
+      # 前端展示/内部落库走相对路径 /media（本站 nginx -> MinIO），避免浏览器端裂图。
       PEA_CDN_BASE_URL: "/media"
+      # 视频参考图等需要外部模型（Agnes）下载的地址：花生壳公网域名，必须带 /media 前缀。
+      PEA_EXTERNAL_REF_BASE_URL: "https://720lp31wa108.vicp.fun/media"
       PEA_BFF_INTERNAL_BASE_URL: "http://bff:4000"
       PEA_INTERNAL_SERVICE_TOKEN: "dev-token"
       PEA_WORKER_ENABLED: "true"

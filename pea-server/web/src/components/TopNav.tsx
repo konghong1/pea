@@ -1,6 +1,5 @@
 import { App, Button, Select, Tooltip } from 'antd';
 import { ShareAltOutlined, WalletOutlined } from '@ant-design/icons';
-import { api } from '../api/client';
 import { useAuth } from '../store/auth';
 import { useTheme } from '../store/theme';
 import { useUi, PageKey } from '../store/ui';
@@ -18,7 +17,7 @@ const NAV: { key: PageKey; label: string }[] = [
 
 /** 顶部全局导航 (FR-G1)：Logo + 导航项 + 积分/分享/通知/主题/用户。 */
 export default function TopNav() {
-  const { balance, setBalance } = useAuth();
+  const { balance, refreshBalance } = useAuth();
   const { mode, setMode } = useTheme();
   const { active, setActive } = useUi();
   const { message } = App.useApp();
@@ -72,7 +71,7 @@ export default function TopNav() {
         <Tooltip title="账户余额 (Tapies)">
           <Button
             icon={<WalletOutlined />}
-            onClick={() => api.get('/billing/balance').then((r) => setBalance(r.data.balance))}
+            onClick={() => void refreshBalance()}
           >
             {balance} Tapies
           </Button>

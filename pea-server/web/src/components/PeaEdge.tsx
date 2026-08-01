@@ -10,23 +10,23 @@ import { HANDLE_GAP, HANDLE_HALF } from './PeaNode';
  * 设计目标（用户诉求）：
  *  1. 空闲连线不抢视线 —— 低对比 + 微模糊，"融进"背景（亮/暗主题各自取值）。
  *  2. 选中连线 / 选中节点 / 拖动节点 时，相关连线高亮并出现「按连接方向流动」的感觉。
+ *     → 方向指示三重保障：① target 端 chevron 箭头 ② 方向渐变(source淡→target亮)
+ *       ③ 彗星脉冲(单颗亮粒子从 source 飞向 target) + 数据光点串(锐利小点阵列)。
  *  3. 删除按钮换成科技感 HUD 芯片（见 .pea-edge-del 一族样式），且**出现在鼠标点击处**。
  *
  * 分层结构（由下到上，全部共用同一条贝塞尔 d）：
- *   ① .pea-edge-halo   —— 宽而柔的辉光垫底，仅 active 时出现（blur 由 CSS filter 给）
- *   ② .pea-edge-line   —— 主线，空闲低透明 + 轻微 blur；active 时提亮加粗
- *   ③ .pea-edge-flow   —— 方向渐变虚线，CSS 动画 stroke-dashoffset 负向位移
- *                          → 视觉上从 source 流向 target
- *   ④ .pea-edge-beads  —— 流动光珠**串**：极短 round dash 在画布坐标系下按固定周期
- *                          铺满整条路径（不做 pathLength 归一化），因此
- *                          「珠子数量 ∝ 连线长度、间距/速度恒定」，长线自然更多珠。
- *                          动画只位移一个 dash 周期即无缝循环。相比 SMIL
- *                          animateMotion，CSS dashoffset 在拖动节点、d 每帧变化时
- *                          **不会重置动画时间线**，因此不闪烁。
- *   ⑤ .react-flow__edge-interaction —— 22px 透明命中区，保证细线也点得中
+ *   ① .pea-edge-halo       —— 宽而柔的辉光垫底，仅 active 时出现（blur 由 CSS filter 给）
+ *   ② .pea-edge-line       —— 主线，空闲低透明 + 轻微 blur；active 时提亮加粗 + target 端箭头
+ *   ③ .pea-edge-flow       —— 方向渐变虚线，CSS 动画 stroke-dashoffset 负向位移
+ *                              → 视觉上从 source 流向 target
+ *   ④ .pea-edge-beads      —— 锐利数据光点串：固定周期圆点阵列（无模糊滤镜，清晰锐利）
+ *   ⑤ .pea-edge-comet      —— 彗星脉冲：pathLength=100 归一化，单颗带辉光亮粒子沿全程流动。
+ *                              这是最醒目的方向指示 —— 一眼看到亮粒子飞向 target。
+ *   ⑥ .pea-edge-src-pulse  —— 源点脉冲环：source 端扩散环动画，"信号发射"科幻感。
+ *   ⑦ .react-flow__edge-interaction —— 22px 透明命中区，保证细线也点得中
  *
  * 性能：
- *  - 仅 active 边渲染 ①③④，空闲边只有 ②⑤ 两条 path；
+ *  - 仅 active 边渲染 ①③④⑤⑥，空闲边只有 ②⑦ 两条 path；
  *  - active 判定用 zustand 选择器返回**布尔基元**，值不变不触发重渲染；
  *  - 动画全部走 CSS（合成层友好），无 JS 逐帧。
  */
@@ -208,21 +208,34 @@ export default function PeaEdge({
             y2={tY}
           >
             <stop className="pea-edge-grad-from" offset="0%" />
-            <stop className="pea-edge-grad-mid" offset="55%" />
+            <stop className="pea-edge-grad-mid" offset="50%" />
             <stop className="pea-edge-grad-to" offset="100%" />
           </linearGradient>
+          {/* 方向箭头 marker —— target 端 chevron，orient=auto 自动跟随路径方向 */}
+          <marker
+            id={`${gradId}-arrow`}
+            markerWidth="10"
+            markerHeight="10"
+            refX="8"
+            refY="5"
+            orient="auto"
+            markerUnits="userSpaceOnUse"
+          >
+            <path d="M 1 1 L 8 5 L 1 9" className="pea-edge-arrow" fill="none" />
+          </marker>
         </defs>
       )}
 
       {/* ① 辉光垫底 */}
       {active && <path className="pea-edge-halo" d={edgePath} fill="none" />}
 
-      {/* ② 主线（保留 react-flow__edge-path 类名以兼容 RF 内部样式/查询） */}
+      {/* ② 主线（保留 react-flow__edge-path 类名以兼容 RF 内部样式/查询）。
+          active 时挂载方向箭头 marker → target 端出现 chevron 箭头 */}
       <path
         id={id}
         d={edgePath}
         fill="none"
-        markerEnd={markerEnd}
+        markerEnd={active ? `url(#${gradId}-arrow)` : markerEnd}
         style={style}
         data-edge-id={id}
         data-active={active ? '1' : '0'}
@@ -241,10 +254,19 @@ export default function PeaEdge({
         />
       )}
 
-      {/* ④ 流动光珠串（画布坐标系固定周期铺满，长线自然更多珠；d 变化不重置动画） */}
+      {/* ④ 数据光点串（锐利圆点阵列，无模糊滤镜；长线自然更多点；d 变化不重置动画） */}
       {active && <path className="pea-edge-beads" d={edgePath} fill="none" />}
 
-      {/* ⑤ 命中区：细线也要好点；同时负责记录点击落点给删除芯片定位 */}
+      {/* ⑤ 彗星脉冲：单颗带辉光亮粒子沿全程流动（pathLength=100 归一化）。
+          最醒目的方向指示 —— 一眼看到亮粒子从 source 飞向 target。 */}
+      {active && (
+        <path className="pea-edge-comet" d={edgePath} fill="none" pathLength={100} />
+      )}
+
+      {/* ⑥ 源点脉冲环：source 端扩散环动画，"信号发射"科幻感 */}
+      {active && <circle className="pea-edge-src-pulse" cx={sX} cy={sY} r="4" />}
+
+      {/* ⑦ 命中区：细线也要好点；同时负责记录点击落点给删除芯片定位 */}
       <path
         className="react-flow__edge-interaction"
         d={edgePath}

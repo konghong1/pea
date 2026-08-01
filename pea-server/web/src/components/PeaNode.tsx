@@ -66,6 +66,9 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
     : !!(data.url || data.fileKey || data.resultUrl || data.resultUrls?.length);
   // 用户上传的图片（非 AI 生成结果）——不需要接收其他节点输入，隐藏左手柄
   const isUserUploadedImage = kind === 'image' && !!(data.fileKey || data.url) && !(data.resultUrl || data.resultUrls?.length);
+  // 有上游输入连接时，媒体节点内容将由上游提供，不再展示上传入口（视频/音频与图片保持一致）
+  const upstreamInputs = useCanvas((s) => s.getUpstreamInputs(id));
+  const hasUpstreamInput = upstreamInputs.length > 0;
   const tagLabel = tagLabelOf(kind);
 
   // ── 连接点随画布缩放（不再 counter-scale）──────────────────────────────
@@ -92,31 +95,41 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const chromeStyle = { '--pea-node-inv-zoom': String(invZoom) } as React.CSSProperties;
   const handleOffset = -(HANDLE_GAP + HANDLE_HALF);
 
-  // 将 data.aspectRatio（如 "9:16"）映射为节点尺寸
-  // 仅空白节点使用；有内容后由 CSS aspect-ratio:auto 接管（按实际媒体比例包裹）
-  // 关键：让「最长边」恒定 = LONG_EDGE（340px），
-  // 这样切换比例时，比例里那个较大的数字（例如 9:16 与 16:9 中的"16"）
-  // 永远对应相同的物理像素——9:16 的 16 是高度=340，16:9 的 16 是宽度=340，
-  // 视觉上大小完全一致（修复：不同方向同比例数字尺寸不统一）。
-  // 横屏/方形(w>=h)时长边是宽度，竖屏时长边是高度，短边按比例收窄。
-  // 节点外壳宽度通过 CSS 变量 --pea-node-width 动态注入，内层 body-card
-  // 保持 width:100% 撑满外壳，避免出现白边。
+  // 节点框尺寸标准（锁定，不再随内容跳变）：
+  // - 每个 kind 都有「标准比例」，data.aspectRatio 可覆盖（用户在比例选择器里改）。
+  // - 最长边恒为 LONG_EDGE（340px）：横屏时长边=宽、竖屏时长边=高，
+  //   保证同数字物理尺寸一致（9:16 的"16"=高340、16:9 的"16"=宽340）。
+  // - ⚠️ 关键改动：移除 hasMediaContent 守卫 → 无论空态/有内容，框尺寸永远由比例锁定，
+  //   媒体用 object-fit:cover 填满锁定框，杜绝"有图后框被素材比例撑变形"导致的画布比例混乱
+  //   （用户反馈"不同比例之间没有标准"）。整张画布上每个 kind 只对应 1~2 种可预期尺寸。
+  const KIND_DEFAULT_ASPECT: Record<string, string> = {
+    image: '9:16',
+    video: '16:9',
+    audio: '16:9',
+    text: '1:1',
+    generate: '1:1',
+    ref: '1:1',
+    agent: '1:1',
+    story: '1:1',
+    world3d: '1:1',
+    camera: '1:1',
+    light: '1:1',
+    playlist: '1:1',
+    replace: '1:1',
+    prompt: '1:1',
+  };
   const LONG_EDGE = 340;
   const nodeSize = useMemo(() => {
-    if (!data.aspectRatio || hasMediaContent) return undefined;
-    const [w, h] = data.aspectRatio.split(':').map(Number);
-    if (!w || !h) return undefined;
+    const ar = data.aspectRatio || KIND_DEFAULT_ASPECT[kind] || '1:1';
+    const [w, h] = ar.split(':').map(Number);
+    if (!w || !h) return { width: LONG_EDGE, height: LONG_EDGE };
     return w >= h
       ? { width: LONG_EDGE, height: Math.round(LONG_EDGE * (h / w)) }
       : { width: Math.round(LONG_EDGE * (w / h)), height: LONG_EDGE };
-  }, [data.aspectRatio, hasMediaContent]);
+  }, [data.aspectRatio, kind]);
 
-  const outerStyle = nodeSize
-    ? ({ '--pea-node-width': `${nodeSize.width}px` } as React.CSSProperties)
-    : undefined;
-  const bodyStyle: React.CSSProperties | undefined = nodeSize
-    ? { height: nodeSize.height }
-    : undefined;
+  const outerStyle = { '--pea-node-width': `${nodeSize.width}px` } as React.CSSProperties;
+  const bodyStyle: React.CSSProperties = { height: nodeSize.height };
 
   // text 节点：把 store 的 html 同步进可编辑区。
   useEffect(() => {
@@ -319,7 +332,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
         <NodeBadge id={id} kind={kind} data={data} />
         <div className="pea-node-chrome-fixed" ref={chromeFixedRef}>
           {isText && isSingleSelected && <TextNodeToolbar editorRef={editRef} />}
-          {isMedia && !hasMediaContent && !data.generating && (
+          {isMedia && !hasMediaContent && !data.generating && !hasUpstreamInput && (
             <div className="pea-node-top-upload-bar" onClick={(e) => e.stopPropagation()}>
               <button
                 type="button"
@@ -570,12 +583,16 @@ function ResultMediaView({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [mediaError, setMediaError] = useState(false);
-  const currentUrl = urls[index] || urls[0];
+  // 兼容性兜底：历史节点可能保存了外部模型视角的公网 CDN URL（如花生壳域名），
+  // 当浏览器无法访问该域名时，fallback 到同域 /media/<key> 重试。
+  const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
+  const currentUrl = fallbackUrl || urls[index] || urls[0];
 
-  // URL 变化时重置加载错误状态
+  // URL 变化时重置加载错误状态与兜底
   useEffect(() => {
     setMediaError(false);
-  }, [currentUrl]);
+    setFallbackUrl(null);
+  }, [urls[index]]);
 
   const handleSaveToLibrary = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -591,6 +608,23 @@ function ResultMediaView({
   const handleReplace = (e: React.MouseEvent) => {
     e.stopPropagation();
     onReplace();
+  };
+
+  const handleMediaError = (originalUrl: string) => {
+    if (fallbackUrl) {
+      setMediaError(true);
+      return;
+    }
+    try {
+      const u = new URL(originalUrl, window.location.href);
+      if (u.pathname.startsWith('/media/')) {
+        setFallbackUrl(u.pathname);
+        return;
+      }
+    } catch {
+      // ignore malformed url
+    }
+    setMediaError(true);
   };
 
   // 不同媒体类型使用不同的结果容器类名（视频沿用图片一样的"占满节点框"布局）
@@ -699,7 +733,7 @@ function ResultMediaView({
             src={currentUrl}
             controls
             className="pea-node-media-preview pea-node-result-preview"
-            onError={() => setMediaError(true)}
+            onError={() => handleMediaError(currentUrl)}
           />
         ) : kind === 'audio' ? (
           <audio src={currentUrl} controls className="pea-node-media-preview" />
@@ -710,7 +744,7 @@ function ResultMediaView({
             className="pea-node-media-preview pea-node-result-preview"
             loading="lazy"
             draggable={false}
-            onError={() => setMediaError(true)}
+            onError={() => handleMediaError(currentUrl)}
           />
         )}
       </div>

@@ -17,12 +17,15 @@
 """
 from __future__ import annotations
 
+import abc
 import base64
 import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse, unquote
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +103,14 @@ def _resolve_internal_ref_via_minio(url: str) -> str | None:
     if not raw_key:
         logger.warning("[refs] internal URL 无法提取 MinIO key: %s", url[:120])
         return None
+    return _resolve_internal_ref_key(raw_key)
 
+
+def _resolve_internal_ref_key(raw_key: str) -> str | None:
+    """用 MinIO 客户端直下指定 key 并转为 base64 data: URI。
+
+    同时尝试 url-decoded 与原样两种 key 形态, 兼容 percent-encoding 差异。
+    """
     decoded = unquote(raw_key)
     candidates = []
     if decoded != raw_key:
@@ -114,7 +124,7 @@ def _resolve_internal_ref_via_minio(url: str) -> str | None:
         last_exc = None
         for key in candidates:
             try:
-                resp = client.get_object('pea-media', key)
+                resp = client.get_object(settings.minio_bucket, key)
                 data = resp.read()
                 resp.close()
                 resp.release_conn()
@@ -147,9 +157,10 @@ def _normalize_refs(refs: Any) -> list[str]:
     """规范化参考图列表:
 
     1. 保留公网 http(s) / data: 内联 URI;
-    2. 检测到内部 URL（localhost / 私有 IP / 容器名 / 非标准端口）时,
-       通过编排器自有 MinIO 客户端下载并转为 base64 data: URI（外部模型可直接消费）；
-    3. blob: / 相对路径等不可达地址丢弃。
+    2. 检测到内部 URL（localhost / 私有 IP / 容器名 / 非标准端口）或
+       本站 CDN 相对路径 /media/<key> 时, 通过编排器自有 MinIO 客户端下载并
+       转为 base64 data: URI（外部模型可直接消费；视频接口会进一步转公网 URL）;
+    3. blob: 等不可达地址丢弃。
     上限 8，保序。
     """
     if not refs:
@@ -175,6 +186,16 @@ def _normalize_refs(refs: Any) -> list[str]:
                     dropped += 1
             else:
                 out.append(r)
+        elif r.startswith('/media/'):
+            # 本站公开 CDN 相对路径: nginx 把 /media/ 代理到 MinIO bucket,
+            # 去掉前缀即 object key。AI 生成图落库后以此形式存于节点 resultUrl。
+            key = unquote(r[len('/media/'):])
+            converted = _resolve_internal_ref_key(key)
+            if converted:
+                out.append(converted)
+                resolved_internal += 1
+            else:
+                dropped += 1
         else:
             dropped += 1
 
@@ -213,11 +234,82 @@ def normalize_image_params(req: dict) -> NormImageParams:
         size_tier=tier,
         aspect_ratio=p.get("aspectRatio"),
         seed=p.get("seed"),
-        reference_images=_normalize_refs(p.get("reference_images")),
+        # 仅做基础规整; 真正的 base64/公网解析交由适配器声明的 ref_strategy 在 provider 层执行。
+        reference_images=_clean_ref_list(p.get("reference_images")),
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 参考图解析策略 (Strategy Pattern)
+# ─────────────────────────────────────────────────────────────────────────────
+# 外部模型对"参考图"的喂法分两类:
+#   1) 支持内联 base64 (Agnes 图像 API 的 extra_body.image[] 数组): 直接把图片
+#      base64 内联进请求体, 完全不经过公网存储 —— 内网/localhost 图片也能用,
+#      无需配置 PEA_CDN_BASE_URL / 隧道。
+#   2) 只认 http(s) URL (Agnes 视频 API 的 image 字段): 必须把参考图转存到
+#      外部模型可下载的公网地址, 否则下载不到 (走 PEA_EXTERNAL_REF_BASE_URL/CDN 兜底)。
+#
+# 把"怎么解析参考图"抽象成策略, 由每个 ImageParamAdapter 声明自己用哪种,
+# 新增模型 = 选一个策略(或自定义), 不污染 provider 主流程。
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ReferenceResolutionStrategy(abc.ABC):
+    """参考图解析策略: 把前端/API 给的任意形式参考图, 解析成该模型能消费的形式。"""
+
+    @abc.abstractmethod
+    def resolve(self, refs: Any, provider: Any = None) -> list[str]:
+        ...
+
+
+class Base64InlineStrategy(ReferenceResolutionStrategy):
+    """策略 A: 内联 base64 (图片类模型适用, 如 Agnes 图像 API).
+
+    - data: URI 原样保留;
+    - 内部/相对 URL (localhost / 私有 IP / /media/<key>) 经编排器自有 MinIO 客户端
+      直下, 转 base64 data URI; 外部模型直接消费内联 base64;
+    - 公网 http(s) URL 原样保留 (模型自行拉取)。
+    全程**不**调用 storage.store_bytes 上传公开存储, 不依赖公网可达性。
+    """
+
+    def resolve(self, refs: Any, provider: Any = None) -> list[str]:
+        return _normalize_refs(refs)
+
+
+class PublicUrlStrategy(ReferenceResolutionStrategy):
+    """策略 B: 转公网 URL (视频类模型适用, 如 Agnes 视频 API 只认 http(s)).
+
+    data:/内部 URL 先经 Base64Inline 转 base64, 再由 provider.resolve_refs
+    转存到公开存储, 返回 Agnes 可下载的公网 URL (走 PEA_EXTERNAL_REF_BASE_URL/CDN)。
+    需要 provider 提供 resolve_refs (OpenAICompatibleProvider / BaseProviderAdapter 均有默认实现)。
+    """
+
+    def resolve(self, refs: Any, provider: Any = None) -> list[str]:
+        if provider is None:
+            raise RuntimeError("PublicUrlStrategy 需要 provider 以访问 resolve_refs")
+        return provider.resolve_refs(_normalize_refs(refs))
+
+
+def _clean_ref_list(refs: Any) -> list[str]:
+    """基础规整: 字符串/列表归一、丢弃非字符串/空白、限 8 张。
+
+    不做 base64 转换 —— 转换交由适配器声明的 ref_strategy 在 provider 层执行
+    (这样"用哪种策略"由适配器单一决定, 而非散在 normalize 里)。
+    """
+    if not refs:
+        return []
+    if isinstance(refs, str):
+        refs = [refs]
+    out: list[str] = []
+    for r in list(refs)[:8]:
+        if isinstance(r, str) and r.strip():
+            out.append(r)
+    return out
+
+
 class ImageParamAdapter:
+    # 参考图解析策略: 图片模型默认内联 base64 (不经公网); 视频类需覆写为 PublicUrlStrategy。
+    ref_strategy: ReferenceResolutionStrategy = Base64InlineStrategy()
+
     def build(self, norm: NormImageParams, provider) -> dict:
         raise NotImplementedError
 
@@ -225,12 +317,17 @@ class ImageParamAdapter:
 class AgnesImageAdapter(ImageParamAdapter):
     """Agnes 2.x 图像: 档位式 size + ratio + extra_body.image, 不发 tags。
 
+    图像 API 的 extra_body.image[] 数组接受 base64 data URI, 故用 Base64InlineStrategy
+    —— 内网/localhost 参考图经 MinIO 直下转 base64 内联, **无需公网**。
+
     官方文档要点:
       - size 推荐 "1K".."4K" 档位, 配合 ratio 得到可预期尺寸 (2K+16:9 -> 2624x1472)。
       - 图生图 image 放 extra_body.image; 不要传 tags:["img2img"]。
       - response_format 必须在 extra_body 内 (顶层会 400); 但我们直接读 data[0].url,
         且历史行为不发送也能拿到 URL, 故默认不发送以兼容 2.0, 避免回归。
     """
+
+    ref_strategy = Base64InlineStrategy()
 
     def build(self, norm: NormImageParams, provider) -> dict:
         payload: dict[str, Any] = {

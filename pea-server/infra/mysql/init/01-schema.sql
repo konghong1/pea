@@ -361,6 +361,10 @@ CREATE TABLE IF NOT EXISTS ai_providers (
     enabled       TINYINT NOT NULL DEFAULT 1,
     is_default    TINYINT NOT NULL DEFAULT 0,
     config_json   JSON NULL,
+    -- 每个 provider 各自的公网参考图基址(per-provider, 替代全局 PEA_EXTERNAL_REF_BASE_URL)。
+    -- 外部模型(Agnes 等)下载参考图须公网可达; 为空则回退全局配置。不同模型可用不同隧道/域名,
+    -- 避免"一个隧道死=全模型挂"的单点故障。
+    external_ref_base_url VARCHAR(512) NOT NULL DEFAULT '',
     created_at    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at    DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (id)
@@ -445,6 +449,81 @@ CREATE TABLE IF NOT EXISTS user_plans (
     PRIMARY KEY (id),
     KEY idx_user_plans_user (user_id),
     CONSTRAINT fk_user_plans_user FOREIGN KEY (user_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- ---------------------------------------------------------------------------
+-- 支付域 (2026-08): 下单 -> 付款 -> 确认到账 -> 发放权益
+--
+-- 设计要点:
+--  1) 订单是"发放权益"的唯一凭据。plans.grantPlan() 只被订单审核通过 / 支付回调触发,
+--     用户自助 purchase() 默认关闭 (PEA_ALLOW_SELF_PURCHASE=0), 杜绝自己给自己续费。
+--  2) 套餐字段全部快照到订单行 (plan_name/plan_level/tapies/duration_days/amount_cents):
+--     套餐改价或下架后, 旧订单仍按下单时的约定发放, 不会串价。
+--  3) pay_amount_cents = 基准价 + 随机分位尾数(0~99分)。个人收款码收不到回调,
+--     人工对账时靠这个唯一尾数把"收款通知里的金额"一一对应到订单, 避免同价撞单。
+--     未过期的 pending/submitted 订单之间该金额唯一 (uq_pending_amount 保障)。
+--  4) provider 区分 manual_qr (个人码 + 人工确认) 与 wechat_native (商户号自动回调),
+--     两者写同一张表、走同一套状态机, 切换支付方式无需数据迁移。
+-- ---------------------------------------------------------------------------
+
+-- 收款码 (个人微信/支付宝码, 管理员上传, 前端支付弹窗展示)。
+CREATE TABLE IF NOT EXISTS payment_qrcodes (
+    id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    channel    ENUM('wechat','alipay','other') NOT NULL DEFAULT 'wechat',
+    label      VARCHAR(64) NOT NULL DEFAULT '',       -- 展示名, 如 "微信扫码"
+    image_key  VARCHAR(512) NOT NULL,                 -- 对象存储 key (二维码图片)
+    account_note VARCHAR(128) NOT NULL DEFAULT '',    -- 收款人备注, 便于用户核对
+    enabled    TINYINT NOT NULL DEFAULT 1,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    KEY idx_qrcode_enabled (enabled, sort_order)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- 支付订单。状态机:
+--   pending   下单待付款
+--   submitted 用户已提交付款凭证, 等待管理员核对 (manual_qr 专有)
+--   paid      已确认到账且权益已发放 (终态)
+--   rejected  管理员驳回 (终态)
+--   cancelled 用户主动取消 (终态)
+--   expired   超时未支付, 由下单时的 expires_at 判定 (终态)
+CREATE TABLE IF NOT EXISTS payment_orders (
+    id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    order_no         VARCHAR(40)  NOT NULL,               -- 对外订单号
+    user_id          BIGINT UNSIGNED NOT NULL,
+    plan_id          VARCHAR(64)  NOT NULL,
+    -- 套餐快照 (防改价串单)
+    plan_name        VARCHAR(120) NOT NULL DEFAULT '',
+    plan_level       INT          NOT NULL DEFAULT 1,
+    tapies           INT          NOT NULL DEFAULT 0,
+    duration_days    INT          NOT NULL DEFAULT 30,
+    amount_cents     INT          NOT NULL DEFAULT 0,     -- 套餐标价 (分)
+    pay_amount_cents INT          NOT NULL DEFAULT 0,     -- 实际应付 = 标价 + 随机尾数 (分)
+    provider         VARCHAR(32)  NOT NULL DEFAULT 'manual_qr',
+    qrcode_id        BIGINT UNSIGNED NULL,
+    status           ENUM('pending','submitted','paid','rejected','cancelled','expired')
+                     NOT NULL DEFAULT 'pending',
+    -- 用户提交的付款凭证
+    proof_key        VARCHAR(512) NULL,                   -- 付款截图对象 key
+    proof_note       VARCHAR(255) NULL,                   -- 付款备注 (昵称/尾号)
+    -- 支付网关回执 (wechat_native 路径填充)
+    external_txn_id  VARCHAR(128) NULL,
+    paid_amount_cents INT         NULL,                   -- 实收金额
+    -- 审核轨迹
+    reviewer_id      BIGINT UNSIGNED NULL,
+    reviewed_at      DATETIME(3)  NULL,
+    review_note      VARCHAR(255) NULL,
+    granted          TINYINT      NOT NULL DEFAULT 0,     -- 权益是否已发放 (与 ledger txn_id 对账)
+    expires_at       DATETIME(3)  NOT NULL,               -- 支付有效期
+    created_at       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_order_no (order_no),
+    KEY idx_orders_user (user_id, created_at),
+    KEY idx_orders_status (status, created_at),
+    KEY idx_orders_amount (status, pay_amount_cents),     -- 按到账金额反查订单
+    CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- ---------------------------------------------------------------------------

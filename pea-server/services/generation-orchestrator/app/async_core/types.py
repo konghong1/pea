@@ -69,3 +69,21 @@ class AsyncHandle:
     webhook_received_at: Optional[float] = None
     error: Optional[str] = None
     extra: dict = field(default_factory=dict)
+
+
+class GenerationResult:
+    """一次生成任务的归一化结果 (图像/视频/文本统一载体).
+
+    原定义于 app/llm_router.py, 在抽象统一后收编为本模块唯一来源
+    (app/agnes_provider 与 provider_adapter 均从此处导入, 不再依赖 llm_router)。
+    """
+
+    def __init__(self, url: str, provider: str, urls: list[str] | None = None,
+                 raw: dict | None = None, text: str | None = None,
+                 usage: dict | None = None):
+        self.url = url
+        self.urls = urls or []   # 多图生成时所有图片 URL
+        self.provider = provider
+        self.raw = raw or {}
+        self.text = text  # 文本生成结果 (图像/视频为 None)
+        self.usage = usage or {}  # token 用量: {input_tokens, output_tokens, total_tokens}

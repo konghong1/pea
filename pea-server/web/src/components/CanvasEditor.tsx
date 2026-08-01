@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import ReactFlow, {
   Background,
@@ -354,19 +354,12 @@ function DeleteItem({
 /** 画布右上角：Tapies 余额 + 社区 + 分享 */
 function CanvasActions() {
   const balance = useAuth((s) => s.balance);
-  const setBalance = useAuth((s) => s.setBalance);
+  // 统一走 store 的 refreshBalance：生成/退款时由 syncBalance 自动触发，
+  // 点击仅作为用户主动校准入口（此前是唯一的更新途径）
+  const refreshBalance = useAuth((s) => s.refreshBalance);
   const { mode, setMode } = useTheme();
   const [shareBusy, setShareBusy] = useState(false);
   const { message } = App.useApp();
-
-  const refreshBalance = async () => {
-    try {
-      const r = await api.get('/billing/balance');
-      setBalance(r.data.balance);
-    } catch {
-      /* ignore */
-    }
-  };
 
   const onShare = async () => {
     const url = window.location.href;
@@ -411,7 +404,7 @@ function CanvasActions() {
           type="button"
           className="pea-canvas-tapies"
           aria-label={`Tapies 余额 ${balance}`}
-          onClick={refreshBalance}
+          onClick={() => void refreshBalance()}
         >
           <WalletOutlined />
           <span>{balance}</span>
@@ -953,6 +946,45 @@ function SelectionOverlay() {
   );
 }
 
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 画布视口持久化（修复"每次进入画布都回到初始状态"）
+ *   - 按 canvasId 隔离 localStorage key，记录 {x, y, zoom}（即 ReactFlow viewport）。
+ *   - 进入画布：若存过视口 → setViewport 恢复；否则 fitView 自适应。
+ *   - 平移/缩放时（onMove）防抖写入；卸载时立即落地（不等防抖）。
+ *   - 只存视口，不动 graph_json，避免版本号无谓自增。
+ * ═════════════════════════════════════════════════════════════════════════════ */
+type Viewport = { x: number; y: number; zoom: number };
+const vpKey = (canvasId: string | number) => `pea_canvas_vp_${canvasId}`;
+
+function loadViewport(key: string): Viewport | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (typeof v?.x === 'number' && typeof v?.y === 'number' && typeof v?.zoom === 'number') {
+      return { x: v.x, y: v.y, zoom: v.zoom };
+    }
+  } catch {
+    /* 解析失败忽略，回落到 fitView */
+  }
+  return null;
+}
+
+function saveViewportNow(key: string, vp: Viewport) {
+  try {
+    localStorage.setItem(key, JSON.stringify({ x: vp.x, y: vp.y, zoom: vp.zoom }));
+  } catch {
+    /* 配额/隐私模式忽略 */
+  }
+}
+
+// 模块级防抖：同一时刻只有一个画布挂载，按 key 隔离足够；延迟写入避免 onMove 高频落盘。
+let vpSaveTimer: number | undefined;
+function saveViewportDebounced(key: string, vp: Viewport) {
+  window.clearTimeout(vpSaveTimer);
+  vpSaveTimer = window.setTimeout(() => saveViewportNow(key, vp), 250);
+}
+
 function Flow() {
   const rfStoreApi = useStoreApi();
   // 暴露 ReactFlow 内部 store 到 window（仅 DEV 或 __peaDevHooks flag），供调试/E2E 验证使用。
@@ -1160,6 +1192,11 @@ function Flow() {
       window.__peaFitView = (opts?: { padding?: number; maxZoom?: number }) => {
         fitView({ duration: 0, padding: opts?.padding ?? 0.2, maxZoom: opts?.maxZoom ?? 1 });
       };
+      // @ts-ignore
+      // 直接设置视口（x,y,zoom），用于 E2E 验证"退出画布后视口持久化恢复"。
+      window.__peaSetViewport = (x: number, y: number, z: number) => {
+        setViewport({ x, y, zoom: Math.max(0.25, Math.min(3, z)) }, { duration: 0 });
+      };
     }
   }, [getViewport, setViewport, fitView]);
   const { message } = App.useApp();
@@ -1167,6 +1204,9 @@ function Flow() {
   const [sideOpen, setSideOpen] = useState(false);
   const [materialOpen, setMaterialOpen] = useState(false);
   const [libAt, setLibAt] = useState<{ x: number; y: number } | null>(null);
+  // 节点落点（独立于弹窗锚点 libAt）：从工具栏/右键打开库时留空 → 走"视口中心 + 避让"，
+  // 从双击/某点打开时设为该屏幕坐标 → 节点落在鼠标处。拆开后弹窗定位不再污染节点落点。
+  const [spawnAt, setSpawnAt] = useState<{ x: number; y: number } | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number; sourceId: string; handleType: 'source' | 'target'; spawn: { x: number; y: number } } | null>(null);
   const [showMinimap, setShowMinimap] = useState(false);
@@ -1191,6 +1231,18 @@ function Flow() {
   const flowRef = useRef<HTMLDivElement>(null);
   const panRef = useRef<{ active: boolean; moved: boolean; startX: number; startY: number; vx: number; vy: number } | null>(null);
   const suppressCtxRef = useRef(false);
+  // 最近一次视口：onMove 实时写入，卸载时立即落地（不等防抖），保证恢复准确。
+  const lastVpRef = useRef<Viewport | null>(null);
+  // 退出画布时立即持久化视口（不等 onMove 防抖），下次进入原样恢复，不再回到初始态。
+  useEffect(() => {
+    return () => {
+      const s = useCanvas.getState();
+      const id = s.canvasId;
+      if (id != null && lastVpRef.current) {
+        saveViewportNow(vpKey(id), lastVpRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     // 进入画布必须经由「新建项目」或「打开项目」显式创建/加载，
@@ -1217,13 +1269,25 @@ function Flow() {
     return () => window.clearTimeout(saveTimer.current);
   }, [nodes, edges, dirty, canvasId, version, markSaved]);
 
+  // 进入画布时从 localStorage 读取上次视口，作为 ReactFlow 的 defaultViewport 直接恢复
+  // （挂载即生效，无闪烁、无时序 hack）。无记录时为 null → 走下方 fitView 自适应。
+  const initialVp = useMemo<Viewport | null>(
+    () => (canvasId != null ? loadViewport(vpKey(canvasId)) : null),
+    [canvasId],
+  );
+
   const didFit = useRef(false);
   useEffect(() => {
     if (didFit.current || nodes.length === 0) return;
     didFit.current = true;
-    const t = window.setTimeout(() => fitView({ duration: 0, padding: 0.2, maxZoom: 1 }), 100);
-    return () => window.clearTimeout(t);
-  }, [nodes.length, fitView]);
+    if (initialVp) {
+      // 已通过 defaultViewport 恢复，记录到 lastVpRef 供卸载兜底。
+      lastVpRef.current = initialVp;
+      return;
+    }
+    const t2 = window.setTimeout(() => fitView({ duration: 0, padding: 0.2, maxZoom: 1 }), 100);
+    return () => window.clearTimeout(t2);
+  }, [nodes.length, fitView, initialVp]);
 
   const saveNow = async () => {
     if (canvasId == null) return;
@@ -1237,7 +1301,9 @@ function Flow() {
   };
 
   const add = (kind: PeaNodeKind, label: string, opts?: { prompt?: string }) => {
-    const anchor = libAt ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    // 落点优先用 spawnAt（双击/某点打开时设置）；为空（工具栏/右键打开库）则落视口中心。
+    const anchor = spawnAt ?? { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    setSpawnAt(null); // 落点一次性消费，避免污染后续弹窗打开
     let pos = screenToFlowPosition({ x: anchor.x, y: anchor.y });
     const existing = nodes.map((n) => {
       const w = (n as any).width ?? 260;
@@ -1507,7 +1573,7 @@ function Flow() {
           t.classList.contains('react-flow__pane') ||
           t.classList.contains('react-flow__viewport') ||
           t.classList.contains('react-flow__renderer');
-        if (onPane) setLibAt({ x: e.clientX, y: e.clientY });
+        if (onPane) { setLibAt({ x: e.clientX, y: e.clientY }); setSpawnAt({ x: e.clientX, y: e.clientY }); }
       }}
     >
       <CanvasHeader
@@ -1520,12 +1586,12 @@ function Flow() {
       <BottomPrompt />
 
       <LeftToolbar
-        onAdd={() => setLibAt({ x: (window.innerWidth - 300) / 2, y: window.innerHeight / 2 - 220 })}
+        onAdd={() => { setLibAt({ x: (window.innerWidth - 300) / 2, y: window.innerHeight / 2 - 220 }); setSpawnAt(null); }}
         onSearch={() => setSideOpen((s) => !s)}
         onFiles={() => setMaterialOpen((s) => !s)}
         onComments={() => toast.info('评论功能即将开放')}
         onHistory={() => toast.info('历史记录功能即将开放')}
-        onLibrary={() => setLibAt({ x: (window.innerWidth - 300) / 2, y: window.innerHeight / 2 - 220 })}
+        onLibrary={() => { setLibAt({ x: (window.innerWidth - 300) / 2, y: window.innerHeight / 2 - 220 }); setSpawnAt(null); }}
         onAvatar={() => {
           const av = document.querySelector<HTMLElement>('.pea-user-trigger');
           av?.click();
@@ -1549,7 +1615,7 @@ function Flow() {
         <NodeLibrary
           at={libAt}
           onPick={(k) => add(k, NODE_DEF_OF(k).label)}
-          onClose={() => setLibAt(null)}
+          onClose={() => { setLibAt(null); setSpawnAt(null); }}
         />
       )}
       {edgeMenu && (
@@ -1728,6 +1794,12 @@ function Flow() {
             if (vp && typeof vp.zoom === 'number') {
               document.documentElement.style.setProperty('--pea-inv-zoom', String(1 / vp.zoom));
             }
+            // 视口持久化：平移/缩放后防抖写入 localStorage，退出画布可原样恢复。
+            if (vp && canvasId != null && typeof vp.x === 'number' && typeof vp.y === 'number' && typeof vp.zoom === 'number') {
+              const v = { x: vp.x, y: vp.y, zoom: vp.zoom };
+              lastVpRef.current = v;
+              saveViewportDebounced(vpKey(canvasId), v);
+            }
           }}
           zoomOnDoubleClick={false}
           // Figma 风格：滚轮平移，拖拽=框选，Space+拖拽=平移
@@ -1743,7 +1815,7 @@ function Flow() {
           // 禁用键盘删除：退格/Delete 只用于编辑输入框文本（如节点聊天输入框），
           // 不再误删选中的节点。节点删除统一走右键菜单 -> 删除。
           deleteKeyCode={null}
-          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+          defaultViewport={initialVp ?? { x: 0, y: 0, zoom: 1 }}
           minZoom={0.25}
           maxZoom={3}
           proOptions={{ hideAttribution: true }}
@@ -1821,7 +1893,7 @@ function Flow() {
                 <button
                   className="block w-full px-3 py-1.5 text-left hover:bg-pea-brand/10"
                   onClick={() => {
-                    setLibAt({ x: window.innerWidth / 2 - 150, y: window.innerHeight / 2 - 200 });
+                    setLibAt({ x: window.innerWidth / 2 - 150, y: window.innerHeight / 2 - 200 }); setSpawnAt(null);
                     setMenu(null);
                   }}
                 >

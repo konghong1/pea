@@ -1,25 +1,48 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { App, Button, Card, Empty, Skeleton, Tag } from 'antd';
+import { useCallback, useEffect, useState } from 'react';
+import { App, Button, Card, Empty, Skeleton, Table, Tag } from 'antd';
 import { CheckCircleFilled } from '@ant-design/icons';
-import { listPlans, purchasePlan, type PlanView } from '../../api/catalog';
+import { listPlans, type PlanView } from '../../api/catalog';
+import {
+  createOrder,
+  listMyOrders,
+  yuan,
+  type OrderView,
+  type PaymentIntent,
+} from '../../api/orders';
 import { useAuth } from '../../store/auth';
 import { useUi } from '../../store/ui';
+import PayModal from '../PayModal';
+
+const STATUS_COLOR: Record<string, string> = {
+  pending: 'gold',
+  submitted: 'processing',
+  paid: 'success',
+  rejected: 'error',
+  cancelled: 'default',
+  expired: 'default',
+};
 
 /**
- * 套餐购买页 (Phase 4)。
- *  - 购买是"到账 Tapies + 赋予权益等级 + 有效期"的原子事务 (服务端行锁 + 幂等)。
- *  - 前端为每次点击生成幂等键，避免网络重试/双击导致重复到账。
- *  - 购买成功后刷新余额 & 权益 (refreshMe)。
+ * 套餐购买页。
+ *
+ * ⚠️ 支付边界（2026-08 改造）：
+ *   这里不再直接调用 /plans/purchase 到账 —— 那条路径没有任何支付校验，
+ *   任何登录用户都能无限调用给自己续费。现在统一走订单：
+ *     下单 → 扫收款码付款 → 确认到账 → 发放权益
+ *   前端只负责下单与展示，权益发放完全由服务端在确认收款后触发。
  */
 export default function Plans() {
   const { message } = App.useApp();
   const { balance, planLevel, effectivePlanLevel, refreshMe } = useAuth();
   const setActive = useUi((s) => s.setActive);
   const [plans, setPlans] = useState<PlanView[]>([]);
+  const [orders, setOrders] = useState<OrderView[]>([]);
   const [loading, setLoading] = useState(true);
   const [buyingId, setBuyingId] = useState<string | null>(null);
-  // 每个套餐一次会话内的幂等键，重复点击复用同键 → 后端只发放一次
-  const idemRef = useRef<Record<string, string>>({});
+
+  const [payOpen, setPayOpen] = useState(false);
+  const [payOrder, setPayOrder] = useState<OrderView | null>(null);
+  const [payIntent, setPayIntent] = useState<PaymentIntent | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -32,34 +55,49 @@ export default function Plans() {
     }
   }, [message]);
 
+  const loadOrders = useCallback(async () => {
+    try {
+      setOrders(await listMyOrders(20));
+    } catch {
+      /* 订单列表失败不阻断套餐展示 */
+    }
+  }, []);
+
   useEffect(() => {
     void load();
+    void loadOrders();
     void refreshMe();
-  }, [load, refreshMe]);
+  }, [load, loadOrders, refreshMe]);
 
   const buy = async (p: PlanView) => {
     if (p.priceCents <= 0) {
       message.info('免费套餐无需购买，注册时已发放权益');
       return;
     }
-    if (!idemRef.current[p.id]) {
-      idemRef.current[p.id] = `${p.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    }
     setBuyingId(p.id);
     try {
-      const res = await purchasePlan(p.id, idemRef.current[p.id]);
-      if (res.duplicated) {
-        message.info('该订单已处理，未重复扣费');
-      } else {
-        message.success(`购买成功，到账 ${res.tapiesGranted} Tapies`);
-      }
-      // 购买成功后允许后续再次购买（续费）：重置该套餐幂等键
-      delete idemRef.current[p.id];
-      await refreshMe();
+      const { order, intent } = await createOrder(p.id);
+      setPayOrder(order);
+      setPayIntent(intent);
+      setPayOpen(true);
+      void loadOrders();
     } catch (e: any) {
-      message.error(e?.response?.data?.message ?? '购买失败');
+      message.error(e?.response?.data?.message ?? '下单失败');
     } finally {
       setBuyingId(null);
+    }
+  };
+
+  /** 从订单列表继续未完成的支付 */
+  const resume = async (o: OrderView) => {
+    try {
+      const { getOrder } = await import('../../api/orders');
+      const { order, intent } = await getOrder(o.orderNo);
+      setPayOrder(order);
+      setPayIntent(intent ?? null);
+      setPayOpen(true);
+    } catch (e: any) {
+      message.error(e?.response?.data?.message ?? '打开订单失败');
     }
   };
 
@@ -70,7 +108,7 @@ export default function Plans() {
           <div>
             <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>订阅套餐</h2>
             <p style={{ color: 'var(--pea-text-3, #888)' }}>
-              购买后立即到账 Tapies 并解锁更高权益模型。当前余额 <b>💎 {balance}</b>
+              扫码付款并确认到账后，Tapies 立即入账并解锁更高权益模型。当前余额 <b>💎 {balance}</b>
               {planLevel > 0 && (
                 <>
                   {' '}· 当前权益 <Tag color={effectivePlanLevel > 0 ? 'purple' : 'default'}>Lv.{effectivePlanLevel}</Tag>
@@ -140,14 +178,82 @@ export default function Plans() {
                     onClick={() => buy(p)}
                     style={{ marginTop: 12 }}
                   >
-                    {free ? '免费权益（已发放）' : owned ? '续费 / 叠加' : '立即购买'}
+                    {free ? '免费权益（已发放）' : owned ? '续费 / 升级' : '立即购买'}
                   </Button>
                 </Card>
               );
             })}
           </div>
         )}
+
+        {orders.length > 0 && (
+          <Card
+            className="pea-card"
+            title="我的订单"
+            style={{ marginTop: 28 }}
+            styles={{ body: { padding: 0 } }}
+          >
+            <Table<OrderView>
+              rowKey="orderNo"
+              size="small"
+              pagination={false}
+              dataSource={orders}
+              columns={[
+                {
+                  title: '订单号',
+                  dataIndex: 'orderNo',
+                  render: (v: string) => (
+                    <span style={{ fontFamily: 'var(--pea-font-mono, monospace)', fontSize: 12 }}>{v}</span>
+                  ),
+                },
+                { title: '套餐', dataIndex: 'planName', width: 120 },
+                {
+                  title: '应付',
+                  dataIndex: 'payAmountCents',
+                  width: 100,
+                  render: (v: number) => `¥${yuan(v)}`,
+                },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 110,
+                  render: (v: string, r) => <Tag color={STATUS_COLOR[v] ?? 'default'}>{r.statusText}</Tag>,
+                },
+                {
+                  title: '时间',
+                  dataIndex: 'createdAt',
+                  width: 160,
+                  render: (v: string) => (v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-'),
+                },
+                {
+                  title: '',
+                  width: 90,
+                  render: (_: unknown, r) =>
+                    r.status === 'pending' || r.status === 'submitted' ? (
+                      <Button type="link" size="small" onClick={() => resume(r)}>
+                        去支付
+                      </Button>
+                    ) : null,
+                },
+              ]}
+            />
+          </Card>
+        )}
       </div>
+
+      <PayModal
+        open={payOpen}
+        order={payOrder}
+        intent={payIntent}
+        onClose={() => {
+          setPayOpen(false);
+          void loadOrders();
+        }}
+        onPaid={() => {
+          void loadOrders();
+          void load();
+        }}
+      />
     </div>
   );
 }

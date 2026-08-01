@@ -41,12 +41,29 @@ interface UiState {
 }
 
 /** SPA 单实例页面状态：切换导航不卸载画布，保留编辑态 (FR-G1)。 */
+const VALID_PAGES: PageKey[] = [
+  'home',
+  'workspace',
+  'canvas',
+  'account',
+  'settings',
+  'ecom',
+  'tvtv',
+  'arena',
+  'plans',
+  'admin',
+];
+
 const _boot = loadRoute();
-// 兜底：持久化为 canvas 但无 canvasId 时是坏状态，回落 workspace。
+// 兜底：
+//  - 持久化为 canvas 但无 canvasId 时是坏状态，回落 workspace；
+//  - 持久化 active 不是合法页（旧 schema / 脏值）也会落到空白页，必须回落 workspace。
 const _bootActive: PageKey =
   _boot?.active === 'canvas' && !_boot?.canvasId
     ? 'workspace'
-    : ((_boot?.active as PageKey) ?? 'workspace');
+    : VALID_PAGES.includes(_boot?.active as PageKey)
+      ? (_boot!.active as PageKey)
+      : 'workspace';
 export const useUi = create<UiState>((set, get) => ({
   active: _bootActive,
   canvasId: _boot?.canvasId ?? null,

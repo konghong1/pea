@@ -46,6 +46,7 @@ import {
   adminDeletePlan,
 } from '../../api/admin';
 import type { PlanView, PricingRule } from '../../api/catalog';
+import { AdminOrdersPane, AdminQrcodesPane } from './AdminPaymentsPane';
 
 /**
  * 管理员控制台 (Phase 4)：AI 提供商 / 模型(动态定价) / 套餐 的可视化 CRUD。
@@ -88,6 +89,8 @@ export default function Admin() {
             { key: 'providers', label: 'AI 提供商', children: <ProvidersPane /> },
             { key: 'models', label: '模型 & 定价', children: <ModelsPane /> },
             { key: 'plans', label: '套餐', children: <PlansPane /> },
+            { key: 'orders', label: '支付订单', children: <AdminOrdersPane /> },
+            { key: 'qrcodes', label: '收款码', children: <AdminQrcodesPane /> },
           ]}
         />
       </div>

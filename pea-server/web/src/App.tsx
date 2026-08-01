@@ -9,6 +9,7 @@ import { useTheme } from './store/theme';
 import { useUi, PageKey, installPopState } from './store/ui';
 import { useCanvas } from './store/canvas';
 import { loadRoute } from './store/routePersist';
+import ErrorBoundary from './components/ErrorBoundary';
 
 export default function App() {
   const token = useAuth((s) => s.token);
@@ -59,7 +60,15 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             <Route
               path="/*"
-              element={token ? <Workspace /> : <Navigate to="/login" replace />}
+              element={
+                token ? (
+                  <ErrorBoundary>
+                    <Workspace />
+                  </ErrorBoundary>
+                ) : (
+                  <Navigate to="/login" replace />
+                )
+              }
             />
           </Routes>
         </BrowserRouter>

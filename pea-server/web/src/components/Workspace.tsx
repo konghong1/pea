@@ -43,6 +43,19 @@ export default function Workspace() {
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [refreshMe, refreshToken]);
 
+  // 余额最终保底轮询：WS 事件（快路径）+ 生成/退款时的 syncBalance（慢路径）之外的第三道保险。
+  // 仅在页面可见时发起，后台标签页不空跑；2 分钟一次对服务端几乎无压力，
+  // 但能彻底消除「余额永远停在旧值，非得手动点一下」的体验问题。
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!useAuth.getState().token) return;
+      void useAuth.getState().refreshBalance();
+    };
+    const id = setInterval(tick, 2 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const inCanvas = active === 'canvas';
 
   return (

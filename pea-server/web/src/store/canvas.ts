@@ -208,6 +208,140 @@ const nodesFromSnapshot = (snap: HistorySnapshot): Node<PeaNodeData>[] =>
 let lastHistoryLabel: string | null = null;
 /** 拖拽快照标记：一次拖拽只在「首次产生位移」时记一条撤销项；松开后复位。 */
 let dragSnapshotTaken = false;
+/** 拖拽进行中标记：拖拽期间 ReactFlow 会发出 select 噪声(deselect 等)，
+ * 这些 select change 不可信，必须忽略——否则会清掉 selectedIds → 节点 .selected 类丢失
+ * → 功能条(opacity:0)消失。框选(box-selection)的 select change 不带 dragging，照常回写。 */
+let draggingActive = false;
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 断线回收（detached reference GC）
+ *
+ * 背景：下游节点的「引用条缩略图」= 派生上游(getUpstreamInputs) ∪ 持久化引用。
+ * 持久化引用共有 3 处载体，删边时若不同步回收，缩略图/参考图就会残留：
+ *   ① data.meta.referencedNodeIds        引用条渲染集合（@ 插入 / + 画布选择）
+ *   ② data.meta.editorText               编辑器 HTML，内含 <span data-pea-ref> token（token 本身即缩略图）
+ *   ③ data.meta.genParams.reference_images  上次提交的参考图 URL（影响重试）
+ * 只清 ① 不够 —— 切回节点时 ② 会把 token 恢复出来，提交时又把 id 加回 ①，形成「删了又回来」。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 从编辑器 HTML 中摘除指定上游节点的 @ 引用 token（连同其后的零宽空格占位）。 */
+export function stripRefTokens(html: string, ids: Set<string>): string {
+  if (!html || !/data-pea-ref/i.test(html)) return html;
+  try {
+    const doc = new DOMParser().parseFromString(`<div id="__pea_root">${html}</div>`, 'text/html');
+    const root = doc.getElementById('__pea_root');
+    if (!root) return html;
+    let changed = false;
+    root.querySelectorAll<HTMLElement>('[data-pea-ref="1"]').forEach((el) => {
+      const id = el.getAttribute('data-node-id');
+      if (!id || !ids.has(id)) return;
+      // token 插入时会在其后补一个 \u200B 光标锚点，一并清掉避免留下空白字符
+      const next = el.nextSibling;
+      if (next && next.nodeType === 3 && (next.textContent ?? '') === '\u200B') next.parentNode?.removeChild(next);
+      el.parentNode?.removeChild(el);
+      changed = true;
+    });
+    return changed ? root.innerHTML : html;
+  } catch {
+    return html;
+  }
+}
+
+/** 收集某节点可作为参考图外发的所有 URL 指纹（去 query，用于匹配签名 URL）。 */
+function refUrlFingerprints(n: Node<PeaNodeData> | undefined): string[] {
+  if (!n) return [];
+  const d = n.data;
+  const raw = [d.url, d.resultUrl, ...(d.resultUrls ?? [])].filter(Boolean) as string[];
+  const out = raw.map((u) => u.split('?')[0]);
+  if (d.fileKey) out.push(d.fileKey);
+  return out.filter(Boolean);
+}
+
+/**
+ * 删边后回收下游节点上因该连线残留的持久化引用。
+ * @param nodes      当前节点数组
+ * @param edgesAfter 删除生效之后的边数组（用于判断是否还存在平行边）
+ * @param removed    被删掉的边（只需 source/target）
+ * @returns 新的 nodes（无变更时原样返回，保持引用稳定避免无谓重渲染）
+ */
+function pruneDetachedRefs(
+  nodes: Node<PeaNodeData>[],
+  edgesAfter: Edge[],
+  removed: Array<{ source?: string | null; target?: string | null }>,
+): Node<PeaNodeData>[] {
+  // target -> 真正已断开的 source 集合
+  const detached = new Map<string, Set<string>>();
+  for (const e of removed) {
+    const { source, target } = e;
+    if (!source || !target) continue;
+    // 平行边：还有别的边连着同一对节点时不算断开
+    if (edgesAfter.some((x) => x.source === source && x.target === target)) continue;
+    if (!detached.has(target)) detached.set(target, new Set());
+    detached.get(target)!.add(source);
+  }
+  if (detached.size === 0) return nodes;
+
+  const notify: Array<{ targetId: string; removedRefIds: string[] }> = [];
+  let dirty = false;
+
+  const next = nodes.map((n) => {
+    const srcIds = detached.get(n.id);
+    if (!srcIds || srcIds.size === 0) return n;
+
+    const meta = { ...((n.data.meta ?? {}) as Record<string, unknown>) };
+    let touched = false;
+
+    // ① referencedNodeIds
+    const refIds = Array.isArray(meta.referencedNodeIds) ? (meta.referencedNodeIds as string[]) : [];
+    const keptRefIds = refIds.filter((id) => !srcIds.has(id));
+    if (keptRefIds.length !== refIds.length) {
+      meta.referencedNodeIds = keptRefIds;
+      touched = true;
+    }
+
+    // ② editorText 里的 @ token
+    const editorText = typeof meta.editorText === 'string' ? meta.editorText : '';
+    if (editorText) {
+      const stripped = stripRefTokens(editorText, srcIds);
+      if (stripped !== editorText) {
+        meta.editorText = stripped;
+        touched = true;
+      }
+    }
+
+    // ③ genParams.reference_images
+    const gp = meta.genParams as Record<string, unknown> | undefined;
+    const refImgs = Array.isArray(gp?.reference_images) ? (gp!.reference_images as string[]) : null;
+    if (refImgs && refImgs.length) {
+      const fps: string[] = [];
+      srcIds.forEach((sid) => fps.push(...refUrlFingerprints(nodes.find((x) => x.id === sid))));
+      if (fps.length) {
+        const kept = refImgs.filter((u) => {
+          const bare = String(u).split('?')[0];
+          return !fps.some((fp) => bare === fp || bare.includes(fp));
+        });
+        if (kept.length !== refImgs.length) {
+          meta.genParams = { ...(gp as Record<string, unknown>), reference_images: kept };
+          touched = true;
+        }
+      }
+    }
+
+    if (!touched) return n;
+    dirty = true;
+    notify.push({ targetId: n.id, removedRefIds: Array.from(srcIds) });
+    return { ...n, data: { ...n.data, meta } };
+  });
+
+  if (!dirty) return nodes;
+  // 通知已打开的输入框同步本地 state / DOM（zustand set 期间不直接触发 React setState）
+  queueMicrotask(() => {
+    for (const payload of notify) {
+      window.dispatchEvent(new CustomEvent('pea:refs-detached', { detail: payload }));
+    }
+  });
+  return next;
+}
 
 export const useCanvas = create<CanvasState>((set, get) => ({
   canvasId: null,
@@ -291,11 +425,33 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         s.nodes.filter((x) => x.parentNode === id).forEach((c) => collect(c.id));
       };
       ids.forEach(collect);
+
+      const nextEdges = s.edges.filter(
+        (e) => !removeSet.has(e.source) && !removeSet.has(e.target),
+      );
+      // 断线回收：节点被删 = 其所有出边断开，幸存的下游节点必须清掉指向它的残留引用
+      // （包括未连线但通过「+ 从画布选择」引用的死链，节点没了缩略图不能留着）。
+      // 只对 meta 里确有引用痕迹的幸存节点构造清理对，避免大批量删除时的无谓遍历。
+      const removedIds = Array.from(removeSet);
+      const detachPairs: Array<{ source: string; target: string }> = [];
+      for (const t of s.nodes) {
+        if (removeSet.has(t.id)) continue;
+        const m = (t.data.meta ?? {}) as Record<string, unknown>;
+        const hasRefTrace =
+          (Array.isArray(m.referencedNodeIds) && (m.referencedNodeIds as string[]).length > 0) ||
+          (typeof m.editorText === 'string' && m.editorText.includes('data-pea-ref')) ||
+          Array.isArray((m.genParams as Record<string, unknown> | undefined)?.reference_images);
+        if (!hasRefTrace) continue;
+        for (const sid of removedIds) detachPairs.push({ source: sid, target: t.id });
+      }
+      // 注意：传入未过滤的 s.nodes，pruneDetachedRefs 需要读被删节点的 URL 指纹来剔除 reference_images
+      const pruned = detachPairs.length
+        ? pruneDetachedRefs(s.nodes, nextEdges, detachPairs)
+        : s.nodes;
+
       return {
-        nodes: s.nodes.filter((n) => !removeSet.has(n.id)),
-        edges: s.edges.filter(
-          (e) => !removeSet.has(e.source) && !removeSet.has(e.target),
-        ),
+        nodes: pruned.filter((n) => !removeSet.has(n.id)),
+        edges: nextEdges,
         selectedId: s.selectedId != null && removeSet.has(s.selectedId) ? null : s.selectedId,
         selectedIds: s.selectedIds.filter((x) => !removeSet.has(x)),
         dirty: true,
@@ -321,6 +477,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       } else if (dragPos.dragging === false) {
         dragSnapshotTaken = false;
       }
+      draggingActive = dragPos.dragging === true;
     }
 
 
@@ -330,7 +487,10 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     // 此时需要反向同步：从节点 selected 状态回写 selectedIds，
     // 否则多选工具条等依赖 selectedIds.length > 1 的功能无法感知框选结果。
     const hasSelectChanges = changes.some((c: any) => c.type === 'select');
-    if (hasSelectChanges) {
+    // 拖拽进行中 ReactFlow 会发出 select 噪声(拖拽前先 deselect 等)，这些 select change
+    // 不可信：回写会清掉 selectedIds → 节点 .selected 类丢失 → 功能条(opacity:0)消失。
+    // 仅当非拖拽(draggingActive=false)时才回写；框选(box-selection)的 select change 照常生效。
+    if (hasSelectChanges && !draggingActive) {
       ids = next.filter((n: any) => n.selected).map((n: any) => n.id);
       // 注：框选「覆盖即选中」的二次校正已从这里移除——
       // ReactFlow 的 box-selection 仅在拖拽过程中（选中集合变化时）发出 select change，
@@ -365,10 +525,30 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     const isUserChange = changes.some(
       (c: any) => c.type === 'remove' || c.type === 'add' || c.type === 'position',
     );
-    set({ edges: applyEdgeChanges(changes, get().edges), dirty: isUserChange ? true : get().dirty });
+    const before = get().edges;
+    const nextEdges = applyEdgeChanges(changes, before);
+    // 断线回收：ReactFlow 内建删除路径（当前 deleteKeyCode=null，但保留以防回归）
+    const removedIds = changes.filter((c: any) => c.type === 'remove').map((c: any) => c.id);
+    let nextNodes = get().nodes;
+    if (removedIds.length) {
+      const removed = before.filter((e) => removedIds.includes(e.id));
+      nextNodes = pruneDetachedRefs(nextNodes, nextEdges, removed);
+    }
+    set({
+      edges: nextEdges,
+      ...(nextNodes !== get().nodes ? { nodes: nextNodes } : {}),
+      dirty: isUserChange ? true : get().dirty,
+    });
   },
   onConnect: (conn) => { get().takeSnapshot(); set({ edges: addEdge({ ...conn, type: 'pea' }, get().edges), dirty: true }); },
-  removeEdge: (id) => { get().takeSnapshot(); set({ edges: get().edges.filter((e) => e.id !== id), dirty: true }); },
+  removeEdge: (id) => {
+    get().takeSnapshot();
+    const before = get().edges;
+    const removed = before.filter((e) => e.id === id);
+    const nextEdges = before.filter((e) => e.id !== id);
+    // 断线回收：清掉下游节点上因这条连线残留的引用缩略图 / @ token / 参考图 URL
+    set({ edges: nextEdges, nodes: pruneDetachedRefs(get().nodes, nextEdges, removed), dirty: true });
+  },
   addNode: (data, position) => {
     get().takeSnapshot();
     const nodes = get().nodes;
@@ -794,15 +974,23 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     // 要删除的旧边 ID（被替换掉的 source 边）
     const oldEdgeIds = new Set(sourceEdges.map((e) => e.id));
 
+    const nextEdges = [
+      // 保留不被替换的边
+      ...s.edges.filter((e) => !oldEdgeIds.has(e.id)),
+      // 新增：选中→新节点 + 新节点→原目标
+      ...edgesToNew,
+      ...edgesFromNew,
+    ];
+
     set({
-      nodes: [...s.nodes, newNode],
-      edges: [
-        // 保留不被替换的边
-        ...s.edges.filter((e) => !oldEdgeIds.has(e.id)),
-        // 新增：选中→新节点 + 新节点→原目标
-        ...edgesToNew,
-        ...edgesFromNew,
-      ],
+      // 断线回收：A→B 被改写为 A→新节点→B 后，B 已不再直连 A，
+      // 需清掉 B 上残留的对 A 的引用缩略图 / @ token（内容改由新节点中转）。
+      nodes: pruneDetachedRefs(
+        [...s.nodes, newNode],
+        nextEdges,
+        sourceEdges.map((e) => ({ source: e.source, target: e.target })),
+      ),
+      edges: nextEdges,
       dirty: true,
       // 保持当前多选状态不变（不切换到新节点）
     });

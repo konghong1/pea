@@ -2,6 +2,7 @@ import { useCanvas } from '../store/canvas';
 import { toast } from '../store/toast';
 import { acceptNodeGenerationJob } from '../api/catalog';
 import { api } from '../api/client';
+import { syncBalance } from './balanceSync';
 
 /**
  * 节点生成任务轮询兜底（从 NodeChatPrompt 抽离为共享模块）。
@@ -23,6 +24,8 @@ export function pollNodeJobResult(jobId: string) {
       useCanvas.getState().applyJobResult(jobId, { generating: false, error: '生成超时，请重试' });
       useCanvas.getState().removeJob(jobId);
       toast.error('生成超时，请稍后重试');
+      // 超时后服务端可能已结算或退款，拉一次权威值兜底
+      syncBalance();
       return;
     }
     try {
@@ -43,6 +46,8 @@ export function pollNodeJobResult(jobId: string) {
         useCanvas.getState().removeJob(jobId);
         const count = urls?.length ?? 1;
         toast.success(count > 1 ? `生成完成，共 ${count} 张图` : '生成完成');
+        // 结算落账后同步余额（走到轮询分支说明 WS 事件多半已丢，必须兜底）
+        syncBalance();
         return;
       }
       if (st === 'failed' || st === 'refunded') {
@@ -57,6 +62,8 @@ export function pollNodeJobResult(jobId: string) {
         });
         useCanvas.getState().removeJob(jobId);
         toast.error(data?.error || '生成失败，已退款');
+        // 退款到账，必须刷新——否则用户看到扣了钱却没退回
+        syncBalance();
         return;
       }
     } catch {

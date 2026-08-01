@@ -42,6 +42,9 @@
   --pea-edge-flow-to: rgba(11, 134, 189, 0.95);
   --pea-edge-comet: #0b86bd;
   --pea-edge-comet-glow: rgba(31, 162, 220, 0.85);
+  /* 方向箭头 + 源点脉冲（科技感方向指示） */
+  --pea-edge-arrow: rgba(31, 162, 220, 0.92);
+  --pea-edge-src-pulse: rgba(31, 162, 220, 0.5);
   /* 删除芯片 */
   --pea-edge-chip-bg: rgba(255, 255, 255, 0.92);
   --pea-edge-chip-stroke: rgba(31, 162, 220, 0.7);
@@ -85,6 +88,9 @@
   --pea-edge-flow-to: rgba(168, 232, 255, 1);
   --pea-edge-comet: #d6f4ff;
   --pea-edge-comet-glow: rgba(92, 198, 236, 0.95);
+  /* 方向箭头 + 源点脉冲（科技感方向指示） */
+  --pea-edge-arrow: rgba(92, 198, 236, 0.95);
+  --pea-edge-src-pulse: rgba(92, 198, 236, 0.5);
   --pea-edge-chip-bg: rgba(14, 20, 27, 0.9);
   --pea-edge-chip-stroke: rgba(92, 198, 236, 0.75);
   --pea-edge-chip-ink: #a8e8ff;
@@ -432,13 +438,14 @@ body {
 }
 
 /* 选中外层光晕 - 已在 .pea-node.selected .pea-node-body-card 中通过 box-shadow 实现 */
-/* 节点框比例：
-   - 图片/视频空白节点：PeaNode.tsx 根据 data.aspectRatio 计算尺寸，
-     最长边恒为 340，并通过 CSS 变量 --pea-node-width 动态设置节点外壳宽度，
-     内层 body-card 保持 width:100% 撑满外壳，保证 9:16 与 16:9 中的"16"
-     物理尺寸一致且没有白边；有内容后取消（aspect-ratio:auto 按实际媒体包裹）
+/* 节点框比例（所有节点统一标准，详见 PeaNode.tsx 的 nodeSize）：
+   - 框尺寸由 PeaNode.tsx 锁定：最长边恒 340px，按 kind 默认比例
+     （image 9:16 / video·audio 16:9 / 其余 1:1）+ data.aspectRatio 覆盖；
+     通过 --pea-node-width 设外壳宽、inline height 设 body-card 高。
+   - 无论空态/有内容，框尺寸永远锁定，媒体用 object-fit:cover 填满锁定框，
+     整张画布每个 kind 只对应 1~2 种可预期尺寸（"不同比例没标准"已修复）。
    - 文本：始终 1:1 正方形
-   - 下方 .pea-node-has-media 的规则会覆盖这些值 */
+   - 下方 .pea-node-has-media 的规则仅调整内边距/裁切，不再改变框尺寸 */
 .pea-node-text .pea-node-body-card {
   aspect-ratio: 1 / 1;
 }
@@ -650,25 +657,22 @@ body {
   border-color: rgba(255, 255, 255, 0.35);
   color: #fff;
 }
-/* image 节点有图片结果时：节点宽度与外壳统一（280px），不再单独放宽/缩窄 */
-.pea-node.pea-node-image.pea-node-has-media {
-  width: 340px;
-}
-/* 图片节点 body-card：去内边距、去掉冗余外框，让图片直接填满节点内容区（不留缝） */
+/* 节点宽度统一由 PeaNode.tsx 注入的 --pea-node-width 锁定（见 nodeSize）：
+   image 9:16 → 宽 191px、video 16:9 → 宽 340px，整张画布每个 kind 只对应 1~2 种标准尺寸，
+   不再在此硬编码 340px 导致有图后框被撑乱。 */
+/* 图片节点 body-card：锁定框尺寸（由 PeaNode.tsx 的 inline bodyStyle.height +
+   --pea-node-width 决定），媒体用 object-fit:cover 填满锁定框——
+   解决"有图后框被素材比例撑变形、不同节点比例没标准"的痛点。
+   功能条 ResultToolbar 已 portal 到 chrome 层（节点框外），不在卡片内，
+   故可放心用 overflow:hidden 让圆角干净裁切媒体。 */
 .pea-node-image.pea-node-has-media .pea-node-body-card {
   padding: 0;
   background: rgba(0, 0, 0, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
-  min-height: 140px;
-  aspect-ratio: auto;  /* 有图后取消固定 9:16，按图片原始比例完整包裹（不裁切） */
+  aspect-ratio: auto;  /* inline height 已锁定框高，aspect-ratio 不生效 */
   border-radius: 16px;
-  /* 显式覆盖通则 .pea-node-body-card { overflow:hidden }——
-     功能条 .pea-node-result-toolbar 是这个卡片的后代，translateY(-100%) 浮在卡片顶外，
-     overflow:hidden 会把它裁掉。图片圆角改为图片自身 border-radius 承担。
-     用 !important 是因为 esbuild 压缩会删除 overflow:visible（默认值）；
-     !important 强制保留并压过通则。 */
-  overflow: visible !important;
+  overflow: hidden;
 }
 /* 媒体卡片去内边距，让图片完全贴合 body-card */
 .pea-node-image.pea-node-has-media .pea-node-media-card {
@@ -679,17 +683,18 @@ body {
 .pea-node-image.pea-node-has-media .pea-node-media-label {
   display: none;
 }
-/* 图片完整展示：有图后按图片原始比例完整包裹（object-fit:contain 不裁切），
-   节点高度由图片比例决定；极端高图用 max-height 保护画布，超出时整体等比缩小 */
+/* 图片填满锁定框：cover 裁切，杜绝白边；圆角由 body-card 承担 */
 .pea-node-image.pea-node-has-media .pea-node-media-preview,
 .pea-node-image.pea-node-has-media .pea-node-result-image-wrap .pea-node-media-preview {
   display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
   max-width: 100%;
-  max-height: 70vh;
-  object-fit: contain;
-  border-radius: 16px;
+  max-height: none;
+  object-fit: cover;
+  border-radius: 0;
   background: #000;
 }
 
@@ -703,6 +708,7 @@ body {
 .pea-node-image.pea-node-has-media .pea-node-result-image-wrap {
   position: relative;
   width: 100%;
+  height: 100%;  /* 填满锁定框，配合媒体 absolute inset:0 实现 cover 填满 */
 }
 
 /* 视频节点有内容：与图片节点保持一致——去内边距、按视频原始比例完整包裹（不裁切、占满节点框宽度）。
@@ -713,11 +719,9 @@ body {
   background: rgba(0, 0, 0, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
-  min-height: 140px;
   aspect-ratio: auto;
   border-radius: 16px;
-  /* 见图片节点说明：功能条浮在卡片顶外，overflow 必须 visible */
-  overflow: visible !important;
+  overflow: hidden;  /* 同图片节点：锁定框 + 媒体 cover 填满，功能条已 portal 到 chrome */
 }
 .pea-node-video.pea-node-has-media .pea-node-media-card {
   position: relative;
@@ -730,15 +734,21 @@ body {
   position: relative;
   width: 100%;
 }
-/* 视频结果：占满节点框宽度、按原始比例包裹（与图片结果视觉一致），不再被 max-height 压成小窗 */
+/* 视频结果填满锁定框：配合媒体 absolute inset:0 实现 cover 填满 */
+.pea-node-video.pea-node-has-media .pea-node-result-video-wrap {
+  height: 100%;
+}
+/* 视频结果填满锁定框：cover 裁切，与图片结果视觉一致；圆角由 body-card 承担 */
 .pea-node-video.pea-node-has-media .pea-node-result-video-wrap .pea-node-media-preview {
   display: block;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  max-height: 420px;
-  height: auto;
-  min-height: 140px;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
   object-fit: cover;
-  border-radius: 16px;
+  border-radius: 0;
   cursor: default;
   transition: filter 0.2s ease, opacity 0.25s ease;
   background: #000;
@@ -2428,43 +2438,82 @@ body {
   pointer-events: none;
 }
 
-/* ③ 方向流动虚线 —— 短划 + dashoffset 负向位移，营造 source→target 流动 */
+/* ③ 方向流动虚线 —— 短划 + dashoffset 负向位移，营造 source→target 流动。
+   加粗到 2.5px + 加大 dash 间距，让方向流动更醒目。 */
 .pea-edge-flow {
-  stroke-width: 2px;
+  stroke-width: 2.5px;
   stroke-linecap: round;
-  stroke-dasharray: 5 11;
+  stroke-dasharray: 6 14;
   stroke-dashoffset: 0;
   pointer-events: none;
-  animation: pea-edge-flow-move 0.9s linear infinite;
+  animation: pea-edge-flow-move 0.85s linear infinite;
 }
 @keyframes pea-edge-flow-move {
   to {
-    stroke-dashoffset: -16; /* = dasharray 周期(5+11)，一个完整循环，无缝衔接 */
+    stroke-dashoffset: -20; /* = dasharray 周期(6+14)，无缝衔接 */
   }
 }
 
-/* ④ 流动光珠串 —— 极短 round dash = 一颗圆点，按固定周期铺满整条路径。
-   ⚠️ 不做 pathLength 归一化：dash 周期落在画布坐标系上，于是
-      「珠子数量 ∝ 连线长度、间距恒定、速度恒定」，长线自然更多珠子（用户要的密度感）。
-      若归一化成 100，则无论多长都只有固定颗数、且速度随长度漂移。
-   周期 18（1.2 实 + 16.8 空）→ 每 18px 一颗珠，160px 线 ≈ 8 颗、500px 线 ≈ 27 颗，
-   形成明显的「流动珠串」而非零星几点。 */
+/* ④ 数据光点串 —— 清晰锐利的圆点沿路径流动。
+   ⚠️ 关键改动：移除 drop-shadow 模糊滤镜 → 光点清晰锐利（用户反馈"模糊不够清晰"）。
+   光点的「发光感」交给 ⑤ comet 层提供，beads 只负责"多点阵列"的密度感。
+   周期 24（2 实 + 22 空）→ 每 24px 一颗点，比原来更大更清晰。 */
 .pea-edge-beads {
   stroke: var(--pea-edge-comet);
-  stroke-width: 3.2px;
+  stroke-width: 3px;
   stroke-linecap: round;
-  stroke-dasharray: 1.2 16.8;
+  stroke-dasharray: 2 22;
   stroke-dashoffset: 0;
   pointer-events: none;
-  filter: drop-shadow(0 0 4px var(--pea-edge-comet-glow));
-  animation: pea-edge-beads-move 0.5s linear infinite;
+  animation: pea-edge-beads-move 0.7s linear infinite;
 }
 @keyframes pea-edge-beads-move {
   to {
-    /* 只位移一个 dash 周期即无缝循环（-18 = 1.2+16.8）；
-       负向 = 顺 source→target 方向流动。约 36px/s。 */
-    stroke-dashoffset: -18;
+    stroke-dashoffset: -24; /* = 2+22，无缝循环 */
   }
+}
+
+/* ⑤ 彗星脉冲 —— 单颗亮脉冲沿路径全程流动，pathLength=100 归一化。
+   这是「方向指示」最显眼的一层：一颗带辉光的亮粒子从 source 飞向 target，
+   即便 beads 很小也能一眼看出方向。归一化后无论线长短都恰好一个周期。
+   ⚠️ 只有这一层保留 drop-shadow 辉光，作为"发光体"；beads 保持锐利。 */
+.pea-edge-comet {
+  stroke: var(--pea-edge-comet);
+  stroke-width: 4px;
+  stroke-linecap: round;
+  stroke-dasharray: 5 95;
+  stroke-dashoffset: 0;
+  pointer-events: none;
+  filter: drop-shadow(0 0 5px var(--pea-edge-comet-glow));
+  animation: pea-edge-comet-move 1.4s linear infinite;
+}
+@keyframes pea-edge-comet-move {
+  to {
+    stroke-dashoffset: -100; /* pathLength=100，一个完整周期 */
+  }
+}
+
+/* ⑥ 方向箭头（SVG marker 内的 path）—— target 端 chevron 箭头，直接传达"流向" */
+.pea-edge-arrow {
+  fill: none;
+  stroke: var(--pea-edge-arrow);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ⑦ 源点脉冲环 —— source 端扩散环，"信号发射"的科幻感 */
+.pea-edge-src-pulse {
+  fill: none;
+  stroke: var(--pea-edge-src-pulse);
+  stroke-width: 1.5;
+  transform-origin: center;
+  transform-box: fill-box;
+  animation: pea-edge-src-pulse 2s ease-out infinite;
+}
+@keyframes pea-edge-src-pulse {
+  0%   { transform: scale(0.6); opacity: 0.7; }
+  100% { transform: scale(3); opacity: 0; }
 }
 
 /* 命中区：透明、可点、加粗，细线也点得中 */
@@ -2477,7 +2526,9 @@ body {
 .pea-edge-line,
 .pea-edge-halo,
 .pea-edge-flow,
-.pea-edge-beads {
+.pea-edge-beads,
+.pea-edge-comet,
+.pea-edge-src-pulse {
   pointer-events: none;
 }
 
@@ -2496,6 +2547,8 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .pea-edge-flow { animation: none; opacity: 0.85; }
   .pea-edge-beads { animation: none; opacity: 0; }
+  .pea-edge-comet { animation: none; opacity: 0; }
+  .pea-edge-src-pulse { animation: none; opacity: 0; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -5958,6 +6011,29 @@ body {
   font-size: 15px;
   line-height: 1;
   pointer-events: none;
+}
+.node-prompt-editor .pea-ref-thumb-video {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: #000;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.node-prompt-editor .pea-ref-thumb-video-el {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.node-prompt-editor .pea-ref-thumb-video-fallback {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.75);
+  padding: 0 4px;
+  max-width: 80px;
 }
 .node-prompt-editor .pea-ref-text {
   padding: 5px 8px;

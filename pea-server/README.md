@@ -126,7 +126,7 @@ cd web && npm i && npm run dev   # http://localhost:5173 (vite 已代理 /api �
 
 ## 6. 后续迭代清单（建议优先级）
 
-1. **接真实大模型**：在 `app/llm_router.py` 填 `LiteLLMProvider.generate`（取消注释 `litellm` 调用 + 上传结果到 MinIO），改 `PEA_PROVIDER_PRIMARY/FALLBACK`。
+1. **接真实大模型**：在 `ai_providers` 表登记 `openai-compatible` 提供商（base_url/api_key/model_name），编排器经 `async_core/provider_adapter.py` 的 `AgnesAdapter` 统一调用；新增厂商只需加 `BaseProviderAdapter` 子类 + 工厂一行。`LiteLLMProvider` 等其它形态作为适配器子类扩展。
 2. **CI/质量门**：`.github/workflows` 串 lint+build+单测；补 BFF(Jest)/Orchestrator(pytest) 基线测试。
 3. **可观测**：OTel SDK + Prometheus + Grafana（ARCH D11），一个生成任务全程 trace。
 4. **E2E 关键链路**：上传→规划→生成→画布产出（T-OBS-02）。

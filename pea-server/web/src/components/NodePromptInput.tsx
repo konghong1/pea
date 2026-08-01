@@ -30,10 +30,15 @@ export interface ParsedPrompt {
 export interface NodePromptInputRef {
   getParsed: () => ParsedPrompt;
   setHtml: (html: string) => void;
-  focus: () => void;
+  focus: (opts?: FocusOptions) => void;
   get plainText(): string;
   /** 生成带「参考图N」编号的正文（媒体 @ token 替换为编号），N 由调用方按 reference_images 顺序给定 */
   getBodyText: (refNumberById?: Map<string, number>) => string;
+  /**
+   * 摘除指定上游节点的 @ 引用 token（连线被删 / 上游节点被删时调用）。
+   * 返回是否发生了实际变更，便于调用方决定是否同步草稿。
+   */
+  removeRefTokens: (nodeIds: string[]) => boolean;
 }
 
 interface UpstreamItem {
@@ -55,14 +60,15 @@ interface NodePromptInputProps {
   onInsertReference?: (nodeId: string) => void;
 }
 
-/** 从节点数据提取可作为参考图/文本引用的 URL 或内容。 */
+/** 从节点数据提取可作为参考图/文本引用的 URL 或内容（仅浏览器内显示用）。 */
 async function resolveNodeMediaUrl(node: FlowNode<PeaNodeData>): Promise<string | undefined> {
   const d = node.data;
   const urls = d.resultUrls?.length ? d.resultUrls : d.resultUrl ? [d.resultUrl] : [];
   const firstUrl = urls[0] || d.url;
-  // blob: URL 仅当前会话有效，刷新后失效；相对路径 /media/... 仅 nginx 反代可达，
-  // 外部模型(Agnes)无法访问。检测到两者时跳过，继续尝试 fileKey → 签名 URL 路径。
+  // 优先返回浏览器可直接加载的绝对 URL。
   if (firstUrl && firstUrl.startsWith('http') && !firstUrl.startsWith('//')) return firstUrl;
+  if (firstUrl && firstUrl.startsWith('data:')) return firstUrl;
+  if (firstUrl && firstUrl.startsWith('blob:')) return firstUrl;
   if (d.fileKey) {
     // 显示用途优先走 BFF 代理的 blob URL（同源，浏览器必然可加载，且不受 MinIO 内网/
     // CORS 限制影响）；仅当 BFF 代理失败时才退回预签名直链（可能被内网隔离导致浏览器加载失败）。
@@ -80,8 +86,10 @@ async function resolveNodeMediaUrl(node: FlowNode<PeaNodeData>): Promise<string 
     } catch (e) {
       console.warn('[resolveNodeMediaUrl] getPresignedUrl also failed', { nodeId: node.id, fileKey: d.fileKey, error: e });
     }
-    return undefined;
   }
+  // 兜底：返回本站公开 CDN 相对路径 /media/...，由 nginx 反代加载（浏览器内显示）。
+  // 注意：此 URL 不会发给外部模型，仅用于编辑器/picker 缩略图展示。
+  if (firstUrl && firstUrl.startsWith('/media/')) return firstUrl;
   if (!firstUrl && !d.fileKey) {
     console.warn('[resolveNodeMediaUrl] no resolvable media source', { nodeId: node.id, keys: Object.keys(d) });
   }
@@ -209,6 +217,10 @@ function insertRefToken(
   if (kind === 'image') {
     const imgUrl = isValidImageUrl(label) ? label : '';
     inner.appendChild(imgUrl ? createImageRefThumb(imgUrl, fileKey) : createImageRefPlaceholder());
+  } else if (kind === 'video') {
+    const videoUrl = isValidImageUrl(label) ? label : '';
+    // 视频 token 在编辑框中展示为「可识别的视频 pill」：优先显示文件名，hover/发送时解析真实 URL。
+    inner.appendChild(videoUrl ? createVideoRefThumb(videoUrl, fileKey) : createVideoRefPlaceholder(getFileNameFromLabel(label)));
   } else {
     inner.innerHTML = `<span class="pea-ref-text">${label}</span>`;
   }
@@ -229,8 +241,154 @@ function insertRefToken(
     editor.appendChild(span);
     editor.appendChild(document.createTextNode('\u200B'));
   }
-  editor.focus();
+  editor.focus({ preventScroll: true });
   renumberRefChips(editor);
+}
+
+function createVideoRefThumb(url: string, fileKey?: string | null): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'pea-ref-thumb pea-ref-thumb-video';
+  wrap.setAttribute('data-pea-pending', '0');
+  // 用视频首帧作为缩略图：video + img poster 双重保障
+  const video = document.createElement('video');
+  video.src = url;
+  video.preload = 'metadata';
+  video.muted = true;
+  video.playsInline = true;
+  video.className = 'pea-ref-thumb-video-el';
+  video.onerror = () => {
+    if (fileKey) {
+      getFileUrl(fileKey)
+        .then((blobUrl) => { if (blobUrl && video.parentElement) video.src = blobUrl; })
+        .catch(() => { /* leave fallback icon */ });
+    }
+  };
+  wrap.appendChild(video);
+  return wrap;
+}
+
+function createVideoRefPlaceholder(label?: string): HTMLElement {
+  const span = document.createElement('span');
+  span.className = 'pea-ref-thumb pea-ref-thumb-fallback-inline pea-ref-thumb-video-fallback';
+  span.setAttribute('data-pea-pending', '1');
+  span.textContent = label || '\u{1F3AC}';
+  return span;
+}
+
+function getFileNameFromLabel(label: React.ReactNode): string | undefined {
+  if (typeof label === 'string') return label;
+  if (typeof label === 'number') return String(label);
+  return undefined;
+}
+
+/** 纯文本 fallback 格式：@image#n1:filename / @video#n1:filename */
+const REF_FALLBACK_RE = /@(image|video)#([^:]+):([^\s\u200B]+)/g;
+
+/** 根据 nodeId 在当前上游节点中查找并插入对应 token。 */
+function tryInsertRefByNodeId(
+  editor: HTMLElement,
+  nodeId: string,
+  kind: PeaNodeKind,
+  resolvedThumbs: Record<string, string>,
+): boolean {
+  const node = useCanvas.getState().nodes.find((n) => n.id === nodeId);
+  if (!node) return false;
+  if (!canReferenceForKind(kind as PeaNodeKind, node.data.kind)) return false;
+  const display = isTextKind(node.data.kind)
+    ? getTextSummary(node)
+    : (resolvedThumbs[nodeId] || getFileName(node));
+  insertRefToken(editor, nodeId, node.data.kind, display, node.data.fileKey);
+  return true;
+}
+
+/** 把编辑器内残留的纯文本 fallback 转换为真实 token。 */
+function hydrateFallbackTokens(
+  editor: HTMLElement,
+  hostKind: PeaNodeKind,
+  resolvedThumbs: Record<string, string>,
+): boolean {
+  let changed = false;
+  // 遍历所有文本节点，查找 fallback 文本
+  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT, null);
+  const matches: Array<{ node: globalThis.Text; start: number; kind: PeaNodeKind; nodeId: string; name: string }> = [];
+  let textNode: globalThis.Node | null;
+  while ((textNode = walker.nextNode())) {
+    const str = textNode.textContent || '';
+    REF_FALLBACK_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = REF_FALLBACK_RE.exec(str))) {
+      const kind = m[1] as PeaNodeKind;
+      const nodeId = m[2];
+      const name = m[3];
+      if (canReferenceForKind(hostKind, kind)) {
+        matches.push({ node: textNode as globalThis.Text, start: m.index, kind, nodeId, name });
+      }
+    }
+  }
+  // 从后往前替换，避免 offset 漂移
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const { node, start, kind, nodeId, name } = matches[i];
+    const full = `@${kind}#${nodeId}:${name}`;
+    const text = node.textContent || '';
+    const before = text.slice(0, start);
+    const after = text.slice(start + full.length);
+    // 先创建 token
+    const refNode = document.createElement('span');
+    refNode.className = 'pea-ref';
+    refNode.contentEditable = 'false';
+    refNode.setAttribute('data-node-id', nodeId);
+    refNode.setAttribute('data-kind', kind);
+    refNode.setAttribute('data-pea-ref', '1');
+    const upstreamNode = useCanvas.getState().nodes.find((n) => n.id === nodeId);
+    if (upstreamNode?.data.fileKey) refNode.setAttribute('data-file-key', upstreamNode.data.fileKey);
+    const inner = document.createElement('span');
+    inner.className = 'pea-ref-inner';
+    inner.contentEditable = 'false';
+    if (kind === 'image') {
+      const url = resolvedThumbs[nodeId];
+      inner.appendChild(url ? createImageRefThumb(url, upstreamNode?.data.fileKey) : createImageRefPlaceholder());
+    } else if (kind === 'video') {
+      const url = resolvedThumbs[nodeId];
+      inner.appendChild(url ? createVideoRefThumb(url, upstreamNode?.data.fileKey) : createVideoRefPlaceholder(name));
+    } else {
+      inner.innerHTML = `<span class="pea-ref-text">${name}</span>`;
+    }
+    refNode.appendChild(inner);
+    // 替换文本节点
+    const parent = node.parentNode;
+    if (!parent) continue;
+    if (before) parent.insertBefore(document.createTextNode(before), node);
+    parent.insertBefore(refNode, node);
+    if (after) parent.insertBefore(document.createTextNode(after), node);
+    parent.removeChild(node);
+    // token 后补零宽空格光标锚点
+    const zwsp = document.createTextNode('\u200B');
+    parent.insertBefore(zwsp, refNode.nextSibling);
+    changed = true;
+  }
+  if (changed) renumberRefChips(editor);
+  return changed;
+}
+
+/** 清理编辑器内孤立/损坏的 token（无对应上游节点或 kind 不匹配）。 */
+function pruneOrphanRefTokens(editor: HTMLElement, hostKind: PeaNodeKind): boolean {
+  let changed = false;
+  editor.querySelectorAll<HTMLElement>('[data-pea-ref="1"]').forEach((span) => {
+    const id = span.getAttribute('data-node-id');
+    const kind = span.getAttribute('data-kind') as PeaNodeKind | null;
+    if (!id || !kind) return;
+    const node = useCanvas.getState().nodes.find((n) => n.id === id);
+    if (!node || !canReferenceForKind(hostKind, node.data.kind)) {
+      const next = span.nextSibling;
+      span.remove();
+      if (next && next.nodeType === Node.TEXT_NODE && (next.textContent ?? '') === '\u200B') {
+        next.parentNode?.removeChild(next);
+      }
+      changed = true;
+    }
+  });
+  if (changed) renumberRefChips(editor);
+  return changed;
 }
 
 /**
@@ -243,6 +401,88 @@ function renumberRefChips(editor: HTMLElement) {
   spans.forEach((span, i) => {
     span.setAttribute('data-ref-index', String(i + 1));
   });
+}
+
+/**
+ * 把编辑器内已存在的 @ 媒体 token 的缩略图指向最新 resolvedThumbs；
+ * 若当前是占位图标则替换为真实 <img>/<video>。
+ * 提取为独立函数，供「resolvedThumbs 同步 effect」与「粘贴后」两个入口复用——
+ * 后者尤为关键：从另一节点复制出来的 <img src="blob:..."> 在原文档可能有效，
+ * 但在目标节点上下文里若 blob 已被回收/不可达，必须重新指向当前 resolvedThumbs。
+ */
+function refreshTokenThumbnails(editor: HTMLElement, resolvedThumbs: Record<string, string>) {
+  editor.querySelectorAll<HTMLElement>('[data-pea-ref="1"]').forEach((span) => {
+    const id = span.getAttribute('data-node-id');
+    const k = span.getAttribute('data-kind') as PeaNodeKind;
+    if (!id || !isMediaKind(k)) return;
+    const url = resolvedThumbs[id];
+    if (!url) return;
+    const fileKey = span.getAttribute('data-file-key');
+
+    // 情况 1：当前是占位图标 -> 直接替换为真实媒体
+    const placeholder = span.querySelector('span.pea-ref-thumb-fallback-inline');
+    if (placeholder) {
+      placeholder.replaceWith(k === 'video' ? createVideoRefThumb(url, fileKey) : createImageRefThumb(url, fileKey));
+      return;
+    }
+
+    // 情况 2：当前已有 <img> -> 仅当 URL 真正变化时才更新 src
+    const img = span.querySelector('img.pea-ref-thumb');
+    if (img) {
+      if (img.getAttribute('src') !== url) {
+        img.setAttribute('src', url);
+        img.removeAttribute('data-pea-pending');
+      }
+      return;
+    }
+
+    // 情况 3：当前是 video token -> 更新 video src
+    const video = span.querySelector('video.pea-ref-thumb-video-el') as HTMLVideoElement | null;
+    if (video && video.getAttribute('src') !== url) {
+      video.setAttribute('src', url);
+      video.load();
+    }
+  });
+}
+
+/** 把编辑器内容序列化为「纯文本复制」形式：媒体 @ token 转成 @image#id:filename，
+ *  文本 @ token 展开为节点文本。这样即使用户把提示词粘贴到外部编辑器/另一节点，
+ *  参考图引用信息也不丢失（目标节点的 handlePaste 会重新 hydrate 成真实 token）。 */
+function getFileNameForNode(id: string): string | undefined {
+  const node = useCanvas.getState().nodes.find((n) => n.id === id);
+  if (!node) return undefined;
+  return getFileName(node);
+}
+
+function nodeToPlain(node: globalThis.Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    const el = node as HTMLElement;
+    if (el.getAttribute('data-pea-ref') === '1') {
+      const id = el.getAttribute('data-node-id') || '';
+      const kind = el.getAttribute('data-kind') || 'image';
+      if (kind === 'image' || kind === 'video') {
+        const name = getFileNameForNode(id) || (kind === 'video' ? '视频' : '图片');
+        return `@${kind}#${id}:${name}`;
+      }
+      const src = useCanvas.getState().nodes.find((n) => n.id === id);
+      return src ? getTextSummary(src, 100000) : '';
+    }
+    let s = '';
+    el.childNodes.forEach((c) => {
+      s += nodeToPlain(c);
+    });
+    return s;
+  }
+  return '';
+}
+
+function serializeEditorForCopy(editor: HTMLElement): string {
+  let out = '';
+  editor.childNodes.forEach((c) => {
+    out += nodeToPlain(c);
+  });
+  return out.replace(/\u200B/g, '');
 }
 
 /** 清理旧版持久化 HTML 中残留的「参考图N」角标，避免产品改版后仍显示旧文本。 */
@@ -258,7 +498,7 @@ function stripLegacyRefBadges(editor: HTMLElement) {
  * 而不是浏览器默认的「内容起始位置」——否则用户继续输入会插到最前面。
  */
 function placeCaretAtEnd(el: HTMLElement) {
-  el.focus();
+  el.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(el);
   range.collapse(false); // false = 折叠到末尾
@@ -392,33 +632,11 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
   }, [mediaKey, nodeId, kind]);
 
   // 引用 token 缩略图同步：当 resolvedThumbs 重新解析（如刷新后、上传图签名 URL 过期）时，
-  // 把编辑器中已存在的 @ token 的缩略图指向最新 URL；若当前是占位图标则替换为真实 <img>。
+  // 把编辑器中已存在的 @ token 的缩略图指向最新 URL；若当前是占位图标则替换为真实 <img>/<video>。
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    editor.querySelectorAll<HTMLElement>('[data-pea-ref="1"]').forEach((span) => {
-      const id = span.getAttribute('data-node-id');
-      const kind = span.getAttribute('data-kind') as PeaNodeKind;
-      if (!id || !isMediaKind(kind)) return;
-      const url = resolvedThumbs[id];
-      if (!url) return;
-
-      // 情况 1：当前是占位图标 -> 直接替换为真实图片
-      const placeholder = span.querySelector('span.pea-ref-thumb-fallback-inline');
-      if (placeholder) {
-        const fileKey = span.getAttribute('data-file-key');
-        placeholder.replaceWith(createImageRefThumb(url, fileKey));
-        return;
-      }
-
-      // 情况 2：当前已有 <img> -> 仅当 URL 真正变化时才更新 src
-      const img = span.querySelector('img.pea-ref-thumb');
-      if (!img) return;
-      if (img.getAttribute('src') !== url) {
-        img.setAttribute('src', url);
-        img.removeAttribute('data-pea-pending');
-      }
-    });
+    refreshTokenThumbnails(editor, resolvedThumbs);
   }, [resolvedThumbs]);
 
   const syncFromEditor = useCallback(() => {
@@ -446,16 +664,44 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
     if (editor.innerHTML !== init) {
       editor.innerHTML = init;
       stripLegacyRefBadges(editor);
-      syncFromEditor();
+      // 关键修复：把纯文本 fallback（如 @image#n1:name）转换回真实 token，
+      // 并清理已不存在上游节点的孤立 token。这在复制提示词/跨节点粘贴后尤为重要。
+      const changed1 = hydrateFallbackTokens(editor, kind, resolvedThumbs);
+      const changed2 = pruneOrphanRefTokens(editor, kind);
+      if (changed1 || changed2) {
+        syncFromEditor();
+      }
       renumberRefChips(editor);
     }
     // 还原内容后把光标停在末尾（修复：刷新/打开节点后光标停在开头，
     // 用户继续输入会插到最前面）。仅在有内容时聚焦；空的新节点保持原行为
     // （由节点切换 effect 的 setTimeout(focus) 处理，避免无谓抢焦点）。
     if (init) placeCaretAtEnd(editor);
-  }, [initialHtml, syncFromEditor]);
+  }, [initialHtml, syncFromEditor, kind, resolvedThumbs]);
 
   useImperativeHandle(ref, () => ({
+    removeRefTokens: (nodeIds: string[]) => {
+      const editor = editorRef.current;
+      if (!editor || !nodeIds.length) return false;
+      const kill = new Set(nodeIds);
+      let changed = false;
+      editor.querySelectorAll<HTMLElement>('[data-pea-ref="1"]').forEach((span) => {
+        const id = span.getAttribute('data-node-id');
+        if (!id || !kill.has(id)) return;
+        // 连同 token 后的零宽空格光标锚点一起清掉，避免残留不可见字符
+        const next = span.nextSibling;
+        if (next && next.nodeType === Node.TEXT_NODE && (next.textContent ?? '') === '\u200B') {
+          next.parentNode?.removeChild(next);
+        }
+        span.remove();
+        changed = true;
+      });
+      if (changed) {
+        renumberRefChips(editor);
+        syncFromEditor();
+      }
+      return changed;
+    },
     getParsed: () => {
       const editor = editorRef.current;
       if (!editor) return { text: '', referenceImages: [], referencedNodeIds: [], html: '' };
@@ -555,6 +801,9 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
       if (editor) {
         editor.innerHTML = h;
         stripLegacyRefBadges(editor);
+        // 切换节点/粘贴后：把纯文本 fallback 转换回 token，并清理孤立 token。
+        hydrateFallbackTokens(editor, kind, resolvedThumbs);
+        pruneOrphanRefTokens(editor, kind);
         renumberRefChips(editor);
         // 还原/刷新后把光标放到内容末尾，而非浏览器默认的起始位置
         // （修复：刷新/打开节点后光标停在开头，用户继续输入会插到最前面）。
@@ -569,7 +818,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
         onChange?.(nextHtml, nextText);
       }
     },
-    focus: () => editorRef.current?.focus(),
+  focus: (opts?: FocusOptions) => editorRef.current?.focus(opts),
     get plainText() {
       return editorRef.current?.innerText || '';
     },
@@ -828,10 +1077,59 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
     }
   };
 
+  /**
+   * 复制处理：接管浏览器默认复制，主动以「富文本 HTML + 纯文本 fallback」双格式写入剪贴板。
+   * - text/html：原始编辑器 innerHTML（含 data-pea-ref 结构），本应用内跨节点粘贴时
+   *   能 100% 还原 @ token 结构，不依赖浏览器对 contentEditable 的序列化偏好。
+   * - text/plain：把 @ token 序列化为 @image#id:filename（文本 token 展开为节点文本），
+   *   即使粘贴到外部编辑器或另一节点失去 HTML，也能经 handlePaste 的 fallback 分支重新 hydrate。
+   * 这是「复制提示词到另一节点显示不出来」问题的根因修复：之前依赖浏览器默认序列化，
+   * 跨文档/跨应用复制时 data-* 结构经常丢失，导致 @ 引用塌缩为纯文本或彻底消失。
+   */
+  const handleCopy = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const html = editor.innerHTML;
+    const plain = serializeEditorForCopy(editor);
+    e.clipboardData.setData('text/html', html);
+    e.clipboardData.setData('text/plain', plain);
+    e.preventDefault();
+  };
+
   const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     e.preventDefault();
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    // 优先尝试粘贴 HTML（保留 @ token 结构）。来自本应用内编辑框的复制通常带 text/html。
+    const html = e.clipboardData.getData('text/html');
+    if (html && /<[^>]+data-pea-ref/i.test(html)) {
+      document.execCommand('insertHTML', false, html);
+      stripLegacyRefBadges(editor);
+      hydrateFallbackTokens(editor, kind, resolvedThumbs);
+      pruneOrphanRefTokens(editor, kind);
+      renumberRefChips(editor);
+      // 关键：从另一节点复制出来的 <img src="blob:..."> 在目标节点上下文里可能不可达，
+      // 用当前 resolvedThumbs 把缩略图重新指向正确地址，避免裂图/占位。
+      refreshTokenThumbnails(editor, resolvedThumbs);
+      syncFromEditor();
+      return;
+    }
+
     const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+
+    // 如果粘贴的纯文本包含 fallback 引用（如 @image#n1:filename），
+    // 先按普通文本插入，再统一 hydrate 成 token。
     document.execCommand('insertText', false, text);
+    if (REF_FALLBACK_RE.test(text)) {
+      stripLegacyRefBadges(editor);
+      if (hydrateFallbackTokens(editor, kind, resolvedThumbs)) {
+        renumberRefChips(editor);
+        refreshTokenThumbnails(editor, resolvedThumbs);
+      }
+    }
+    syncFromEditor();
   };
 
   // ── 关键修复：点击后强制把光标定位到「点击坐标所在位置」──
@@ -918,6 +1216,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
         onInput={handleInput}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
+        onCopy={handleCopy}
         onMouseDown={(e) => {
           e.stopPropagation();
         }}

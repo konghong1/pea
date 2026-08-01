@@ -27,7 +27,7 @@
 - `models.py`：状态机 `queued→running→done/failed→refunded`（非法跳转拒绝）。
 - `redis_conn.py`：Redis Streams 队列（普通/极速）+ 事件发布。
 - `worker.py`：消费队列→调模型→回写→发布事件；每用户并发软护栏；失败→补偿退款。
-- `llm_router.py`：**LiteLLM 路由抽象**，主备回退；`MockProvider` 本地可跑通全链路，`LiteLLMProvider` 接入口预留。
+- `async_core/provider_adapter.py`：**统一 Provider 适配器抽象**（`BaseProviderAdapter`），按 `provider_type` 走 `AgnesAdapter`(OpenAI 兼容, 视频异步轮询) / `MockAdapter`(本地占位)；`GenerationResult` 收编至 `async_core/types.py`。原 `llm_router.py` 已合并删除。
 - `compensation.py`：失败经 BFF 内部退款。
 - `api.py`：受理/查询（生成域拥有者）。
 

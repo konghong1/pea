@@ -10,7 +10,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait: number) {
     t = setTimeout(() => fn(...args), wait);
   };
 }
-import { useCanvas, PeaNodeData } from '../store/canvas';
+import { useCanvas, PeaNodeData, stripRefTokens } from '../store/canvas';
 import { useAgent } from '../store/agent';
 import { toast } from '../store/toast';
 import { listAvailableModels, estimateCost, acceptNodeGenerationJob } from '../api/catalog';
@@ -19,6 +19,7 @@ import NodePromptInput, { NodePromptInputRef, ParsedPrompt } from './NodePromptI
 import { getFileUrl, getPresignedUrl } from '../api/files';
 import { PeaNodeKind } from '../constants/nodeTypes';
 import { pollNodeJobResult } from '../lib/nodeGeneration';
+import { syncBalance } from '../lib/balanceSync';
 
 /**
  * 节点生成结果轮询兜底：实现见 ../lib/nodeGeneration（pollNodeJobResult）。
@@ -94,11 +95,13 @@ async function resolveUpstreamMediaUrl(node: Node<PeaNodeData>): Promise<string 
   const d = node.data;
   const urls = d.resultUrls?.length ? d.resultUrls : d.resultUrl ? [d.resultUrl] : [];
   const firstUrl = urls[0] || d.url;
-  // ★ 关键修复：必须校验 scheme。
+  // ★ 关键修复：必须校验 scheme / 路径。
   // AI 生成图的 resultUrl 是相对路径 /media/...（PEA_CDN_BASE_URL=/media），
   // blob: URL 仅浏览器内可达——两者发给外部模型(Agnes)都会被编排器静默丢弃，
-  // 导致"参考图传了但视频和图完全无关"。强制走 fileKey → getPresignedUrl 获取真实签名 URL。
-  if (firstUrl && firstUrl.startsWith('http')) return firstUrl;
+  // 导致"参考图传了但视频和图完全无关"。
+  // 公网 http(s) 直链直接可用；本站公开 CDN 相对路径 /media/... 交给编排器解析为内部 MinIO key。
+  if (firstUrl && (firstUrl.startsWith('http') || firstUrl.startsWith('data:'))) return firstUrl;
+  if (firstUrl && firstUrl.startsWith('/media/')) return firstUrl;
   if (d.fileKey) {
     // 优先返回可外传的真实签名 URL（参考图需发给外部模型）；失败再退化为 blob 仅作显示。
     try {
@@ -204,7 +207,7 @@ async function streamNodeChat(opts: {
   onError: (e: any) => void;
 }): Promise<void> {
   const token = typeof localStorage !== 'undefined' ? localStorage.getItem('pea_token') : null;
-  const resp = await fetch('/chat/stream', {
+  const resp = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -733,7 +736,12 @@ export default function NodeChatPrompt() {
         });
         useCanvas.getState().removeJob(ev.jobId);
         toast.error(ev.error || '生成失败，已退款');
+      } else {
+        return;
       }
+      // 任务进入终态 = 结算或退款已落账，同步一次余额。
+      // 与 WS 的 balance.changed 幂等（都写服务端权威值），可防止两条事件先后到达时的展示错位。
+      syncBalance();
     };
     window.addEventListener('pea:event', onEvent);
     return () => window.removeEventListener('pea:event', onEvent);
@@ -778,7 +786,7 @@ export default function NodeChatPrompt() {
       const has =
         restored.replace(/<[^>]+>/g, '').trim().length > 0 || restored.includes('data-pea-ref');
       setHasInput(has);
-      setTimeout(() => inputRef.current?.focus(), 60);
+      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 60);
       // 恢复通过 + 选择器显式引用的节点 id
       const meta = (node?.data.meta ?? {}) as Record<string, unknown>;
       const saved = Array.isArray(meta.referencedNodeIds) ? (meta.referencedNodeIds as string[]) : [];
@@ -799,6 +807,47 @@ export default function NodeChatPrompt() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [referencedNodeIds, single]);
+
+  // ── 断线回收：连线被删 / 上游节点被删时，同步清掉引用条缩略图与编辑器 @ token ──
+  // store 侧已清理节点 meta（canvas.ts pruneDetachedRefs），此处负责让「当前正打开的输入框」
+  // 立即跟随。必须同步本地 referencedNodeIds state，否则上面的持久化 effect 会把已断开的
+  // 引用重新写回 meta；也必须清理草稿，否则恢复优先级(草稿 > localStorage > meta)会让 token 复活。
+  useEffect(() => {
+    const onDetached = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail as
+        | { targetId: string; removedRefIds: string[] }
+        | undefined;
+      if (!detail?.targetId || !detail.removedRefIds?.length) return;
+      const kill = new Set(detail.removedRefIds);
+
+      if (detail.targetId === single) {
+        setReferencedNodeIds((prev) =>
+          prev.some((id) => kill.has(id)) ? prev.filter((id) => !kill.has(id)) : prev,
+        );
+        inputRef.current?.removeRefTokens(detail.removedRefIds);
+      }
+
+      const cached = draftRef.current[detail.targetId];
+      if (cached && cached.includes('data-pea-ref')) {
+        const cleaned = stripRefTokens(cached, kill);
+        if (cleaned !== cached) draftRef.current[detail.targetId] = cleaned;
+      }
+      if (canvasId) {
+        try {
+          const lsKey = `pea:draft:${canvasId}:${detail.targetId}`;
+          const raw = localStorage.getItem(lsKey);
+          if (raw && raw.includes('data-pea-ref')) {
+            const cleaned = stripRefTokens(raw, kill);
+            if (cleaned !== raw) localStorage.setItem(lsKey, cleaned);
+          }
+        } catch {
+          /* localStorage 不可用时忽略，meta 已是干净的 */
+        }
+      }
+    };
+    window.addEventListener('pea:refs-detached', onDetached);
+    return () => window.removeEventListener('pea:refs-detached', onDetached);
+  }, [single, canvasId]);
 
   // ──「从画布选择参考」模式：点击图片/视频节点加入引用集合 ──
   useEffect(() => {
@@ -1335,7 +1384,7 @@ useEffect(() => {
       toast.success(referenceImages.length ? `已受理，含 ${referenceImages.length} 张参考图` : '已受理，生成中…');
       // 轮询兜底：WS 事件若丢失，保证长任务结果仍回填到节点
       pollNodeJobResult(res.jobId);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      setTimeout(() => inputRef.current?.focus({ preventScroll: true }), 0);
     } catch (e: any) {
       // 受理失败 (HTTP 4xx/5xx/网络) —— 节点不能卡在 generating=true,
       // 否则 HUD 4 角 + 中心 TechLoader 一直转. 同时写 error 给失败卡显示.

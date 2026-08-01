@@ -14,6 +14,7 @@ import { AssetsModule } from './modules/assets/assets.module';
 import { CanvasesModule } from './modules/canvases/canvases.module';
 import { ProvidersModule } from './modules/providers/providers.module';
 import { PlansModule } from './modules/plans/plans.module';
+import { OrdersModule } from './modules/orders/orders.module';
 import { CommunityModule } from './modules/community/community.module';
 import { GatewayModule } from './modules/gateway/gateway.module';
 import { RateLimitMiddleware } from './common/rate-limit.middleware';
@@ -35,6 +36,7 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
     CanvasesModule,
     ProvidersModule,
     PlansModule,
+    OrdersModule,
     CommunityModule,
     GatewayModule,
   ],

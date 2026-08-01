@@ -34,6 +34,7 @@
 
 ## ⚠️ 参考图 URL 约定（关键）
 - 发外部模型(Agnes)须真实可下载地址。**禁止**把 `getFileUrl` 的 `blob:` 当参考图(编排器会丢弃)。**禁止**把相对路径 `/media/...` 当参考图（同样被丢弃）。上传图/AI生成图作参考图用 `getPresignedUrl(fileKey)`。前端 `resolveUpstreamMediaUrl`/`resolveNodeMediaUrl`/`getParsed()` 均须校验 `startsWith('http')`。多图用 `buildReferenceBlock()` 按序编号拼到 prompt 前。
+- **图片 vs 视频的参考图策略(已重构为 Strategy)**: Agnes **图像**接口(`/v1/images/generations` 的 `extra_body.image[]`)**支持 base64 内联** —— 编排器把内部/相对 URL 经 MinIO 直下转 base64 直接内联,**图片生成根本不经公网**(无需配 PEA_CDN_BASE_URL/隧道); 只有 **视频**接口 `image` 字段只认 http(s) URL(不认 data URI), 才需 `_ensure_http_refs_for_video()` 转存公开 `gen/` 前缀 → CDN URL。参考图解析在 `app/param_adapters.py`: `Base64InlineStrategy`(图片) / `PublicUrlStrategy`(视频), 由各 ImageParamAdapter 声明 `ref_strategy`。
 - **视频参考图特殊**：Agnes 视频 API 的 `image` 字段只接受 http(s) URL（**不认 data URI**，图片接口的 `extra_body.image[]` 可以）。编排器 `_ensure_http_refs_for_video()` 将 data URI 转存到公开 `gen/` 前缀 → CDN URL。**生产必须设 `PEA_CDN_BASE_URL` 为公网可达地址**（localhost 对外部模型不可达）。
   ⚠️ **`PEA_CDN_BASE_URL` 绝不可用私网 IP/域名**（如 `192.168.x.x`、`10.x`、`127.x`、`localhost`、相对路径 `/media`）——外部模型(Agnes)在公网，路由不到你们内网。用户机器在 192.168.31.x 家庭/办公局域网，此地址对 Agnes 不可达。
   ✅ **本地联调方案**：用 `ngrok`/`cloudflared tunnel`/`frp` 把本机 8088 暴露到公网临时域名，再把 `PEA_CDN_BASE_URL` 设成该临时域名；生产则填真实公网域名或云存储(COS/OSS/S3)公开桶。
@@ -51,6 +52,8 @@
 ## 易复发 Bug
 - 文本节点拖动失效：编辑态 `stopPropagation`；非编辑态 `e.preventDefault()`(保冒泡)防 contentEditable 自动聚焦吞 mousedown。
 - 组节点删除必须批量清子节点（见上，否则白屏）。
+- **新增 API 前缀须同步代理白名单**：`infra/docker/nginx.conf` 的 location 正则 与 `web/vite.config.ts` 的 proxy 都需包含该前缀。漏配→该路由落到 SPA 回退返回 index.html，前端当数组用(.map/.some)→整树崩溃白屏且 routePersist 持久化导致刷新复现（案例：`/orders` 漏配致「订阅套餐」页白屏，2026-08-01 修）。列表类接口响应用 `api/client.ts` 的 `asArray()` 归一化兜底。
+  - **已重构：`/api` 统一前缀（2026-08-01）**：所有 BFF 接口现在统一以 `/api` 为前缀 —— BFF `main.ts` 注册 `app.setGlobalPrefix('api')`，前端 `api/client.ts` 的 `baseURL='/api'`，nginx 用 `location /api/ { proxy_pass http://bff:4000; }` 一条规则覆盖（**注意：`proxy_pass` 末尾不要带 `/`，否则会剥掉 `/api` 前缀，BFF 找不到路由**）。vite dev proxy 同理：**`/api: { target }` 即可，不要写 `rewrite: (p) => p.replace(/^\/api/, '')`**。前端直接 `fetch()` 调 API 的（如 `NodeChatPrompt.tsx` 的 `/chat/stream`）必须显式写 `/api/...`，绕过 baseURL。以后加新 controller **不用再动 nginx / vite proxy**。
 
 ## 画布节点交互（已修复，勿回退）
 - `.pea-node` **禁加 transform 过渡**：ReactFlow 拖拽时每帧直接写 `.react-flow__node` 的 `transform: translate3d`，CSS transform 过渡会与之冲突造成拖拽卡顿/抖动（用户误判为“工具栏乱跑”）。hover/选中反馈只用 box-shadow，下沉到 `.pea-node-body-card`。

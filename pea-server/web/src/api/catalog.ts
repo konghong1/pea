@@ -1,4 +1,5 @@
-import { api } from './client';
+import { api, asArray } from './client';
+import { syncBalance } from '../lib/balanceSync';
 
 /* ═══════════════════════════ 用户侧类型 ═══════════════════════════ */
 
@@ -99,7 +100,7 @@ export async function listAvailableModels(type?: ModelType): Promise<AvailableMo
   const { data } = await api.get<AvailableModel[]>('/models/available', {
     params: type ? { type } : undefined,
   });
-  return data ?? [];
+  return asArray<AvailableModel>(data);
 }
 
 /** 价格预估 (按参数动态计价)。 */
@@ -113,7 +114,7 @@ export async function estimateCost(
 
 export async function listPlans(): Promise<PlanView[]> {
   const { data } = await api.get<PlanView[]>('/plans');
-  return data ?? [];
+  return asArray<PlanView>(data);
 }
 
 /** 购买套餐。idempotencyKey 防重复到账 (同键多次提交只发放一次)。 */
@@ -139,6 +140,8 @@ export interface AcceptJobInput {
 /** 受理一次生成 (服务端按 模型+参数 权威算价并预扣, 客户端不得指定金额)。电商套图等批量生成走此接口; 节点图片/视频请改用 acceptNodeGenerationJob。 */
 export async function acceptGenerationJob(input: AcceptJobInput): Promise<AcceptJobResult> {
   const { data } = await api.post<AcceptJobResult>('/generation/jobs', input);
+  // 受理即预扣，主动同步余额（WS balance.changed 是快路径，此处为丢事件时的兜底）
+  syncBalance();
   return data;
 }
 
@@ -157,6 +160,8 @@ export interface AcceptNodeJobInput {
 /** 节点图片/视频生成 — 独立接口 POST /generation/node, 与电商套图 /generation/jobs 解耦。 */
 export async function acceptNodeGenerationJob(input: AcceptNodeJobInput): Promise<AcceptJobResult> {
   const { data } = await api.post<AcceptJobResult>('/generation/node', input);
+  // 受理即预扣，主动同步余额（覆盖节点生成 / 重试 / Agent 面板等全部提交路径）
+  syncBalance();
   return data;
 }
 
@@ -173,5 +178,5 @@ export interface UsageSummaryRow {
 /** 当前用户 token 用量汇总。 */
 export async function listUsageSummary(): Promise<UsageSummaryRow[]> {
   const { data } = await api.get<UsageSummaryRow[]>('/usage/summary');
-  return data ?? [];
+  return asArray<UsageSummaryRow>(data);
 }

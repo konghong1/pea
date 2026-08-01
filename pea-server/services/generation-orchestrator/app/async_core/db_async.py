@@ -142,7 +142,8 @@ def load_model_provider_cfg(model_id: Optional[str]) -> Optional[dict]:
                        p.enabled       AS provider_enabled,
                        p.completion_mode   AS completion_mode,
                        p.accepts_callback AS accepts_callback,
-                       p.webhook_secret   AS webhook_secret
+                       p.webhook_secret   AS webhook_secret,
+                       p.external_ref_base_url AS external_ref_base_url
                 FROM ai_models m
                 JOIN ai_providers p ON p.id = m.provider_id
                 WHERE m.id = %s
@@ -163,7 +164,8 @@ def load_provider_cfg(key: Optional[str]) -> Optional[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT base_url, api_key, provider_type, name AS provider_name,
-                          completion_mode, accepts_callback, webhook_secret
+                          completion_mode, accepts_callback, webhook_secret,
+                          external_ref_base_url
                    FROM ai_providers
                    WHERE id=%s OR name=%s
                    LIMIT 1""",
@@ -180,4 +182,5 @@ def load_provider_cfg(key: Optional[str]) -> Optional[dict]:
         "completion_mode": row.get("completion_mode") or "poll",
         "accepts_callback": bool(row.get("accepts_callback")),
         "webhook_secret": row.get("webhook_secret") or "",
+        "external_ref_base_url": (row.get("external_ref_base_url") or "").strip(),
     }

@@ -26,8 +26,12 @@ import httpx
 import requests
 
 from app.config import settings
-from app.llm_router import GenerationResult
-from app.param_adapters import normalize_image_params, get_image_adapter, _normalize_refs
+from app.async_core.types import GenerationResult
+from app.param_adapters import (
+    normalize_image_params,
+    get_image_adapter,
+    PublicUrlStrategy,
+)
 import base64
 import re
 
@@ -215,6 +219,10 @@ class OpenAICompatibleProvider:
         # 网关兜底地址: 官方 base_url 不可达时回退。默认空(不兜底);
         # 仅当显式配置 PEA_AI_GATEWAY 时启用。与 base_url 相同则视为无兜底。
         self.gateway_base: str = (settings.ai_gateway or "").strip()
+        # 每个 provider 各自声明「外部模型下载参考图用的公网基址」(per-provider)。
+        # 为空则回退到全局 settings.external_ref_base_url(PEA_EXTERNAL_REF_BASE_URL),
+        # 再回退 cdn_base_url。目的: 不同模型可用不同隧道/域名, 避免"一个隧道死=全挂"。
+        self.external_ref_base_url: str = (cfg.get("external_ref_base_url") or "").strip()
 
     def _headers(self) -> dict:
         return {
@@ -258,6 +266,9 @@ class OpenAICompatibleProvider:
         # 图生图 image 放哪、要不要用 tags)全部收敛到 param_adapters。
         norm = normalize_image_params(req)
         adapter = get_image_adapter(self.base_url)
+        # 按适配器声明的参考图策略解析: 图片=内联 base64 (不经公网);
+        # 视频=转公网 URL (PublicUrlStrategy)。策略由适配器单一决定。
+        norm.reference_images = adapter.ref_strategy.resolve(norm.reference_images, self)
         payload: dict[str, Any] = adapter.build(norm, self)
 
         url, fb = self._fb("/v1/images/generations")
@@ -277,6 +288,8 @@ class OpenAICompatibleProvider:
 
         norm = normalize_image_params(req)
         adapter = get_image_adapter(self.base_url)
+        # 同 _generate_image: 参考图按适配器声明的策略解析 (图片=base64内联, 不经公网)。
+        norm.reference_images = adapter.ref_strategy.resolve(norm.reference_images, self)
         payload: dict[str, Any] = adapter.build(norm, self)
 
         url, fb = self._fb("/v1/images/generations")
@@ -318,66 +331,22 @@ class OpenAICompatibleProvider:
         )
 
 
-def _ensure_http_refs_for_video(refs: list[str]) -> list[str]:
-    """确保视频参考图全部为 http(s) URL（Agnes 视频 API 的 image 字段只接受可下载 URL）。
+    # ── 视频 (异步提交 + 轮询) ───────────────────────────────────────
+    # ── 参考图解析(抽象钩子) ──────────────────────────────────────
+    def resolve_refs(self, refs: list[str]) -> list[str]:
+        """把参考图解析为外部模型可下载的 URL(抽象钩子, 代理层 BaseProviderAdapter 同签名).
 
-    _normalize_refs 对内部 URL(localhost/私有IP/容器别名)会降级成 base64 data URI，
-    这对图片接口（extra_body.image[] 数组）可以工作，但视频接口的顶层 image 字符串
-    字段只接受 http(s) URL，data URI 会被静默忽略 → 视频与参考图无关。
-
-    策略：检测到 data: URI 时，解码后通过 storage.store_bytes 上传到公开 gen/ 前缀，
-    返回 CDN URL。若 cdn_base_url 仍为 localhost（未配置公网入口），记录明确告警。
-    """
-    if not refs:
-        return refs
-
-    out: list[str] = []
-    for r in refs:
-        if r.startswith("data:"):
-            # 解码 data URI → 上传到公开存储 → 得到 HTTP URL
-            try:
-                match = re.match(r"data:([^;]+);base64,(.+)", r, re.DOTALL)
-                if not match:
-                    logger.warning("[video-ref] 无法解析 data URI 格式, 跳过 (前80字符): %s", r[:80])
-                    continue
-                mime = match.group(1)
-                b64_body = match.group(2)
-                # 补齐 base64 padding
-                padding = 4 - len(b64_body) % 4
-                if padding != 4:
-                    b64_body += "=" * padding
-                image_data = base64.b64decode(b64_body)
-                media_type = "image" if mime.startswith("image/") else "image"
-
-                # 延迟导入避免循环依赖
-                from app import storage
-                public_url = storage.store_bytes(image_data, media_type, content_type=mime)
-                out.append(public_url)
-                logger.info(
-                    "[video-ref] data URI (%d bytes) 已转存为公开 URL: %s",
-                    len(image_data), public_url[:120],
-                )
-            except Exception as exc:
-                logger.warning("[video-ref] data URI 转 HTTP URL 失败, 该参考图将被跳过: %s", exc)
-                continue
-        else:
-            out.append(r)
-
-    # 检查 CDN URL 是否真正可达（localhost 对外部模型不可达）
-    cdn = settings.cdn_base_url or ""
-    if out and ("localhost" in cdn or "127.0.0.1" in cdn or cdn.startswith("/")):
-        logger.warning(
-            "[video-ref] ⚠️ PEA_CDN_BASE_URL=%s 含 localhost 或相对路径 —— "
-            "Agnes 等**外部模型**可能无法下载转存后的参考图 URL。"
-            "生产环境需将 PEA_CDN_BASE_URL 设为公网可达地址（如 https://your-domain.com/media）。"
-            "当前 %d 张参考图可能仍被 Agnes 忽略。",
-            cdn, len(out),
+        默认实现: data URI 转存到公开 gen/ 前缀, 并按 per-provider external_ref_base_url
+        前缀替换为公网地址(Agnes 视频接口只接受 http(s) URL)。
+        新增模型若参考图喂法不同(如接受 data URI / 签名 URL / 不同 CDN),
+        覆写本方法即可, 无需复制整个提交逻辑 —— 这就是"加模型=只传参"的边界。
+        """
+        return _ensure_http_refs_for_video(
+            refs,
+            public_base=(self.external_ref_base_url or None),
+            cdn_base=settings.cdn_base_url,
         )
 
-    return out
-
-
-    # ── 视频 (异步提交 + 轮询) ───────────────────────────────────────
     def _build_video_payload(self, req: dict):
         params: dict = req.get("params") or {}
         # frame_rate: 1–60。必须是 8 的倍数才能保证 num_frames 满足 8n+1 (见下方归一化)。
@@ -402,12 +371,11 @@ def _ensure_http_refs_for_video(refs: list[str]) -> list[str]:
         # 兼容前端可能显式传 gen_mode (ti2vid/keyframes); 缺省时按参考图数量推断。
         # 注意: 旧实现完全忽略 gen_mode, 导致 UI 选择的生成模式无效。
         gen_mode = (params.get("gen_mode") or params.get("mode") or "").lower()
-        refs = _normalize_refs(params.get("reference_images"))
-        # ★ 关键修复：视频接口的 image 字段只接受可下载的 http(s) URL，
-        # 不接受 data: URI（图片接口 extra_body.image[] 数组可以）。
-        # _normalize_refs 对内部 URL(localhost等)会降级成 base64 data URI，
-        # 这里必须把 data URI 再转存到公开 gen/ 前缀，返回 Agnes 可访问的 CDN URL。
-        refs = _ensure_http_refs_for_video(refs)
+        raw_refs = params.get("reference_images")
+        # ★ 视频接口的 image 字段只接受可下载的 http(s) URL (不认 base64);
+        # 用 PublicUrlStrategy 把 data:/内部 URL 经 MinIO 转 base64 后, 再转存到
+        # 公开存储得到 Agnes 可访问的公网 URL (PEA_EXTERNAL_REF_BASE_URL/CDN 兜底)。
+        refs = PublicUrlStrategy().resolve(raw_refs, self)
         payload: dict[str, Any] = {
             "model": self.model_name,
             "prompt": req["prompt"],
@@ -508,7 +476,7 @@ def _ensure_http_refs_for_video(refs: list[str]) -> list[str]:
         raise last_err or RuntimeError("video status query failed")
 
     def _generate_video(self, req: dict) -> GenerationResult:
-        """同步全量路径 (提交 + 轮询). 保留给 route()/测试; 新消费链路走 _submit_video_only + Completer."""
+        """同步全量路径 (提交 + 轮询). 保留给测试/同步调用方; 新消费链路走 _submit_video_only + Completer."""
         sub = self._submit_video_only(req)
         if sub.get("direct_url"):
             # 直接透传公网 URL, 不走 MinIO 转存 (见 _generate_image 说明)。
@@ -582,6 +550,135 @@ def _ensure_http_refs_for_video(refs: list[str]) -> list[str]:
             raise RuntimeError(f"text response malformed: {_short(data)}") from exc
         return GenerationResult(url="", provider=self.provider_name, raw={}, text=content,
                                  usage=data.get("usage") or {})
+
+
+def _verify_public_ref_reachable(url: str) -> None:
+    """提交前预检：从编排器侧先拉一次参考图 URL, 确认它对「外部模型视角」是可达的图片。
+
+    背景：视频接口的 image 字段只接受 http(s) URL, 而外部模型(Agnes)处在公网上,
+    必须由 ``PEA_EXTERNAL_REF_BASE_URL`` 指向的隧道/公网域名把参考图暴露出去。
+    一旦该隧道子域过期(典型如花生壳/ngrok 子域失效), 外部请求会被隧道服务方回一个
+    HTTP 200 的 HTML 占位页 —— Agnes 拿到 HTML 而非图片就会报晦涩的
+    ``image URL could not be downloaded or did not return a valid supported image`` (HTTP 400)。
+
+    编排器与 Agnes 同为「外部」视角(都需经公网/隧道到达用户服务器), 故本侧拉取结果
+    可近似预测 Agnes 侧可达性。预检发现「非 2xx」或「Content-Type 非 image/*」时,
+    **提前抛出清晰错误**, 把原本要在 Agnes 侧才暴露的 400 变成一眼能定位的失败,
+    而不是静默把垃圾 URL 交给上游。
+
+    仅当本侧拉取本身网络异常(非内容问题, 如编排器出口被限)时才只告警不阻断 ——
+    这种情况可能是编排器侧的瞬时/出口限制, 仍交给 Agnes 最终判定, 避免误杀其实可达的 URL。
+    """
+    try:
+        resp = requests.get(
+            url,
+            timeout=(settings.provider_http_connect_timeout_s, 20),
+            stream=True,
+            proxies={"http": None, "https": None},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[video-ref] 预检拉取参考图异常(不阻断, 交 Agnes 最终判定): %s | %s",
+            url[:120], exc,
+        )
+        return
+    try:
+        ct = resp.headers.get("Content-Type", "") or ""
+        if resp.status_code // 100 == 2 and ct.startswith("image/"):
+            return
+        # 确属「不可达 / 非图片」: 抓一点响应体辅助定位(如隧道占位页 HTML)。
+        snippet = ""
+        try:
+            chunk = next(resp.iter_content(256), b"")
+            snippet = chunk.decode("utf-8", "replace")[:200]
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(
+            "视频参考图 URL 对外部模型不可达或返回非图片内容: "
+            f"{url[:140]} (HTTP {resp.status_code}, Content-Type={ct!r})。"
+            "请核查 PEA_EXTERNAL_REF_BASE_URL 指向的隧道/公网域名是否仍有效且能返回图片"
+            + (f"；疑似隧道占位页: {snippet!r}" if snippet else "")
+        )
+    finally:
+        resp.close()
+
+
+def _ensure_http_refs_for_video(refs: list[str], public_base: str | None = None,
+                                cdn_base: str | None = None) -> list[str]:
+    """确保视频参考图全部为 http(s) URL（Agnes 视频 API 的 image 字段只接受可下载 URL）。
+
+    _normalize_refs 对内部 URL(localhost/私有IP/容器别名)会降级成 base64 data URI，
+    这对图片接口（extra_body.image[] 数组）可以工作，但视频接口的顶层 image 字符串
+    字段只接受 http(s) URL，data URI 会被静默忽略 → 视频与参考图无关。
+
+    策略：检测到 data: URI 时，解码后通过 storage.store_bytes 上传到公开 gen/ 前缀，
+    再按 per-provider public_base（优先）/ 全局 PEA_EXTERNAL_REF_BASE_URL / PEA_CDN_BASE_URL
+    返回外部模型可下载的 URL。这样前端展示可走相对路径 /media（本站 nginx 代理 MinIO），
+    而 Agnes 拿到的是公网 URL。
+
+    public_base / cdn_base 由调用方(per-provider)显式传入；缺省时回退到全局 settings。
+    """
+    if not refs:
+        return refs
+
+    # 外部模型实际看到的基址；未传入则回退到全局 external_ref_base_url，再回退 cdn_base_url。
+    cdn_base = (cdn_base or settings.cdn_base_url or "").rstrip("/")
+    public_base = (public_base or settings.external_ref_base_url or cdn_base).rstrip("/")
+
+    out: list[str] = []
+    for r in refs:
+        if r.startswith("data:"):
+            # 解码 data URI → 上传到公开存储 → 得到内部 CDN URL
+            try:
+                match = re.match(r"data:([^;]+);base64,(.+)", r, re.DOTALL)
+                if not match:
+                    logger.warning("[video-ref] 无法解析 data URI 格式, 跳过 (前80字符): %s", r[:80])
+                    continue
+                mime = match.group(1)
+                b64_body = match.group(2)
+                # 补齐 base64 padding
+                padding = 4 - len(b64_body) % 4
+                if padding != 4:
+                    b64_body += "=" * padding
+                image_data = base64.b64decode(b64_body)
+                media_type = "image" if mime.startswith("image/") else "image"
+
+                # 延迟导入避免循环依赖
+                from app import storage
+                internal_url = storage.store_bytes(image_data, media_type, content_type=mime)
+                # 若外部参考图基址与内部 CDN 基址不同，则替换前缀给 Agnes
+                public_url = internal_url
+                if public_base and cdn_base and public_base != cdn_base and internal_url.startswith(cdn_base + "/"):
+                    public_url = public_base + internal_url[len(cdn_base):]
+            except Exception as exc:
+                logger.warning("[video-ref] data URI 转 HTTP URL 失败, 该参考图将被跳过: %s", exc)
+                continue
+            # 转存成功后做提交前可达性预检: 隧道失效会在此**清晰暴露**为可读错误,
+            # 而非把垃圾 URL 丢给 Agnes 吃晦涩的 "image URL could not be downloaded" 400。
+            # 预检失败(RuntimeError)直接上抛 -> 任务 FAILED + 退款, 用户能看到明确原因。
+            _verify_public_ref_reachable(public_url)
+            out.append(public_url)
+            logger.info(
+                "[video-ref] data URI (%d bytes) 已转存为公开 URL: %s",
+                len(image_data), public_url[:120],
+            )
+        else:
+            # 已是 http(s) URL: 同样做可达性预检(可能是已失效的公网地址 / 失效隧道子域)。
+            _verify_public_ref_reachable(r)
+            out.append(r)
+
+    # 检查最终给 Agnes 的 URL 是否真正公网可达
+    check_base = public_base or cdn_base
+    if out and ("localhost" in check_base or "127.0.0.1" in check_base or check_base.startswith("/")):
+        logger.warning(
+            "[video-ref] ⚠️ 外部参考图基址=%s 含 localhost 或相对路径 —— "
+            "Agnes 等**外部模型**可能无法下载转存后的参考图 URL。"
+            "请设置 PEA_EXTERNAL_REF_BASE_URL 为公网可达地址（如 https://your-domain.com/media）。"
+            "当前 %d 张参考图可能仍被 Agnes 忽略。",
+            check_base, len(out),
+        )
+
+    return out
 
 
 def _raise_for_provider(resp, what: str) -> None:

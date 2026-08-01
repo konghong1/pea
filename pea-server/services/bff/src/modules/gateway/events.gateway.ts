@@ -16,6 +16,9 @@ import { RedisPubSubService } from '../../infra/redis-pubsub.service';
 export class EventsGateway implements OnModuleInit, OnApplicationShutdown {
   private wss = new WebSocketServer({ noServer: true });
   private userSockets = new Map<number, Set<WebSocket>>();
+  private heartbeat?: ReturnType<typeof setInterval>;
+  /** 心跳周期: 需小于 nginx proxy_read_timeout(默认 60s), 否则空闲连接会被网关静默切断。 */
+  private static readonly HEARTBEAT_MS = 30_000;
 
   constructor(
     private readonly redis: RedisPubSubService,
@@ -44,9 +47,32 @@ export class EventsGateway implements OnModuleInit, OnApplicationShutdown {
       }
       this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws));
     });
+
+    // 3) 心跳巡检: 清理死连接.
+    //    无心跳时, 客户端异常掉线(休眠/断网/杀进程)的 socket 会长期滞留在 userSockets,
+    //    dispatch 往死 socket 写数据被静默丢弃 —— 表现为前端「余额/任务状态偶发不更新」。
+    this.heartbeat = setInterval(() => {
+      for (const ws of this.wss.clients) {
+        if (ws['isAlive'] === false) {
+          this.detach(ws);
+          ws.terminate();
+          continue;
+        }
+        ws['isAlive'] = false;
+        try {
+          ws.ping();
+        } catch {
+          /* 发送失败下一轮会被 terminate */
+        }
+      }
+    }, EventsGateway.HEARTBEAT_MS);
   }
 
   private onConnection(ws: WebSocket) {
+    ws['isAlive'] = true;
+    ws.on('pong', () => {
+      ws['isAlive'] = true;
+    });
     ws.on('message', (data) => {
       let msg: any;
       try {
@@ -54,7 +80,13 @@ export class EventsGateway implements OnModuleInit, OnApplicationShutdown {
       } catch {
         return;
       }
-      if (msg && msg.type === 'auth') this.authenticate(ws, msg.token);
+      if (!msg) return;
+      if (msg.type === 'auth') this.authenticate(ws, msg.token);
+      // 应用层 ping: 部分代理会吞掉 WS 协议层 ping/pong, 客户端可用它保活
+      else if (msg.type === 'ping') {
+        ws['isAlive'] = true;
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ kind: 'pong' }));
+      }
     });
     ws.on('close', () => this.detach(ws));
     ws.on('error', () => this.detach(ws));
@@ -90,6 +122,7 @@ export class EventsGateway implements OnModuleInit, OnApplicationShutdown {
   }
 
   onApplicationShutdown() {
+    if (this.heartbeat) clearInterval(this.heartbeat);
     this.wss.close();
   }
 }

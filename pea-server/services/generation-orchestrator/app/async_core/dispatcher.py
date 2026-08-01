@@ -198,7 +198,7 @@ def dispatch(job_id: str, payload: dict) -> bool:
     user_id = int(payload.get("user_id", 0) or 0)
     jtype = payload.get("type", "image")
 
-    # 开发/联调极速开关: 命中 type 直接走 MockProvider
+    # 开发/联调极速开关: 命中 type 直接走 MockAdapter
     if jtype in settings.force_mock_types_set:
         cfg: Optional[dict] = {"provider_type": "mock"}
     else:

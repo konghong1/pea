@@ -22,6 +22,12 @@ interface AuthState {
   planExpiresAt: string | null;
   setAuth: (token: string, user: AuthUser) => void;
   setBalance: (b: number) => void;
+  /**
+   * 轻量拉取 /billing/balance 同步余额。
+   * 用于生成提交/完成/退款等余额必然变动的时刻做兜底刷新——
+   * WS 的 balance.changed 事件是「快路径」，此接口是「慢路径保底」，两者幂等。
+   */
+  refreshBalance: () => Promise<void>;
   /** 拉取 /users/me 同步余额 + 角色 + 权益。返回是否成功。 */
   refreshMe: () => Promise<boolean>;
   /** 静默续期：用当前有效 token 换发新 token（延长会话）。失败返回 false（不动 user）。 */
@@ -43,6 +49,14 @@ export const useAuth = create<AuthState>((set) => ({
     set({ token, user });
   },
   setBalance: (balance) => set({ balance }),
+  refreshBalance: async () => {
+    try {
+      const { data } = await api.get<{ balance: number }>('/billing/balance');
+      if (typeof data?.balance === 'number') set({ balance: data.balance });
+    } catch {
+      /* 网络抖动时静默失败：WS 事件或下一次刷新会补上，不打扰用户 */
+    }
+  },
   refreshMe: async () => {
     try {
       const me = await getMe();

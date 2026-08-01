@@ -1,7 +1,7 @@
 """提示词构造层 (Phase2): 图片/视频节点按用户所选平台配置构造平台化提示词.
 
 设计对齐 learn-claude-code 的"注册表 + 钩子分层"哲学:
-- 加一个平台 = 在 PromptComposerRegistry 注册一个 compose() 函数, 核心 route() 循环永不动。
+- 加一个平台 = 在 PromptComposerRegistry 注册一个 compose() 函数, 核心生成调度(dispatch)流程永不动。
 - 加一类构造策略 = 注册一个新 mode 的 composer。
 
 两种内置模式 (由 PlatformConfig.prompt_mode 决定):

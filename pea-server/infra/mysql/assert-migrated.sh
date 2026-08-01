@@ -455,6 +455,7 @@ echo "[assert-migrated] checking async completion layer schema..."
 add_col_if_missing ai_providers completion_mode "completion_mode VARCHAR(16) NOT NULL DEFAULT 'poll' AFTER api_key"
 add_col_if_missing ai_providers accepts_callback "accepts_callback TINYINT NOT NULL DEFAULT 0 AFTER completion_mode"
 add_col_if_missing ai_providers webhook_secret  "webhook_secret VARCHAR(255) NOT NULL DEFAULT '' AFTER accepts_callback"
+add_col_if_missing ai_providers external_ref_base_url "external_ref_base_url VARCHAR(512) NOT NULL DEFAULT '' AFTER webhook_secret"
 
 HT_EXISTS=$($MYSQL_BIN -N -e \
   "SELECT COUNT(*) FROM information_schema.TABLES \
@@ -491,5 +492,79 @@ fi
 
 add_col_if_missing generation_jobs error "error TEXT NULL AFTER result_json"
 echo "[assert-migrated] async completion layer schema ready."
+
+# -----------------------------------------------------------------------------
+# 断言 10: 支付域 schema (payment_qrcodes / payment_orders)
+# 背景: 2026-08 关闭"用户自助购买直接到账"漏洞, 改为
+#       下单 -> 扫收款码付款 -> 管理员确认到账 -> grantPlan() 发放。
+# 这两张表是发放权益的唯一凭据, 缺表会让套餐页整条链路 500。
+# named volume 已建的老库不会重跑 01-schema.sql, 故在此幂等补建。
+# -----------------------------------------------------------------------------
+echo "[assert-migrated] checking payment domain schema..."
+
+QR_EXISTS=$($MYSQL_BIN -N -e \
+  "SELECT COUNT(*) FROM information_schema.TABLES \
+   WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME='payment_qrcodes'" 2>/dev/null || echo 0)
+if [[ "$QR_EXISTS" == "0" ]]; then
+  echo "[assert-migrated] FIX: payment_qrcodes missing -> CREATE"
+  $MYSQL_BIN -e "
+    CREATE TABLE $DB.payment_qrcodes (
+      id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      channel    ENUM('wechat','alipay','other') NOT NULL DEFAULT 'wechat',
+      label      VARCHAR(64) NOT NULL DEFAULT '',
+      image_key  VARCHAR(512) NOT NULL,
+      account_note VARCHAR(128) NOT NULL DEFAULT '',
+      enabled    TINYINT NOT NULL DEFAULT 1,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (id),
+      KEY idx_qrcode_enabled (enabled, sort_order)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  "
+fi
+
+ORD_EXISTS=$($MYSQL_BIN -N -e \
+  "SELECT COUNT(*) FROM information_schema.TABLES \
+   WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME='payment_orders'" 2>/dev/null || echo 0)
+if [[ "$ORD_EXISTS" == "0" ]]; then
+  echo "[assert-migrated] FIX: payment_orders missing -> CREATE"
+  $MYSQL_BIN -e "
+    CREATE TABLE $DB.payment_orders (
+      id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      order_no         VARCHAR(40)  NOT NULL,
+      user_id          BIGINT UNSIGNED NOT NULL,
+      plan_id          VARCHAR(64)  NOT NULL,
+      plan_name        VARCHAR(120) NOT NULL DEFAULT '',
+      plan_level       INT          NOT NULL DEFAULT 1,
+      tapies           INT          NOT NULL DEFAULT 0,
+      duration_days    INT          NOT NULL DEFAULT 30,
+      amount_cents     INT          NOT NULL DEFAULT 0,
+      pay_amount_cents INT          NOT NULL DEFAULT 0,
+      provider         VARCHAR(32)  NOT NULL DEFAULT 'manual_qr',
+      qrcode_id        BIGINT UNSIGNED NULL,
+      status           ENUM('pending','submitted','paid','rejected','cancelled','expired')
+                       NOT NULL DEFAULT 'pending',
+      proof_key        VARCHAR(512) NULL,
+      proof_note       VARCHAR(255) NULL,
+      external_txn_id  VARCHAR(128) NULL,
+      paid_amount_cents INT         NULL,
+      reviewer_id      BIGINT UNSIGNED NULL,
+      reviewed_at      DATETIME(3)  NULL,
+      review_note      VARCHAR(255) NULL,
+      granted          TINYINT      NOT NULL DEFAULT 0,
+      expires_at       DATETIME(3)  NOT NULL,
+      created_at       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at       DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_order_no (order_no),
+      KEY idx_orders_user (user_id, created_at),
+      KEY idx_orders_status (status, created_at),
+      KEY idx_orders_amount (status, pay_amount_cents),
+      CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES $DB.users (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  "
+fi
+echo "[assert-migrated] payment domain schema ready."
 
 echo "[assert-migrated] all assertions passed."

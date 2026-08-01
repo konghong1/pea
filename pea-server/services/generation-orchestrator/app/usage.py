@@ -1,6 +1,6 @@
 """Phase3 token 计量钩子: 生成完成后把用量写入 usage_records.
 
-这是"生成后钩子"的锚点 (对齐设计文档 PostGenerationHook): 核心 route() 循环不感知计量,
+这是"生成后钩子"的锚点 (对齐设计文档 PostGenerationHook): 核心生成调度(dispatch)流程不感知计量,
 只在 DONE 后调一次 record_usage。后续要加计费公式 / 告警, 只改这里, 不动生成主流程。
 """
 from __future__ import annotations

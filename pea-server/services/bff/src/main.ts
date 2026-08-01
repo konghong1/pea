@@ -12,6 +12,10 @@ async function bootstrap() {
   // await 保证首个请求到达时代理策略已定型, 无竞态。
   await installEgressProxyFromEnv();
   const app = await NestFactory.create(AppModule);
+  // 所有 controller 自动加 /api 前缀。
+  // 前端 axios baseURL='/api' + nginx location /api/ { proxy_pass http://bff:4000/; }
+  // 一条规则覆盖所有接口，以后新增 controller 不用再维护网关白名单。
+  app.setGlobalPrefix('api');
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: false }),
