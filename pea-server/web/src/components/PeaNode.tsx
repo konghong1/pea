@@ -11,6 +11,11 @@ import NodeIcon, { GeneratingBadge, UploadBadge, kindColor } from './NodeIcon';
 import TextNodeToolbar from './TextNodeToolbar';
 import TechLoader from './TechLoader';
 import { retryNodeGeneration } from '../lib/nodeGeneration';
+import {
+  acceptsUpstreamInput,
+  isGeneratedMediaNode,
+  isUserUploadedMediaNode,
+} from '../lib/nodeSemantics';
 
 /** 数值夹取，用于连接点跟随鼠标的小范围限制 */
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -64,8 +69,10 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const hasMediaContent = kind === 'image'
     ? hasImage
     : !!(data.url || data.fileKey || data.resultUrl || data.resultUrls?.length);
-  // 用户上传的图片（非 AI 生成结果）——不需要接收其他节点输入，隐藏左手柄
-  const isUserUploadedImage = kind === 'image' && !!(data.fileKey || data.url) && !(data.resultUrl || data.resultUrls?.length);
+  // 用户自己上传的媒体（图片/视频/音频，非 AI 生成结果）——不需要接收其他节点输入，
+  // 隐藏左侧输入连接点。与「AI 生成结果」区分：AI 生成结果来自上游/生成流，仍可能需要接收上游输入。
+  // 判定统一收敛到 lib/nodeSemantics，避免与画布连线校验 / 徽章 / 编辑框显隐各写一套而漂移。
+  const isUserUploadedMedia = isUserUploadedMediaNode(data);
   // 有上游输入连接时，媒体节点内容将由上游提供，不再展示上传入口（视频/音频与图片保持一致）
   const upstreamInputs = useCanvas((s) => s.getUpstreamInputs(id));
   const hasUpstreamInput = upstreamInputs.length > 0;
@@ -288,8 +295,8 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       data-kind={kind}
       style={{ ...outerStyle, '--pea-hx-l': '0px', '--pea-hy-l': '0px', '--pea-hx-r': '0px', '--pea-hy-r': '0px' } as React.CSSProperties}
     >
-      {/* 左手柄：用户上传的图片不需要接收其他节点输入，隐藏 */}
-      {!isUserUploadedImage && (
+      {/* 左手柄：用户上传的图片/视频/音频不需要接收其他节点输入，隐藏（判定见 lib/nodeSemantics） */}
+      {acceptsUpstreamInput(data) && (
         <Handle
           type="target"
           id="in"
@@ -447,7 +454,7 @@ function MediaNodeBody({
   // 仅 audio 在内部保留类型标识。
   const showMediaLabel = kind === 'audio';
   // 「替换」按钮约定：仅用户上传的媒体才显示（与图片节点一致）；AI 生成结果不显示替换。
-  const isUserUploaded = !!(data.fileKey || data.url) && !hasResult;
+  const isUserUploaded = isUserUploadedMediaNode(data);
   const canReplace = isUserUploaded;
 
   if (data.generating) {
@@ -473,7 +480,7 @@ function MediaNodeBody({
             <NodeIcon kind={kind} size={12} /> {tagLabel}
           </span>
         )}
-        <NodeGenFailure id={id} error={data.error} />
+        <NodeGenFailure id={id} error={data.error} prompt={data.prompt} meta={data.meta} />
       </div>
     );
   }
@@ -1075,6 +1082,19 @@ function formatBytes(n: number) {
  * 让失败态成为画布「命令面板」的一部分，而非突兀的警告弹窗。
  * ═════════════════════════════════════════════════════════════════════════════ */
 
+/** 清理提示词中的原始引用标记，避免 @image#id:filename 等内部协议泄露到 UI。
+ *  - @image#xxx / @video#xxx  →  「图片」/「视频」（保留语义但隐藏内部 id 和文件名）
+ *  - 多余的连续空白              →  单个空格
+ */
+const REF_FALLBACK_CLEAN_RE = /@(image|video)#([^\s]+):([^\s\u200B]*)/g;
+function sanitizePromptForDisplay(raw?: string): string {
+  if (!raw?.trim()) return '';
+  return raw
+    .replace(REF_FALLBACK_CLEAN_RE, (_m, kind) => kind === 'video' ? '🎬 视频' : '🖼 图片')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 /** 把后端原始错误归类为 { title, hint, detail }. */
 function parseGenError(raw: string): { title: string; hint: string; detail: string | null } {
   const s = String(raw || '').trim();
@@ -1129,13 +1149,57 @@ function parseGenError(raw: string): { title: string; hint: string; detail: stri
   };
 }
 
-function NodeGenFailure({ id, error }: { id: string; error: string }) {
+/** 媒体/生成节点卡片底部：回显用户填写的提示词与关键参数（修复"提示词没回显"）。
+ *  多行截断（line-clamp）而非滚动条，保持卡片精致。 */
+function NodePromptEcho({ data }: { data: PeaNodeData }) {
+  // 优先使用用户原始输入（editorText），避免机器 prompt 泄露内部标记
+  const rawEditorText = (data.meta?.editorText as string)?.trim();
+  const rawPrompt = data.prompt?.trim();
+  const p = rawEditorText || sanitizePromptForDisplay(rawPrompt);
+  if (!p) return null;
+  const params = data.params as Record<string, unknown> | undefined;
+  const meta = data.meta as Record<string, unknown> | undefined;
+  const bits: string[] = [];
+  const aspect = params?.aspect_ratio ?? meta?.aspectRatio;
+  const resolution = params?.resolution ?? meta?.resolution;
+  if (aspect) bits.push(`比例 ${aspect}`);
+  if (resolution) bits.push(`${resolution}`);
+  if (params?.duration != null) bits.push(`时长 ${params.duration}s`);
+  if (params?.audio_enabled != null) bits.push(params.audio_enabled ? '含音频' : '静音');
+  if (params?.gen_mode) bits.push(`模式 ${params.gen_mode}`);
+  const refs = Array.isArray(params?.reference_images) ? (params!.reference_images as unknown[]).length : 0;
+  if (refs > 0) bits.push(`${refs} 张参考图`);
+  const model = params?.model ?? meta?.modelId;
+  if (model) bits.push(`${model}`);
+  return (
+    <div className="pea-node-prompt-echo" title={p}>
+      <span className="pea-node-prompt-echo-label">提示词</span>
+      <p className="pea-node-prompt-echo-text">{p}</p>
+      {bits.length > 0 && <div className="pea-node-prompt-echo-params">{bits.join(' · ')}</div>}
+    </div>
+  );
+}
+
+function NodeGenFailure({ id, error, prompt, meta }: { id: string; error: string; prompt?: string; meta?: Record<string, unknown> }) {
   const update = useCanvas((s) => s.updateNodeData);
-  const [expanded, setExpanded] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const parsed = useMemo(() => parseGenError(error), [error]);
+
+  // 优先显示用户原始输入（editorText），避免合并后的机器 prompt（含参考图说明、@image 标记）泄露
+  const displayPrompt = useMemo(() => {
+    const userText = (meta?.editorText as string)?.trim();
+    if (userText) return sanitizePromptForDisplay(userText);
+    return sanitizePromptForDisplay(prompt);
+  }, [prompt, meta]);
 
   return (
     <div className="pea-node-failure" role="alert">
+      {displayPrompt && (
+        <div className="pea-node-failure-prompt" title={displayPrompt}>
+          <span className="pea-node-failure-prompt-label">当时提示词</span>
+          <p className="pea-node-failure-prompt-text">{displayPrompt}</p>
+        </div>
+      )}
       <div className="pea-node-failure-head">
         <div className="pea-node-failure-mark" aria-hidden title="任务异常">
           {/* 科技风状态指示：角括号 + 脉冲琥珀点，替代传统警告圆圈 */}
@@ -1146,24 +1210,14 @@ function NodeGenFailure({ id, error }: { id: string; error: string }) {
           <div className="pea-node-failure-hint">{parsed.hint}</div>
         </div>
       </div>
-      {parsed.detail && (
-        <>
+      <div className="pea-node-failure-actions">
+        {parsed.detail && (
           <button
             type="button"
-            className="pea-node-failure-detail-toggle"
-            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
-            aria-expanded={expanded}
-          >
-            {expanded ? '收起详情' : '查看详情'}
-          </button>
-          {expanded && (
-            <pre className="pea-node-failure-detail" onClick={(e) => e.stopPropagation()}>
-              {parsed.detail}
-            </pre>
-          )}
-        </>
-      )}
-      <div className="pea-node-failure-actions">
+            className="pea-btn pea-btn--ghost pea-btn--sm"
+            onClick={(e) => { e.stopPropagation(); setDialogOpen(true); }}
+          >查看详情</button>
+        )}
         <button
           type="button"
           className="pea-btn pea-btn--ghost pea-btn--sm"
@@ -1175,7 +1229,97 @@ function NodeGenFailure({ id, error }: { id: string; error: string }) {
           onClick={(e) => { e.stopPropagation(); retryNodeGeneration(id); }}
         >重新生成</button>
       </div>
+      {dialogOpen && (
+        <GenErrorDialog
+          title={parsed.title}
+          detail={parsed.detail ?? error}
+          raw={error}
+          onClose={() => setDialogOpen(false)}
+        />
+      )}
     </div>
+  );
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 错误详情弹层：把冗长原始错误从「节点内联滚动」改为「浮层展示」。
+ * - portal 到 body，避免被画布缩放/裁剪。
+ * - 毛玻璃遮罩 + 居中科技卡，Esc / 点击遮罩关闭，支持一键复制原文。
+ * ═════════════════════════════════════════════════════════════════════════════ */
+function GenErrorDialog({
+  title,
+  detail,
+  raw,
+  onClose,
+}: {
+  title: string;
+  detail: string;
+  raw: string;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(raw);
+      setCopied(true);
+      toast.success('错误详情已复制');
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast.error('复制失败，请手动选择文本');
+    }
+  };
+
+  return createPortal(
+    <div className="pea-error-dialog-backdrop" onClick={onClose} role="presentation">
+      <div
+        className="pea-error-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="错误详情"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="pea-error-dialog-head">
+          <span className="pea-error-dialog-icon" aria-hidden>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3 2 20h20L12 3Z" />
+              <path d="M12 9v5" />
+              <path d="M12 17h.01" />
+            </svg>
+          </span>
+          <div className="pea-error-dialog-titles">
+            <div className="pea-error-dialog-title">{title}</div>
+            <div className="pea-error-dialog-sub">生成任务失败原因</div>
+          </div>
+          <button
+            type="button"
+            className="pea-error-dialog-close"
+            aria-label="关闭"
+            onClick={onClose}
+          >
+            ×
+          </button>
+        </header>
+        <pre className="pea-error-dialog-body">{detail}</pre>
+        <footer className="pea-error-dialog-foot">
+          <button type="button" className="pea-btn pea-btn--ghost pea-btn--sm" onClick={copy}>
+            {copied ? '已复制' : '复制错误'}
+          </button>
+          <button type="button" className="pea-btn pea-btn--sm" onClick={onClose}>
+            知道了
+          </button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1204,7 +1348,7 @@ function GenericNodeBody({
               <TechLoader label="生成中…" />
             </div>
           ) : data.error && !data.resultUrl ? (
-            <NodeGenFailure id={id} error={data.error} />
+            <NodeGenFailure id={id} error={data.error} prompt={data.prompt} meta={data.meta} />
           ) : data.resultUrl ? (
             <div className="pea-node-result-image-wrap">
               <img src={data.resultUrl} alt={data.prompt || tagLabel} className="pea-node-media-preview pea-node-result-preview" />
@@ -1238,14 +1382,9 @@ function NodeBadge({
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 媒体节点：判断是 AI 生成结果还是用户上传
-  const hasResult = !!(data.resultUrl || data.resultUrls?.length);
-  const isUserUploadedMedia =
-    (kind === 'image' || kind === 'video' || kind === 'audio') &&
-    !!(data.fileKey || data.url) &&
-    !hasResult;
-  const isGeneratedMedia =
-    (kind === 'image' || kind === 'video' || kind === 'audio') && hasResult;
+  // 媒体节点：判断是 AI 生成结果还是用户上传（统一判定，见 lib/nodeSemantics）
+  const isUserUploadedMedia = isUserUploadedMediaNode(data);
+  const isGeneratedMedia = isGeneratedMediaNode(data);
 
   // 默认标签：上传媒体偏“资源”语义，生成媒体偏“生成”语义
   const defaultLabel = useMemo(() => {

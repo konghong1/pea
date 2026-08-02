@@ -102,6 +102,22 @@ export default function Admin() {
 
 const PROVIDER_KINDS = ['image', 'video', 'text', 'audio'] as const;
 
+// 适配器类型 —— 必须与后端 app/providers 下 @register_provider 的注册名逐字一致，
+// 否则编排器会回退到 openai-compatible 并在调用时报出难以定位的协议错误。
+const PROVIDER_TYPE_OPTIONS = [
+  { value: 'openai-compatible', label: 'openai-compatible（Agnes / OpenAI 兼容）' },
+  { value: 'minimax', label: 'minimax（视频 v2+v1 / 图像 / 文本 / 音乐 / 语音）' },
+  { value: 'anthropic-compatible', label: 'anthropic-compatible（Anthropic Messages 协议）' },
+  { value: 'mock', label: 'mock（本地占位，不出网）' },
+];
+
+const PROVIDER_TYPE_COLOR: Record<string, string> = {
+  'openai-compatible': 'blue',
+  minimax: 'volcano',
+  'anthropic-compatible': 'geekblue',
+  mock: 'default',
+};
+
 function ProvidersPane() {
   const { message } = App.useApp();
   const [rows, setRows] = useState<ProviderView[]>([]);
@@ -164,7 +180,16 @@ function ProvidersPane() {
       ),
     },
     { title: 'ID', dataIndex: 'id', width: 120 },
-    { title: '类型', dataIndex: 'providerType', width: 150 },
+    {
+      title: '类型',
+      dataIndex: 'providerType',
+      width: 190,
+      render: (v: string) => (
+        <Tag color={PROVIDER_TYPE_COLOR[v] ?? 'default'} style={{ marginInlineEnd: 0 }}>
+          {v}
+        </Tag>
+      ),
+    },
     {
       title: 'Base URL',
       dataIndex: 'baseUrl',
@@ -463,16 +488,19 @@ function ProviderModal({
         <Form.Item label="名称" name="name" rules={[{ required: true, message: '请输入名称' }]}>
           <Input placeholder="展示名称" />
         </Form.Item>
-        <Form.Item label="提供商类型" name="providerType" tooltip="openai-compatible 走真实调用；mock 走本地占位">
-          <Select
-            options={[
-              { value: 'openai-compatible', label: 'openai-compatible（真实调用）' },
-              { value: 'mock', label: 'mock（本地占位）' },
-            ]}
-          />
+        <Form.Item
+          label="提供商类型"
+          name="providerType"
+          tooltip="决定后端用哪个适配器发请求，必须与上游实际协议一致，选错会直接 4xx"
+        >
+          <Select options={PROVIDER_TYPE_OPTIONS} />
         </Form.Item>
-        <Form.Item label="Base URL" name="baseUrl" tooltip="如 https://apihub.agnes-ai.com/v1">
-          <Input placeholder="https://.../v1" />
+        <Form.Item
+          label="Base URL"
+          name="baseUrl"
+          tooltip="MiniMax 请填到域名为止（端点横跨 /v1 与 /v2，由适配器自行拼版本号）"
+        >
+          <Input placeholder="https://apihub.agnes-ai.com/v1 或 https://api.minimaxi.com" />
         </Form.Item>
         <Form.Item
           label="API Key"

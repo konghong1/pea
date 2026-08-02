@@ -351,7 +351,11 @@ CREATE TABLE IF NOT EXISTS work_comments (
 CREATE TABLE IF NOT EXISTS ai_providers (
     id            VARCHAR(64)  NOT NULL,
     name          VARCHAR(120) NOT NULL,
-    -- 适配器类型: openai-compatible (Agnes / OpenAI 兼容) / mock (本地占位, 不出网)
+    -- 适配器类型 (与 app/providers 下 @register_provider 注册名一一对应):
+    --   openai-compatible    Agnes / OpenAI 兼容
+    --   minimax              MiniMax 原生 (视频 v2+v1 / 图像 / 文本 / 音乐 / 语音)
+    --   anthropic-compatible Anthropic Messages 协议 (官方或第三方兼容层)
+    --   mock                 本地占位, 不出网
     provider_type VARCHAR(40)  NOT NULL DEFAULT 'openai-compatible',
     base_url      VARCHAR(500) NOT NULL DEFAULT '',
     -- 密钥: 明文存储于内网库, 仅内部服务读取; 对前端返回时必须脱敏 (见 providers.service)。
@@ -577,6 +581,66 @@ INSERT INTO ai_models (id, provider_id, model_name, display_name, model_type, en
  JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'),
  JSON_OBJECT(),
  '对话/文本生成', 4)
+ON DUPLICATE KEY UPDATE
+    model_name=VALUES(model_name), display_name=VALUES(display_name),
+    model_type=VALUES(model_type), pricing_json=VALUES(pricing_json),
+    params_schema_json=VALUES(params_schema_json), min_plan_level=VALUES(min_plan_level),
+    description=VALUES(description);
+
+-- ---------------------------------------------------------------------------
+-- MiniMax 提供商 (全模型: 视频 v2/v1 + 图像 + 文本) 与 Anthropic 兼容层。
+--
+-- 两个 provider 指向同一家上游、同一把密钥, 差别只在协议:
+--   minimax            原生协议 —— 视频/图像/文本/音乐/语音全覆盖 (适配器 app/providers/minimax.py)
+--   minimax-anthropic  Anthropic Messages 协议 —— 仅文本, 供需要 Anthropic 格式的
+--                      调用方复用同一份额度 (适配器 app/providers/anthropic_compat.py)
+--
+-- ⚠️ base_url 不带 /v1: MiniMax 端点分散在 /v1/* 与 /v2/* 两个版本下,
+--    适配器按模型自行拼版本号。写死 /v1 会让 v2 视频 (MiniMax-H3) 拼错地址。
+-- ---------------------------------------------------------------------------
+INSERT INTO ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
+VALUES ('minimax', 'MiniMax 海螺', 'minimax', 'https://api.minimaxi.com',
+        'sk-api-mELFQR0n6C3YXNK17vIh7V8SjSdrvwtuBvHXi0jHgLQvJBYvV2ECk4aU0FUOjHQGZXOSnXhD25QiiljSxDQj8rwAasiT3b_pOVb8L0JjPZsdUy649CAJVi0',
+        'video', 1, 0)
+ON DUPLICATE KEY UPDATE
+    name=VALUES(name), provider_type=VALUES(provider_type),
+    base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1;
+
+INSERT INTO ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
+VALUES ('minimax-anthropic', 'MiniMax (Anthropic 兼容)', 'anthropic-compatible',
+        'https://api.minimaxi.com/anthropic',
+        'sk-api-mELFQR0n6C3YXNK17vIh7V8SjSdrvwtuBvHXi0jHgLQvJBYvV2ECk4aU0FUOjHQGZXOSnXhD25QiiljSxDQj8rwAasiT3b_pOVb8L0JjPZsdUy649CAJVi0',
+        'text', 1, 0)
+ON DUPLICATE KEY UPDATE
+    name=VALUES(name), provider_type=VALUES(provider_type),
+    base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1;
+
+-- MiniMax 模型 (参数档位均已按上游报错原文逐一实测校准, 见适配器注释)。
+--   MiniMax-H3        v2 端点; resolution 仅 2K; duration 4~15s; 纯文生视频 ratio 必填
+--   MiniMax-Hailuo-02 v1 端点; resolution 512P/768P/1080P; 两段式 file_id 取回
+--   image-01          同步出图; 按 n 倍率计价
+INSERT INTO ai_models (id, provider_id, model_name, display_name, model_type, enabled, is_default, min_plan_level, pricing_json, params_schema_json, description, sort_order) VALUES
+('minimax-h3', 'minimax', 'MiniMax-H3', 'MiniMax 视频 H3 (2K)', 'video', 1, 0, 2,
+ JSON_OBJECT('base', 150, 'tiers', JSON_OBJECT('duration', JSON_OBJECT('5', 0, '6', 20, '10', 140)), 'multiplier', 'n'),
+ JSON_OBJECT('size', JSON_ARRAY('2K'), 'duration', JSON_ARRAY(5, 6, 10), 'n', JSON_ARRAY(1)),
+ '旗舰视频模型, 原生 2K, 支持首帧/参考图, 需专业套餐', 11),
+('minimax-hailuo-02', 'minimax', 'MiniMax-Hailuo-02', 'MiniMax 海螺视频 02', 'video', 1, 0, 1,
+ JSON_OBJECT('base', 80, 'tiers', JSON_OBJECT('size', JSON_OBJECT('1K', 0, '2K', 40), 'duration', JSON_OBJECT('6', 0, '10', 60)), 'multiplier', 'n'),
+ JSON_OBJECT('size', JSON_ARRAY('1K', '2K'), 'duration', JSON_ARRAY(6, 10), 'n', JSON_ARRAY(1)),
+ '高性价比视频模型, 768P/1080P 可选, 支持首帧', 12),
+('minimax-image-01', 'minimax', 'image-01', 'MiniMax 图像 01', 'image', 1, 0, 0,
+ JSON_OBJECT('base', 8, 'tiers', JSON_OBJECT('size', JSON_OBJECT('1K', 0, '2K', 4, '4K', 16)), 'multiplier', 'n'),
+ JSON_OBJECT('size', JSON_ARRAY('1K', '2K', '4K'), 'n', JSON_ARRAY(1, 2, 4)),
+ '同步出图, 支持人物主体参考, 免费可用', 13),
+('minimax-m2', 'minimax', 'MiniMax-M2', 'MiniMax M2 (推理)', 'text', 1, 0, 0,
+ JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
+ '推理型文本模型, 思维链自动剥离', 14),
+('minimax-m2-5', 'minimax', 'MiniMax-M2.5', 'MiniMax M2.5 (推理)', 'text', 1, 0, 1,
+ JSON_OBJECT('base', 3, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
+ '更强推理型文本模型, 需基础套餐', 15),
+('minimax-anthropic-m2', 'minimax-anthropic', 'MiniMax-M2', 'MiniMax M2 (Anthropic 协议)', 'text', 1, 0, 0,
+ JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
+ '走 Anthropic Messages 协议, 支持图文多模态输入', 16)
 ON DUPLICATE KEY UPDATE
     model_name=VALUES(model_name), display_name=VALUES(display_name),
     model_type=VALUES(model_type), pricing_json=VALUES(pricing_json),

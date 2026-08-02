@@ -461,6 +461,22 @@ class OpenAICompatibleProvider:
                     timeout=(settings.provider_http_connect_timeout_s, 60),
                     proxies={"http": None, "https": None},
                 )
+                sc = resp.status_code
+                if sc // 100 == 2:
+                    return resp.json()
+                # 4xx(客户端错误, 非 429 限流): 任务被拒/不存在/内容策略违规 —— 这是**终态**,
+                # 不应当作瞬时错误无限重试。归一为 {status:failed} 让上层走失败分支:
+                #   - Completer 据此标记 job=FAILED(用户能看到明确原因, 而非永久转圈);
+                #   - 同步路径 _generate_video 据此抛 "video generation failed"。
+                # 否则会像 2026-08-01 的 job(9726cebc) 那样卡 processing 重试上百次、一天都出不来。
+                if 400 <= sc < 500 and sc != 429:
+                    body = _safe_status_body(resp)
+                    logger.warning(
+                        "[agnes] video-status 终态 4xx (任务被拒/内容策略): HTTP %d %s",
+                        sc, body[:200],
+                    )
+                    return {"status": "failed", "error": f"video-status HTTP {sc}: {body}"}
+                # 429 限流 / 5xx 服务端错: 仍属瞬时, 抛出由上层退避重试
                 _raise_for_provider(resp, "video-status")
                 return resp.json()
             except requests.ConnectionError as e:
@@ -679,6 +695,20 @@ def _ensure_http_refs_for_video(refs: list[str], public_base: str | None = None,
         )
 
     return out
+
+
+def _safe_status_body(resp) -> str:
+    """截断并规整状态查询的错误响应体(与 _raise_for_provider 同样剥离 HTML 页)。
+
+    用于 video-status 终态 4xx 的 error 文案, 避免把整页 HTML/超长 JSON 灌进 job 错误字段。
+    """
+    try:
+        body = resp.text[:200]
+    except Exception:  # noqa: BLE001
+        body = ""
+    if body.lstrip().startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML")):
+        return getattr(resp, "reason_phrase", None) or getattr(resp, "reason", "") or "upstream error"
+    return body
 
 
 def _raise_for_provider(resp, what: str) -> None:

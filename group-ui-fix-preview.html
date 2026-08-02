@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pea · 新建组 UI 修复预览</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: #f5f6f8;
+    color: #1a1a1a;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    min-height: 100vh;
+    padding: 40px 24px 80px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 960px; margin: 0 auto; }
+  h1 {
+    font-size: 24px; font-weight: 600; letter-spacing: -0.3px; margin-bottom: 6px;
+    background: linear-gradient(135deg, #2A9BFF 0%, #6BC8FF 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .subtitle { font-size: 13px; color: rgba(0,0,0,0.5); margin-bottom: 36px; }
+  .section-title {
+    font-size: 13px; font-weight: 600; color: rgba(0,0,0,0.7);
+    text-transform: uppercase; letter-spacing: 1.5px;
+    margin: 36px 0 16px; display: flex; align-items: center; gap: 10px;
+  }
+  .section-title::before { content: ''; width: 18px; height: 1px; background: linear-gradient(90deg, #2A9BFF, transparent); }
+  .row { display: flex; gap: 32px; flex-wrap: wrap; align-items: flex-start; }
+  .case { width: 420px; }
+
+  /* 画布 */
+  .canvas {
+    width: 420px; height: 300px;
+    background:
+      radial-gradient(circle, rgba(0,0,0,0.06) 1px, transparent 1px) 0 0 / 20px 20px,
+      #f0f1f3;
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* 修复前：外层 ReactFlow 默认直角黑框 + 内层 group 圆角框 = 两个框 */
+  .rf-wrapper-before {
+    position: absolute;
+    left: 60px; top: 70px;
+    width: 300px; height: 180px;
+    padding: 0;
+    border: 1px solid #1a192b;
+    border-radius: 3px;
+    background: transparent;
+  }
+  .group-before {
+    position: absolute;
+    left: 1px; top: 1px;
+    width: 298px; height: 178px;
+    border-radius: 18px;
+    background: rgba(240,242,245,0.95);
+    border: 1px solid rgba(0,0,0,0.08);
+  }
+
+  /* 修复后：外层 wrapper 透明无边框，只有 group 一层圆角框 + 可见边框 */
+  .rf-wrapper-after {
+    position: absolute;
+    left: 60px; top: 70px;
+    width: 300px; height: 180px;
+    padding: 0;
+    border: none;
+    border-radius: 18px;
+    background: transparent;
+  }
+  .group-after {
+    position: absolute;
+    left: 0; top: 0;
+    width: 300px; height: 180px;
+    border-radius: 18px;
+    background: rgba(240,242,245,0.95);
+    border: 1px solid rgba(0,0,0,0.24);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.06) inset;
+  }
+  .group-after.selected {
+    border-color: rgba(31, 162, 220, 0.78);
+    box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.10) inset, 0 0 16px rgba(31, 162, 220, 0.20);
+  }
+
+  /* 子节点示意 */
+  .node-card {
+    position: absolute;
+    width: 110px; height: 64px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    border: 1px solid rgba(0,0,0,0.06);
+  }
+  .node-card.text { left: 30px; top: 28px; }
+  .node-card.image { left: 30px; top: 96px; }
+
+  /* 组名 */
+  .group-label {
+    position: absolute;
+    left: 0; top: -22px;
+    font-size: 13px; font-weight: 700;
+    color: rgba(0,0,0,0.82);
+    white-space: nowrap;
+  }
+
+  /* 切换背景按钮 */
+  .bg-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px 5px 8px;
+    border-radius: 999px;
+    background: rgba(24,26,32,0.92);
+    border: 1px solid rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.75);
+    font-size: 12px;
+  }
+  .swatch {
+    display: inline-block; width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 3px solid rgba(31,162,220,0.80);
+    background: transparent;
+  }
+  .caption {
+    font-size: 12px; color: rgba(0,0,0,0.45);
+    margin-top: 10px; line-height: 1.6;
+  }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    background: rgba(42,155,255,0.10); color: #2A9BFF;
+    font-size: 11px; font-weight: 600; margin-bottom: 8px;
+  }
+  .bad-red { background: rgba(239,68,68,0.10); color: #dc2626; }
+  .bad-green { background: rgba(34,197,94,0.10); color: #16a34a; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>pea · 新建组 UI 修复预览</h1>
+  <div class="subtitle">去掉外层 ReactFlow 直角黑框，保留并增强 group 圆角边界</div>
+
+  <div class="section-title">问题 1：组边界</div>
+  <div class="row">
+    <div class="case">
+      <div class="badge bad-red">修复前</div>
+      <div class="canvas">
+        <div class="rf-wrapper-before">
+          <div class="group-before">
+            <div class="group-label">新建组</div>
+            <div class="node-card text"></div>
+            <div class="node-card image"></div>
+          </div>
+        </div>
+      </div>
+      <div class="caption">ReactFlow 默认 .react-flow__node-group 自带 1px 深色直角边框 + 3px 小圆角，与内部 .pea-group-node 的 18px 圆角叠加，出现「外层直角、内层圆角」的双层错位感。</div>
+    </div>
+
+    <div class="case">
+      <div class="badge bad-green">修复后（默认状态）</div>
+      <div class="canvas">
+        <div class="rf-wrapper-after">
+          <div class="group-after">
+            <div class="group-label">新建组</div>
+            <div class="node-card text"></div>
+            <div class="node-card image"></div>
+          </div>
+        </div>
+      </div>
+      <div class="caption">外层 wrapper 去掉了深色直角边框；.pea-group-node 增加淡淡的背景填充（rgba(240,242,245,0.95)）和 1px 深色边框（rgba(0,0,0,0.24)），在浅色画布上能看清组范围。</div>
+    </div>
+
+    <div class="case">
+      <div class="badge bad-green">修复后（选中状态）</div>
+      <div class="canvas">
+        <div class="rf-wrapper-after">
+          <div class="group-after selected">
+            <div class="group-label">新建组</div>
+            <div class="node-card text"></div>
+            <div class="node-card image"></div>
+          </div>
+        </div>
+      </div>
+      <div class="caption">选中时边框变为品牌蓝色（rgba(31,162,220,0.78)）并带内发光 + 外发光，组范围更加明显。</div>
+    </div>
+  </div>
+
+  <div class="section-title">问题 2：切换背景颜色环</div>
+  <div class="row">
+    <div class="case">
+      <div class="badge bad-red">修复前</div>
+      <div class="bg-btn" style="margin-top:10px;">
+        <span class="swatch" style="border-color:rgba(255,255,255,0.35); background:rgba(255,255,255,0.35);"></span>
+        <span>切换背景</span>
+      </div>
+      <div class="caption">原实现是实心圆点，用户难以直观看到当前选中的颜色。</div>
+    </div>
+    <div class="case">
+      <div class="badge bad-green">修复后</div>
+      <div class="bg-btn" style="margin-top:10px;">
+        <span class="swatch"></span>
+        <span>切换背景</span>
+      </div>
+      <div class="caption">改为颜色环（ring）：中心透明，3px 色环显示当前颜色，透明度经过增强，肉眼可辨识。</div>
+    </div>
+  </div>
+
+  <div class="section-title">改动文件</div>
+  <div class="caption" style="margin-top:0;">
+    <code>pea-server/web/src/styles/index.css</code>：覆盖 ReactFlow group wrapper 默认样式；增强 .pea-group-node 背景/边框/选中态；新增 prefers-color-scheme: light 媒体查询兜底。<br>
+    <code>pea-server/web/src/components/GroupNode.tsx</code>：bgColor 为 transparent 时不写内联 background，让 CSS 默认样式生效。<br>
+    <code>verify/_check_group_ui_fix.py</code>：自动化验证脚本，截图检查 group 边界和切换背景颜色环。
+  </div>
+</div>
+</body>
+</html>

@@ -34,7 +34,7 @@ import {
 } from '@ant-design/icons';
 import { toast } from '../store/toast';
 import { api } from '../api/client';
-import { useCanvas, PeaNodeData } from '../store/canvas';
+import { useCanvas, PeaNodeData, cleanGraph } from '../store/canvas';
 import { useUi } from '../store/ui';
 import { useAuth } from '../store/auth';
 import { useTheme } from '../store/theme';
@@ -62,6 +62,7 @@ import MaterialPanel from './MaterialPanel';
 import NodeChatPrompt from './NodeChatPrompt';
 import MultiSelectToolbar from './MultiSelectToolbar';
 import SelectionBoundsBox from './SelectionBoundsBox';
+import { acceptsUpstreamInput } from '../lib/nodeSemantics';
 import {
   NODE_DEF_OF,
   PeaNodeKind,
@@ -399,15 +400,42 @@ function CanvasActions() {
           { label: '跟随系统', value: 'system' },
         ]}
       />
-      <Tooltip title="账户余额 (Tapies)">
+      <Tooltip title="账户余额 (Tapies) — 点击查看订阅套餐">
         <button
           type="button"
           className="pea-canvas-tapies"
-          aria-label={`Tapies 余额 ${balance}`}
-          onClick={() => void refreshBalance()}
+          aria-label={`Tapies 余额 ${balance}，点击查看订阅套餐`}
+          onClick={() => useUi.getState().setActive('plans')}
         >
-          <WalletOutlined />
-          <span>{balance}</span>
+          {/* 能量光球图标（圆形） */}
+          <svg className="pea-balance-gem" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+            <defs>
+              <radialGradient id="gemBg" cx="40%" cy="35%" r="60%">
+                <stop offset="0%" stopColor="#B8E2FF"/>
+                <stop offset="50%" stopColor="#3B9EFF"/>
+                <stop offset="100%" stopColor="#5B7BF5"/>
+              </radialGradient>
+              <linearGradient id="gemShine" x1="6" y1="4" x2="18" y2="16">
+                <stop offset="0%" stopColor="rgba(255,255,255,0.75)"/>
+                <stop offset="100%" stopColor="rgba(255,255,255,0)"/>
+              </linearGradient>
+              <filter id="gemGlow">
+                <feGaussianBlur stdDeviation="1" result="blur"/>
+                <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+            </defs>
+            {/* 外层光晕 */}
+            <circle cx="14" cy="14" r="12" fill="url(#gemBg)" filter="url(#gemGlow)" opacity="0.3"/>
+            {/* 主球体 */}
+            <circle cx="14" cy="14" r="10" fill="url(#gemBg)"/>
+            {/* 上方高光弧 */}
+            <path d="M7 11A7 7 0 0 1 21 11" stroke="url(#gemShine)" strokeWidth="2" strokeLinecap="round" fill="none"/>
+            {/* 左上小高光点 */}
+            <circle cx="10" cy="9.5" r="1.8" fill="rgba(255,255,255,0.55)"/>
+            {/* 中心星芒 */}
+            <path d="M14 7L14.8 10.2L18 11L14.8 11.8L14 15L13.2 11.8L10 11L13.2 10.2Z" fill="rgba(255,255,255,0.9)"/>
+          </svg>
+          <span className="pea-balance-num">{balance}</span>
         </button>
       </Tooltip>
       <button
@@ -1116,36 +1144,8 @@ function Flow() {
   // 保存前清洗节点：只持久化必要字段（id/type/position/data），丢弃 ReactFlow 运行时字段
   // （width/height/positionAbsolute/selected/dragging/measured 等），避免脏字段写回导致
   // 重新加载时视口/布局抖动、表现为「同一画布数据不一致」。
-  const cleanGraph = (nodes: any[], edges: any[]) => ({
-    nodes: nodes.map((n: any) => {
-      const base: Record<string, unknown> = {
-        id: n.id,
-        type: n.type || 'pea',
-        position: n.position,
-        data: n.data,
-      };
-      // Group 节点需持久化容器尺寸与父子关系，否则刷新后分组丢失
-      if (n.type === 'group') {
-        base.parentNode = n.parentNode;
-        base.extent = n.extent;
-        base.style = n.style ? { width: n.style.width, height: n.style.height } : undefined;
-      }
-      // 子节点需持久化 parentNode + extent（指向父组）
-      if (n.parentNode) {
-        base.parentNode = n.parentNode;
-        base.extent = n.extent;
-      }
-      return base;
-    }),
-    edges: edges.map((e: any) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
-      sourceHandle: e.sourceHandle ?? null,
-      targetHandle: e.targetHandle ?? null,
-      type: e.type || 'pea',
-    })),
-  });
+  // cleanGraph 现复用 store 中的实现（见 canvas.ts 的 cleanGraph），
+  // 与 store.saveCanvasNow / openCanvas 口径一致，避免序列化逻辑分叉。
 
   // 离开画布前（返回工作空间 / 刷新 / 关闭）确保未保存的改动落地。
   // 用 getState() 读最新，避免闭包陈旧；幂等（version 乐观锁，重复 PUT 第二次 409 被忽略）。
@@ -1164,18 +1164,49 @@ function Flow() {
   }, []);
 
   // 卸载兜底：覆盖任何未显式 flush 的卸载路径（含浏览器刷新 / 关闭）。
+  // 关键修复：原实现用 axios 异步 PUT，页面卸载时请求常被浏览器中止而丢弃 ->
+  // 最后一段编辑（含视频/图片节点的提示词 editorText）只存在于内存 + localStorage，
+  // 一旦标签页被异常关闭/崩溃，且用户换设备/清缓存后重进，提示词永久丢失（"重启容器后丢失"的元凶之一）。
+  // 改用 fetch(keepalive:true)：keepalive 请求不受页面卸载影响，能可靠送达后端落库。
+  const flushSaveKeepalive = () => {
+    const s = useCanvas.getState();
+    if (!s.dirty || s.canvasId == null) return;
+    const token = localStorage.getItem('pea_token');
+    try {
+      fetch(`/api/canvases/${s.canvasId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          graph_json: cleanGraph(s.nodes, s.edges),
+          version: s.version,
+        }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {
+      /* keepalive 不被支持时退化为不落库（极少数环境），不阻断卸载 */
+    }
+  };
+
   useEffect(() => {
     return () => {
-      const s = useCanvas.getState();
-      if (s.dirty && s.canvasId != null) {
-        api
-          .put(`/canvases/${s.canvasId}`, {
-            graph_json: cleanGraph(s.nodes, s.edges),
-            version: s.version,
-          })
-          .then((r: any) => useCanvas.getState().markSaved(r.data.version))
-          .catch(() => {});
-      }
+      flushSaveKeepalive();
+    };
+  }, []);
+
+  // 标签页隐藏/挂起时立即落库：比 beforeunload 更可靠地覆盖
+  // 「切走/锁屏/后台被杀」等不会触发 beforeunload 的场景，确保提示词在任何退出路径都不丢。
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') flushSaveKeepalive();
+    };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', flushSaveKeepalive);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', flushSaveKeepalive);
     };
   }, []);
 
@@ -1243,6 +1274,22 @@ function Flow() {
       }
     };
   }, []);
+  // 页面刷新/关闭前立即落盘（不等防抖 timer），解决 F5 刷新丢失最后视口的问题。
+  useEffect(() => {
+    const flush = () => {
+      const s = useCanvas.getState();
+      const id = s.canvasId;
+      if (id != null && lastVpRef.current) {
+        saveViewportNow(vpKey(id), lastVpRef.current);
+      }
+    };
+    window.addEventListener('beforeunload', flush);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, []);
 
   useEffect(() => {
     // 进入画布必须经由「新建项目」或「打开项目」显式创建/加载，
@@ -1269,25 +1316,36 @@ function Flow() {
     return () => window.clearTimeout(saveTimer.current);
   }, [nodes, edges, dirty, canvasId, version, markSaved]);
 
-  // 进入画布时从 localStorage 读取上次视口，作为 ReactFlow 的 defaultViewport 直接恢复
-  // （挂载即生效，无闪烁、无时序 hack）。无记录时为 null → 走下方 fitView 自适应。
+  // 进入画布时从 localStorage 读取上次视口。
+  // 注意：canvasId 是异步到达的（刷新时先挂载组件、后加载画布），
+  // defaultViewport 只在首次渲染读一次，此时 canvasId 仍为 null，
+  // 所以这里只做缓存；真正的恢复由下方 useEffect(canvasId) 通过 setViewport 执行。
   const initialVp = useMemo<Viewport | null>(
     () => (canvasId != null ? loadViewport(vpKey(canvasId)) : null),
     [canvasId],
   );
 
+  // 视口恢复：当 canvasId 从 null 变为有值时，如果有保存的视口则用 setViewport 恢复；
+  // 否则 fitView 自适应。这修复了"刷新页面后画布回到初始状态"的问题。
   const didFit = useRef(false);
   useEffect(() => {
-    if (didFit.current || nodes.length === 0) return;
-    didFit.current = true;
-    if (initialVp) {
-      // 已通过 defaultViewport 恢复，记录到 lastVpRef 供卸载兜底。
-      lastVpRef.current = initialVp;
+    if (canvasId == null) return;
+    const saved = loadViewport(vpKey(canvasId));
+    if (saved && !didFit.current) {
+      didFit.current = true;
+      lastVpRef.current = saved;
+      // 延迟一帧等 ReactFlow 完成初始化后再 setViewport
+      requestAnimationFrame(() => {
+        setViewport({ x: saved.x, y: saved.y, zoom: saved.zoom }, { duration: 0 });
+      });
       return;
     }
-    const t2 = window.setTimeout(() => fitView({ duration: 0, padding: 0.2, maxZoom: 1 }), 100);
-    return () => window.clearTimeout(t2);
-  }, [nodes.length, fitView, initialVp]);
+    if (!didFit.current && nodes.length > 0) {
+      didFit.current = true;
+      const t2 = window.setTimeout(() => fitView({ duration: 0, padding: 0.2, maxZoom: 1 }), 100);
+      return () => window.clearTimeout(t2);
+    }
+  }, [canvasId, nodes.length, fitView, setViewport]);
 
   const saveNow = async () => {
     if (canvasId == null) return;
@@ -1648,15 +1706,11 @@ function Flow() {
             // source handle 'out'（右侧）或节点框任意位置（需求1）。
             if (!conn.source || !conn.target || conn.source === conn.target) return;
             const tNode = useCanvas.getState().nodes.find((n) => n.id === conn.target);
-            const isUploadImg =
-              !!tNode &&
-              tNode.data.kind === 'image' &&
-              !!(tNode.data.fileKey || tNode.data.url) &&
-              !(tNode.data.resultUrl || (tNode.data.resultUrls && tNode.data.resultUrls.length));
-            if (isUploadImg) {
-              // 用户上传的图片没有 input handle，不接受连线入边。
-              return;
-            }
+            // 用户上传的素材节点没有 target handle，不接受连线入边。
+            // ⚠️ 此前这里只判 kind === 'image'，视频/音频上传节点虽然隐藏了 handle，
+            //    仍能在 ConnectionMode.Loose 下被连上（视觉与行为不一致的真实缺陷）。
+            //    现统一走 lib/nodeSemantics.acceptsUpstreamInput。
+            if (tNode && !acceptsUpstreamInput(tNode.data)) return;
             connectedThisDrag.current = true;
             pendingEdge.current = null;
             onConnect({
@@ -1716,12 +1770,8 @@ function Flow() {
             // 仍解析到 'in' 连接点，保证固定连接点行为一致。
             if (releasedOnOtherNode && pending?.source) {
               const tNode = useCanvas.getState().nodes.find((n) => n.id === targetId);
-              const isUploadImg =
-                !!tNode &&
-                tNode.data.kind === 'image' &&
-                !!(tNode.data.fileKey || tNode.data.url) &&
-                !(tNode.data.resultUrl || (tNode.data.resultUrls && tNode.data.resultUrls.length));
-              if (!isUploadImg) {
+              // 同 onConnect：所有类型的上传素材节点都拒绝入边（不止图片）。
+              if (!tNode || acceptsUpstreamInput(tNode.data)) {
                 onConnect({
                   source: pending.source,
                   target: targetId as string,

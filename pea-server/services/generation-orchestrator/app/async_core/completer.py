@@ -75,7 +75,15 @@ def _process_one(row: dict) -> None:
         ))
     except Exception as e:  # noqa: BLE001
         logger.warning("[completer] status query failed job=%s: %s", job_id, e)
-        # 瞬时网络错: 退避 30s 后重试, 不改终态
+        # 瞬时网络错: 退避 30s 后重试, 不改终态。
+        # 但若已超过 video_poll_max_s 仍在失败, 必须收尾为 FAILED —— 否则会像
+        # 2026-08-01 的 job(9726cebc) 那样无限重试、卡死一整天、用户侧永远"生成中"。
+        if elapsed > settings.video_poll_max_s:
+            finalize_job(job_id, user_id, "video", False,
+                         error=f"status query kept failing after {settings.video_poll_max_s}s: {e}")
+            update_handle_status(job_id, "failed", raw, progress, time.time(), attempts + 1,
+                                 error=f"status query timeout: {e}")
+            return
         update_handle_status(job_id, "processing", raw, progress, time.time() + 30, attempts + 1)
         return
 

@@ -27,7 +27,11 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _client: Minio | None = None
-_init_lock = threading.Lock()
+# 用 RLock 而非 Lock: _ensure_bucket() 持锁后内部会经 _do_ensure_bucket() -> _get_client()
+# 再次进入同一把锁 (惰性初始化 _client), 非可重入的 Lock 会在同一线程自死锁。
+# 生产中 worker 启动时已先行初始化 _client 故曾被掩盖, 但任何"store_bytes 先于 _get_client"
+# 的冷路径 (如终态闭环验证 / 首次转存) 都会触发死锁。RLock 彻底消除该风险。
+_init_lock = threading.RLock()
 _bucket_ready = False
 _policy_ok = False  # gen/ 公开读策略是否已确认生效 (决策①稳定性护栏)
 

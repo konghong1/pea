@@ -20,6 +20,7 @@ import { getFileUrl, getPresignedUrl } from '../api/files';
 import { PeaNodeKind } from '../constants/nodeTypes';
 import { pollNodeJobResult } from '../lib/nodeGeneration';
 import { syncBalance } from '../lib/balanceSync';
+import { shouldHideNodeEditor } from '../lib/nodeSemantics';
 
 /**
  * 节点生成结果轮询兜底：实现见 ../lib/nodeGeneration（pollNodeJobResult）。
@@ -608,6 +609,9 @@ export default function NodeChatPrompt() {
   const prevSingleRef = useRef<string | null>(null);
   // 按节点 id 缓存输入草稿：切换节点再切回时"接着上次编辑的内容继续写"
   const draftRef = useRef<Record<string, string>>({});
+  // 回填 setHtml 期间为 true：抑制 setHtml 触发的 onChange 竞态（可能回传空文本）
+  // 污染 store.meta.editorText / localStorage 草稿，导致刷新/重启后 prompt 被静默清空。
+  const restoringRef = useRef(false);
 
   // 防抖持久化 editorText 到节点 meta：未提交时刷新页面也能恢复输入内容（修复视频/图片节点刷新丢失）。
   const persistEditorTextRef = useRef(
@@ -633,6 +637,9 @@ export default function NodeChatPrompt() {
   const [est, setEst] = useState<{ cost: number; allowed: boolean; minPlanLevel: number } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // 同步锁:useState 在 React 18 自动批处理下,同一渲染周期内两次 onClick 仍可读到
+  // submitting===false。useRef 跨渲染稳定,可作为"硬锁"确保 submit 不可重入。
+  const submittingLockRef = useRef(false);
   const [hasInput, setHasInput] = useState(false);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -665,15 +672,13 @@ export default function NodeChatPrompt() {
 
   const kind = sel?.data.kind ?? 'text';
   const genType = GEN_TYPE[kind] ?? null;
-  // 用户自己上传的图片/视频节点（有 fileKey/url，但非模型生成结果）：
-  // 不需要下方生成编辑框，避免"对上传内容重新生成"的误导，且由上方功能条承接操作。
+  // 生成中状态：把「生成」按钮切换为可点击的「停止」按钮
+  const isGenerating = !!sel?.data.generating;
   const data = sel?.data;
-  const isUploadedMedia =
-    (kind === 'image' || kind === 'video') &&
-    // 没有生成结果（resultUrl/resultUrls）且明确是用户上传（有 fileKey）才视为上传媒体
-    !data?.resultUrl &&
-    !(data?.resultUrls?.length) &&
-    !!data?.fileKey;
+  // ── 编辑框显隐（需求：用户自己上传的素材节点，选中时不弹下方编辑框）──────────
+  // 判定收敛在 lib/nodeSemantics.shouldHideNodeEditor（generating 时强制显示，
+  // 以保住「停止」按钮入口 + 避免提示词随组件卸载丢失，历史回归见该函数注释）。
+  const hideEditor = shouldHideNodeEditor(data);
   const selectedModel = models.find((m) => m.id === modelId) ?? null;
   const tiers = (selectedModel?.pricing as PricingRule | null)?.tiers ?? {};
   const dimKeys = Object.keys(tiers);
@@ -765,10 +770,22 @@ export default function NodeChatPrompt() {
       } catch {
         lsDraft = '';
       }
+      // 修复：回填优先级必须用「真值」判断，不能用 ??。
+      // ?? 只把 null/undefined 当空，会把 ''（空串草稿）当成有效值而短路，
+      // 导致 localStorage 里那条空的 pea:draft 草稿遮住服务端持久化的 meta.editorText，
+      // 表现为「MySQL 里 prompt 还在、但编辑器刷新/重启后变空白」。
+      // 改用 || 并对空串做 trim 兜底：空串草稿不再阻断回退到 meta.editorText。
+      const memDraft = draftRef.current[single];
+      const memDraftNonEmpty = memDraft && memDraft.trim().length > 0 ? memDraft : '';
+      const lsDraftNonEmpty = lsDraft && lsDraft.trim().length > 0 ? lsDraft : '';
       const restored =
-        draftRef.current[single] ??
-        lsDraft ??
-        (node?.data.meta?.editorText as string | undefined) ??
+        memDraftNonEmpty ||
+        lsDraftNonEmpty ||
+        (node?.data.meta?.editorText as string | undefined) ||
+        // 兜底：本地草稿/editorText 都丢失，但节点本身有持久化 prompt，且无上游输入
+        // （避免合并 prompt 含上游文本导致二次提交重复拼接）时，用 data.prompt 还原，
+        // 确保生成中/刷新后编辑框绝不出现空框（提示词丢失幻觉）。
+        (upstream.length === 0 ? (node?.data.prompt as string | undefined) : undefined) ||
         '';
       // 仅当 restored 是纯文本时才需要 escape；包含 <span data-pea-ref> 等 HTML 标签时直接作为 HTML 写入
       // （否则 token span 会被错误转义，以 `&lt;span&gt;` 形式显示为源码）。
@@ -780,7 +797,10 @@ export default function NodeChatPrompt() {
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/\n/g, '<br>');
+      restoringRef.current = true;
       inputRef.current?.setHtml(html);
+      // 抑制 setHtml 触发的 onChange 竞态（可能回传空文本）污染 store/localStorage
+      setTimeout(() => { restoringRef.current = false; }, 200);
       // 强制计算 hasInput：setHtml 触发的 onChange 可能因 innerText 时序传回空文本，
       // 导致发送按钮等派生状态未刷新（修复图片节点刷新后按钮仍置灰）。
       const has =
@@ -1179,11 +1199,32 @@ useEffect(() => {
   }
 }, [liveAnchor, single]);
 
+// 编辑框「由显转隐」时立即落盘草稿。
+// 场景：用户在空图片节点里先写了提示词，再点上传选了文件 → 节点变成上传态、编辑框收起，
+// 而 onInputChange 的 700ms 防抖可能尚未触发，子树一卸载草稿就没了。
+// 这里做一次同步写入 meta.editorText（不进历史栈），保证内容可在后续恢复。
+const prevHideEditorRef = useRef(false);
+useEffect(() => {
+  const wasHidden = prevHideEditorRef.current;
+  prevHideEditorRef.current = hideEditor;
+  if (!hideEditor || wasHidden || !single) return;
+  const html = draftRef.current[single];
+  if (html == null) return;
+  const node = useCanvas.getState().nodes.find((n) => n.id === single);
+  if (!node) return;
+  const meta = { ...(node.data.meta ?? {}) } as Record<string, unknown>;
+  if ((meta.editorText as string | undefined) === html) return;
+  useCanvas.getState().updateNodeData(single, { meta: { ...meta, editorText: html } }, false);
+}, [hideEditor, single]);
+
   // 编辑框始终锚定在节点正下方（相对节点固定），不再根据视口落点翻转到节点上方。
   // 这样「上方功能条」（恒在节点上方）与「下方编辑框」（恒在节点下方）都相对节点固定、行为一致。
   // 若节点贴近视口底部导致编辑框被裁切，由画布平移（右键拖拽 / 滚轮）调整视图，而非改变相对位置。
 
-  if (!sel || !single || isUploadedMedia || !anchorEl) return null;
+  // hideEditor：用户自己上传的素材节点（image/video/audio/ref，非 AI 结果、非生成中）
+  // 选中时不渲染下方编辑框。NodeChatPrompt 由 CanvasEditor 常驻挂载，这里 return null
+  // 只卸载编辑框子树，组件自身的 draftRef 草稿仍在内存中，切回可生成节点即可续写。
+  if (!sel || !single || !anchorEl || hideEditor) return null;
   const cfg = KIND_CFG[kind] ?? KIND_CFG.text;
 
   const hasImageRefs = refImageNodes.length > 0;
@@ -1196,13 +1237,17 @@ useEffect(() => {
   };
 
   const submit = async () => {
+    // 同步锁优先于 setState 检查(React 18 批处理下,同周期两次点击 state 仍是 false)。
+    if (submittingLockRef.current) return;
     if (submitting) return;
-    if (!genType) {
-      toast.info('音频生成即将开放，敬请期待');
-      return;
-    }
+    submittingLockRef.current = true;
+    try {
+      if (!genType) {
+        toast.info('音频生成即将开放，敬请期待');
+        return;
+      }
 
-    const parsed = inputRef.current?.getParsed() ?? { text: '', referenceImages: [], referencedNodeIds: [], html: '' };
+      const parsed = inputRef.current?.getParsed() ?? { text: '', referenceImages: [], referencedNodeIds: [], html: '' };
     const upstream = useCanvas.getState().getUpstreamInputs(single);
     const atReferencedIds = new Set(parsed.referencedNodeIds);
 
@@ -1312,11 +1357,20 @@ useEffect(() => {
       params: mergedParams,
       meta: { ...(sel.data.meta ?? {}), ...metaPatch },
     });
-    // 提交成功后清除 localStorage 草稿，避免已提交内容重复恢复。
-    try {
-      if (draftKey) localStorage.removeItem(draftKey);
-    } catch {
-      /* ignore */
+    // 立即落盘：确保用户写的 prompt 立刻写库，不再依赖 1s 防抖 autosave——
+    // 生成任务耗时数分钟，期间刷新/切走会让防抖保存被取消，prompt 永久丢失（已复现）。
+    // 关键修复：saveCanvasNow 现在返回是否真落盘。仅当确认真实落盘后，才清除 localStorage
+    // 兜底草稿；若落盘失败（如乐观锁 409 且重试仍失败），务必保留草稿，否则退出重进后
+    // 编辑框空白（"刷新丢 prompt 且草稿也没了" 的真空，已复现）。
+    const saved = await useCanvas.getState().saveCanvasNow();
+    if (saved && draftKey) {
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {
+        /* ignore */
+      }
+    } else if (!saved) {
+      console.warn('[submit] 落盘未成功，保留 localStorage 兜底草稿，避免 prompt 丢失');
     }
 
     // 以下为实际生成接入：需要模型可用
@@ -1354,6 +1408,7 @@ useEffect(() => {
         toast.error(e?.message || '聊天失败');
       } finally {
         setSubmitting(false);
+        submittingLockRef.current = false;
       }
       return;
     }
@@ -1393,17 +1448,37 @@ useEffect(() => {
       toast.error(msg);
     } finally {
       setSubmitting(false);
+      submittingLockRef.current = false;
+    }
+    } catch (e) {
+      // 兜底:任何未预期的异常都释放同步锁,避免按钮永久卡死。
+      // (具体业务异常已被上文各自的 try/catch 捕获,这里只是防意外。)
+      // eslint-disable-next-line no-console
+      console.error('[submit] unexpected error:', e);
+    } finally {
+      submittingLockRef.current = false;
     }
   };
 
+  // 生成中点击按钮 → 停止当前生成：释放节点生成态，让用户能重新编辑/再次生成。
+  // 该处理器刻意不依赖 submitting / canSend / genType，确保生成中按钮始终可点击、始终有效。
+  const cancelGeneration = () => {
+    if (!single) return;
+    update(single, { generating: false, error: undefined });
+  };
+
   const onInputChange = (html: string, plainText: string) => {
+    // 回填期间的 setHtml 竞态回调：直接忽略，避免空文本回落污染 store/localStorage
+    if (restoringRef.current) return;
     if (single) {
       draftRef.current[single] = html;
       // 防抖持久化 editorText 到节点 meta（随画布保存）
       persistEditorTextRef.current(single, html);
       // 同时写入 localStorage：未保存到后端前刷新页面也能恢复（修复视频/图片节点输入丢失）。
       try {
-        if (draftKey) localStorage.setItem(draftKey, html);
+        // 不写空串草稿：回填 setHtml 触发的 onChange 竞态可能传回空文本，
+        // 若写进 localStorage 会污染 pea:draft，导致下次重载被空草稿遮住服务端 prompt。
+        if (draftKey && html && html.trim().length > 0) localStorage.setItem(draftKey, html);
       } catch {
         /* 隐私模式等场景可能禁用 localStorage */
       }
@@ -1627,21 +1702,50 @@ useEffect(() => {
               <span className="node-count-btn-hint" aria-hidden>生成数量</span>
             </div>
           )}
-          <span className="node-input-tapies" title="本次预计消耗 Tapies">
-            <span className="node-input-tapies-icon" aria-hidden>💎</span>
-            <span>{costLabel}</span>
-          </span>
-          <button
-            type="button"
-            className="node-input-send node-chat-prompt-send"
-            title="发送 (Enter)"
-            aria-label="发送"
-            disabled={!canSend || submitting}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={submit}
+          <span
+            className={`pe-launcher${submitting ? ' submitting' : ''}${isGenerating ? ' is-stopping' : ''}${(!canSend && !isGenerating) ? ' disabled' : ''}`}
+            title={isGenerating ? '停止生成' : (submitting ? '正在生成…' : `本次预计消耗 ${costLabel} Tapies`)}
+            aria-label={isGenerating ? '停止生成' : (submitting ? '正在生成' : '发送')}
+            aria-busy={submitting}
+            style={{ pointerEvents: 'auto', cursor: isGenerating ? 'pointer' : (!canSend || submitting ? 'not-allowed' : 'pointer') }}
+            onClick={isGenerating ? cancelGeneration : (!canSend || submitting ? undefined : submit)}
           >
-            ↑
-          </button>
+            {/* 左侧: 消耗数字 (无图标 / 无单位标签)；生成中显示「停止」文案 */}
+            <span className="pe-cost">
+              <span className="pe-cost-num">{isGenerating ? '停止' : costLabel}</span>
+            </span>
+
+            {/* 右侧: 默认「生成核心」(火花+粒子) / 生成中「停止方块」 */}
+            <span className="pe-trigger">
+              {isGenerating ? (
+                <svg className="pe-stop-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                  <rect x="7" y="7" width="10" height="10" rx="2.5" fill="#FFFFFF" />
+                </svg>
+              ) : (
+                <svg className="pe-gen-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                  <defs>
+                    <linearGradient id="pea-gen-spark" x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stopColor="#FFFFFF"/>
+                      <stop offset="100%" stopColor="#7DDDFF"/>
+                    </linearGradient>
+                    <linearGradient id="pea-gen-spark-light" x1="0" y1="0" x2="1" y2="1">
+                      <stop offset="0%" stopColor="#FFFFFF"/>
+                      <stop offset="100%" stopColor="#3B9EFF"/>
+                    </linearGradient>
+                  </defs>
+                  {/* 中心火花核心: 象征「生成 / 创造」 */}
+                  <path className="pe-gen-spark" d="M12 3 L13.4 10.6 L21 12 L13.4 13.4 L12 21 L10.6 13.4 L3 12 L10.6 10.6 Z" fill="url(#pea-gen-spark)"/>
+                  {/* 轨道粒子: 环绕翻动 */}
+                  <g className="pe-gen-particles">
+                    <circle className="pe-particle p1" cx="12" cy="2.5" r="1.4" fill="#7DDDFF"/>
+                    <circle className="pe-particle p2" cx="21.5" cy="12" r="1.4" fill="#BFE9FF"/>
+                    <circle className="pe-particle p3" cx="12" cy="21.5" r="1.4" fill="#7DDDFF"/>
+                    <circle className="pe-particle p4" cx="2.5" cy="12" r="1.4" fill="#BFE9FF"/>
+                  </g>
+                </svg>
+              )}
+            </span>
+          </span>
         </div>
       </div>
 

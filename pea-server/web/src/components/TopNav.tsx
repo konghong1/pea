@@ -1,5 +1,5 @@
-import { App, Button, Select, Tooltip } from 'antd';
-import { ShareAltOutlined, WalletOutlined } from '@ant-design/icons';
+import { App, Select, Tooltip } from 'antd';
+import { ShareAltOutlined } from '@ant-design/icons';
 import { useAuth } from '../store/auth';
 import { useTheme } from '../store/theme';
 import { useUi, PageKey } from '../store/ui';
@@ -69,18 +69,50 @@ export default function TopNav() {
 
       <div className="flex items-center gap-2">
         <Tooltip title="账户余额 (Tapies)">
-          <Button
-            icon={<WalletOutlined />}
+          <button
+            type="button"
+            className="pea-topnav-balance"
+            aria-label={`Tapies 余额 ${balance}`}
             onClick={() => void refreshBalance()}
           >
-            {balance} Tapies
-          </Button>
+            {/* 能量光球图标（圆形） */}
+            <svg className="pea-balance-gem" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+              <defs>
+                <radialGradient id="topnavOrbBg" cx="40%" cy="35%" r="60%">
+                  <stop offset="0%" stopColor="#B8E2FF"/>
+                  <stop offset="50%" stopColor="#3B9EFF"/>
+                  <stop offset="100%" stopColor="#5B7BF5"/>
+                </radialGradient>
+                <linearGradient id="topnavOrbShine" x1="6" y1="4" x2="18" y2="16">
+                  <stop offset="0%" stopColor="rgba(255,255,255,0.75)"/>
+                  <stop offset="100%" stopColor="rgba(255,255,255,0)"/>
+                </linearGradient>
+                <filter id="topnavOrbGlow">
+                  <feGaussianBlur stdDeviation="1" result="blur"/>
+                  <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+              </defs>
+              {/* 外层光晕 */}
+              <circle cx="14" cy="14" r="12" fill="url(#topnavOrbBg)" filter="url(#topnavOrbGlow)" opacity="0.3"/>
+              {/* 主球体 */}
+              <circle cx="14" cy="14" r="10" fill="url(#topnavOrbBg)"/>
+              {/* 上方高光弧 */}
+              <path d="M7 11A7 7 0 0 1 21 11" stroke="url(#topnavOrbShine)" strokeWidth="2" strokeLinecap="round" fill="none"/>
+              {/* 左上小高光点 */}
+              <circle cx="10" cy="9.5" r="1.8" fill="rgba(255,255,255,0.55)"/>
+              {/* 中心星芒 */}
+              <path d="M14 7L14.8 10.2L18 11L14.8 11.8L14 15L13.2 11.8L10 11L13.2 10.2Z" fill="rgba(255,255,255,0.9)"/>
+            </svg>
+            <span className="pea-balance-num">{balance}</span>
+          </button>
         </Tooltip>
-        <Button type="text" size="small" onClick={() => toast.info('社区功能即将开放')}>
+        <button type="button" className="pea-topnav-community" onClick={() => toast.info('社区功能即将开放')}>
           ✦ 社区
-        </Button>
+        </button>
         <Tooltip title="复制分享链接">
-          <Button type="text" shape="circle" aria-label="复制分享链接" icon={<ShareAltOutlined />} onClick={onShare} />
+          <button type="button" className="pea-topnav-share" aria-label="复制分享链接" onClick={onShare}>
+            <ShareAltOutlined />
+          </button>
         </Tooltip>
         <NotificationCenter />
         <Select

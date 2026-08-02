@@ -870,6 +870,10 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
     if (isMediaKind(item.kind)) {
       onInsertReference?.(item.node.id);
     }
+    // 关键修复：插入后立即尝试刷新缩略图。
+    // 如果 resolvedThumbs 已有 URL → 占位符立刻被替换为真实图片；
+    // 如果 URL 还在异步解析中 → 本次无操作，后续 resolvedThumbs 更新时 effect 会补上。
+    refreshTokenThumbnails(editor, resolvedThumbs);
     syncFromEditor();
     setShowPicker(false);
     setFilter('');

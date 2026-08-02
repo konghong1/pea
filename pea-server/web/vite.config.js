@@ -17,11 +17,10 @@ export default defineConfig({
         proxy: {
             // 所有 BFF 接口统一以 /api 为前缀 (BFF main.ts 已 setGlobalPrefix('api'))。
             // 一条规则覆盖所有 controller, 以后新增接口无需改此处。
-            // rewrite 把 /api 前缀剥掉再转发给 BFF (BFF 内部路径仍是 /xxx 不带 /api)。
+            // 默认 path 透传：/api/xxx 完整转发到 BFF (BFF 端路径本就含 /api)。
             '/api': {
                 target: 'http://127.0.0.1:4100',
                 changeOrigin: true,
-                rewrite: function (path) { return path.replace(/^\/api/, ''); },
             },
             // WebSocket 实时推送不走 /api (前端代码仍是裸 /ws)
             '/ws': { target: 'ws://127.0.0.1:4100', ws: true },

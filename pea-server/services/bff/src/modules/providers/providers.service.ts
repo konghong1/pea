@@ -52,6 +52,9 @@ const IMAGE_HINTS = [
 const VIDEO_HINTS = [
   'sora', 'video', 'kling', 'cogvideo', 'runway', 'pika', 'luma', 'veo', 'wan',
   'seedance', 'digo', 'hunyuan-video', 'doubao-video', 'kami', 'mochi',
+  // MiniMax 视频族: H 系列(v2) / 海螺(v1) / 定向生成系列。
+  // 'minimax-h' 只命中 H3 等视频模型, 不会误伤文本的 MiniMax-M2。
+  'minimax-h', 'hailuo', 't2v-', 'i2v-', 's2v-',
 ];
 const EMBEDDING_HINTS = [
   'embedding', 'bge', 'text-embedding', 'e5-', 'gte-', 'm3e', 'bce',
@@ -66,7 +69,11 @@ export function suggestModelType(modelId: string, raw?: any): RemoteModelType {
   const lower = (modelId || '').toLowerCase();
   if (raw && typeof raw === 'object') {
     const explicit = raw.type || raw.category || raw.model_type || raw.task;
-    if (typeof explicit === 'string') {
+    // Anthropic 的 /v1/models 每项都带 type:"model" —— 这是对象种类标记而非能力类型,
+    // 不排除掉会让后续的类型推断误以为拿到了权威信息。
+    if (typeof explicit === 'string' && explicit.toLowerCase() === 'model') {
+      // 无信息量, 落到下方 id 关键字启发式
+    } else if (typeof explicit === 'string') {
       const e = explicit.toLowerCase();
       if (/(image|img|draw|paint)/.test(e)) return 'image';
       if (/(video|movie|film)/.test(e)) return 'video';
@@ -91,6 +98,48 @@ export function suggestModelType(modelId: string, raw?: any): RemoteModelType {
   if (EMBEDDING_HINTS.some((k) => lower.includes(k))) return 'embedding';
   if (AUDIO_HINTS.some((k) => lower.includes(k))) return 'audio';
   return 'text';
+}
+
+/**
+ * MiniMax 静态模型目录。
+ *
+ * ⚠️ 为什么必须硬编码: MiniMax 的 `GET /v1/models` **只返回文本模型**
+ * (实测 2026-08 返回 MiniMax-M3/M2.7/M2.5/M2.1/M2 共 8 个)。视频、图像、音乐、
+ * 语音模型分散在 /v2/video_generation、/v1/image_generation、/v1/music_generation、
+ * /v1/t2a_v2 等专用端点上, 官方**没有**统一的能力发现接口。
+ * 只依赖 /v1/models 的话, 管理员在"模型 & 定价"里永远选不到视频模型。
+ *
+ * 远端拉到的同名条目优先级更高 (以上游为准), 这里只做补齐。
+ */
+const MINIMAX_STATIC_MODELS: RemoteModelEntry[] = [
+  // 视频 v2 (多模态 content 数组端点)
+  { id: 'MiniMax-H3', owned_by: 'minimax', modelType: 'video' },
+  // 视频 v1 (扁平 body + file_id 两段取回)
+  { id: 'MiniMax-Hailuo-02', owned_by: 'minimax', modelType: 'video' },
+  { id: 'T2V-01-Director', owned_by: 'minimax', modelType: 'video' },
+  { id: 'I2V-01-Director', owned_by: 'minimax', modelType: 'video' },
+  { id: 'S2V-01', owned_by: 'minimax', modelType: 'video' },
+  { id: 'video-01', owned_by: 'minimax', modelType: 'video' },
+  // 图像 (同步出图)
+  { id: 'image-01', owned_by: 'minimax', modelType: 'image' },
+  { id: 'image-01-live', owned_by: 'minimax', modelType: 'image' },
+  // 音乐 / 语音 (适配器已支持; 平台侧音频节点就绪后即可上架)
+  { id: 'music-1.5', owned_by: 'minimax', modelType: 'audio' },
+  { id: 'speech-2.5-hd-preview', owned_by: 'minimax', modelType: 'audio' },
+  { id: 'speech-2.5-turbo-preview', owned_by: 'minimax', modelType: 'audio' },
+  { id: 'speech-02-hd', owned_by: 'minimax', modelType: 'audio' },
+  { id: 'speech-02-turbo', owned_by: 'minimax', modelType: 'audio' },
+];
+
+/** 该提供商是否需要静态目录补齐 (按 provider_type + base_url 双重判定)。 */
+function staticCatalogFor(providerType: string, baseUrl: string): RemoteModelEntry[] {
+  const t = (providerType || '').toLowerCase();
+  const u = (baseUrl || '').toLowerCase();
+  // anthropic 兼容层只暴露文本模型, 其 /v1/models 已够用, 无需补齐。
+  if (t === 'minimax' || (t !== 'anthropic-compatible' && u.includes('minimax'))) {
+    return MINIMAX_STATIC_MODELS;
+  }
+  return [];
 }
 
 /**
@@ -201,6 +250,18 @@ export class ProvidersService {
       e?.response?.data
         ? JSON.stringify(e.response.data).slice(0, 300)
         : e?.message ?? 'unknown';
+    // Anthropic Messages 协议的模型端点认证方式与 OpenAI 不同: 需要 x-api-key +
+    // anthropic-version。两个头都发是安全的 —— MiniMax 兼容层与官方都接受。
+    const isAnthropic = String(p.provider_type || '').toLowerCase() === 'anthropic-compatible';
+    const authHeaders = (): Record<string, string> => {
+      if (!p.api_key) return {};
+      const h: Record<string, string> = { Authorization: `Bearer ${p.api_key}` };
+      if (isAnthropic) {
+        h['x-api-key'] = p.api_key;
+        h['anthropic-version'] = '2023-06-01';
+      }
+      return h;
+    };
     const tryFetch = async (baseUrl: string): Promise<any[]> => {
       const url = normalizeModelsUrl(baseUrl);
       const { data } = await axios.get(url, {
@@ -208,11 +269,12 @@ export class ProvidersService {
         // 直接出网。否则容器里的 HTTPS_PROXY=host.docker.internal:33210(开发机专属死代理)
         // 会劫持本请求, 在服务器上表现为 read ECONNRESET / ECONNREFUSED。
         proxy: false,
-        headers: p.api_key ? { Authorization: `Bearer ${p.api_key}` } : {},
+        headers: authHeaders(),
         timeout: 20000,
       });
       return Array.isArray(data?.data) ? data.data : [];
     };
+    const staticCatalog = staticCatalogFor(p.provider_type, p.base_url);
     let list: any[] = [];
     const primary = p.base_url.replace(/\/+$/, '');
     const useGateway = !!gateway && gateway !== primary;
@@ -220,20 +282,29 @@ export class ProvidersService {
       list = await tryFetch(p.base_url);
     } catch (e: any) {
       const primaryErr = errDetail(e);
-      if (!useGateway) {
-        throw new BadRequestException(
-          `fetch remote models failed: ${primaryErr} (url=${normalizeModelsUrl(p.base_url)})`,
-        );
+      let gatewayErr: string | null = null;
+      if (useGateway) {
+        try {
+          console.warn(`[providers] official base_url unreachable (${primaryErr}), fallback to gateway ${gateway}`);
+          list = await tryFetch(gateway);
+        } catch (e2: any) {
+          gatewayErr = errDetail(e2);
+        }
       }
-      try {
-        console.warn(`[providers] official base_url unreachable (${primaryErr}), fallback to gateway ${gateway}`);
-        list = await tryFetch(gateway);
-      } catch (e2: any) {
-        // 两路都失败: 必须同时报出主地址与网关的错误, 不能只报网关错误掩盖根因。
-        throw new BadRequestException(
-          `fetch remote models failed: primary(${normalizeModelsUrl(p.base_url)}): ${primaryErr}; ` +
-          `gateway(${gateway}): ${errDetail(e2)}`,
-        );
+      if (!useGateway || gatewayErr) {
+        // 有静态目录的提供商 (MiniMax): 探测失败不致命 —— 视频/图像模型本来就不在
+        // /v1/models 里, 静态目录足以让管理员完成配置。降级而非报错。
+        if (staticCatalog.length) {
+          console.warn(
+            `[providers] ${p.id}: /v1/models probe failed (${primaryErr}), ` +
+            `serving ${staticCatalog.length} static catalog entries only`,
+          );
+        } else {
+          const detail = gatewayErr
+            ? `primary(${normalizeModelsUrl(p.base_url)}): ${primaryErr}; gateway(${gateway}): ${gatewayErr}`
+            : `${primaryErr} (url=${normalizeModelsUrl(p.base_url)})`;
+          throw new BadRequestException(`fetch remote models failed: ${detail}`);
+        }
       }
     }
     const models: RemoteModelEntry[] = list
@@ -242,6 +313,16 @@ export class ProvidersService {
         const mid = String(m.id);
         return { id: mid, owned_by: m.owned_by, modelType: suggestModelType(mid, m) };
       });
+    // 静态目录补齐: 远端已返回的同名条目以远端为准 (大小写不敏感去重)。
+    if (staticCatalog.length) {
+      const seen = new Set(models.map((m) => m.id.toLowerCase()));
+      for (const s of staticCatalog) {
+        if (!seen.has(s.id.toLowerCase())) {
+          models.push(s);
+          seen.add(s.id.toLowerCase());
+        }
+      }
+    }
     // 落库: 按类型持久化 (provider_id + remote_model_id 唯一, 重复拉取只更新类型/归属)
     if (models.length) {
       const rows = models.map((m) => [p.id, m.id, m.owned_by ?? null, m.modelType]);

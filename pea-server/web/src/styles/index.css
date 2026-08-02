@@ -314,9 +314,11 @@ body {
   will-change: box-shadow;
 }
 
-/* 生成中：body-card 改为完全不透明，杜绝圆角处透出浅色画布的"半透明"感 */
+/* 生成中：body-card 改为完全不透明，杜绝圆角处透出浅色画布的"半透明"感；
+   同时取消 overflow:hidden，避免 TechLoader 同心圆 + drop-shadow 光晕被裁切 */
 .pea-node.is-generating .pea-node-body-card {
   background: #222228;
+  overflow: visible;
 }
 
 /* 整节点 HUD 框（生成中）：4 角色 + 纵向扫描 + 底部进度光带
@@ -674,6 +676,10 @@ body {
   border-radius: 16px;
   overflow: hidden;
 }
+/* 生成中图片节点：取消 overflow:hidden，让 TechLoader 动画完整显示 */
+.pea-node-image.pea-node-has-media.is-generating .pea-node-body-card {
+  overflow: visible;
+}
 /* 媒体卡片去内边距，让图片完全贴合 body-card */
 .pea-node-image.pea-node-has-media .pea-node-media-card {
   padding-top: 0;
@@ -709,6 +715,9 @@ body {
   position: relative;
   width: 100%;
   height: 100%;  /* 填满锁定框，配合媒体 absolute inset:0 实现 cover 填满 */
+  flex: 1 1 auto;   /* 在 body-card flex row 中占满水平剩余空间,避开被 prompt-echo 挤压塌陷 */
+  min-width: 0;
+  min-height: 0;
 }
 
 /* 视频节点有内容：与图片节点保持一致——去内边距、按视频原始比例完整包裹（不裁切、占满节点框宽度）。
@@ -723,20 +732,33 @@ body {
   border-radius: 16px;
   overflow: hidden;  /* 同图片节点：锁定框 + 媒体 cover 填满，功能条已 portal 到 chrome */
 }
+/* 生成中视频节点：取消 overflow:hidden，让 TechLoader 动画完整显示 */
+.pea-node-video.pea-node-has-media.is-generating .pea-node-body-card {
+  overflow: visible;
+}
 .pea-node-video.pea-node-has-media .pea-node-media-card {
   position: relative;
   padding-top: 0;
   gap: 0;
 }
-/* 视频/音频结果容器：相对定位，承载右上角替换按钮 + 占满宽度 */
+/* 视频/音频结果容器：相对定位，承载右上角替换按钮 + 占满宽度。
+   关键：在 body-card 的 flex row 布局中，自身 width:100% 没有确定的父级宽度时会被压成 0
+   （prompt-echo 在右侧横排，挤掉视频宽度，导致视频/图片看不见但提示词仍可见）。
+   flex: 1 + min-width:0/min-height:0 让 wrap 在 row 中占满水平剩余空间，
+   高度由 body-card 内联 height 锁定的 16:9 框高决定，视频/图片完整显示。 */
 .pea-node-result-video-wrap,
-.pea-node-result-audio-wrap {
-  position: relative;
-  width: 100%;
+.pea-node-result-audio-wrap,
+.pea-node-result-image-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 /* 视频结果填满锁定框：配合媒体 absolute inset:0 实现 cover 填满 */
 .pea-node-video.pea-node-has-media .pea-node-result-video-wrap {
   height: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 /* 视频结果填满锁定框：cover 裁切，与图片结果视觉一致；圆角由 body-card 承担 */
 .pea-node-video.pea-node-has-media .pea-node-result-video-wrap .pea-node-media-preview {
@@ -868,6 +890,63 @@ body {
   color: rgba(255, 255, 255, 0.35);
 }
 
+/* 节点卡片回显提示词（图片/视频/音频/生成节点） */
+.pea-node-prompt-echo {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pea-node-prompt-echo-label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+  margin-bottom: 4px;
+}
+.pea-node-prompt-echo-text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.7);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pea-node-prompt-echo-params {
+  margin-top: 6px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* 失败卡内回显当时提示词 — 紧凑布局，避免与错误信息争抢空间 */
+.pea-node-failure-prompt {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.pea-node-failure-prompt-label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+  margin-bottom: 2px;
+}
+.pea-node-failure-prompt-text {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.6);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;          /* 最多显示 2 行，让错误信息区域更突出 */
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* ===== 节点生成中动画 & 结果预览 ===== */
 /* 生成中面板使用与 body-card 同色的不透明底，避免圆角/缝隙处透出画布；
    min-width 保证 TechLoader label（"生成中…"）有充足水平空间不被压成两行。 */
@@ -930,7 +1009,6 @@ body {
   color: rgba(255, 255, 255, 0.45);
   letter-spacing: 0.5px;
 }
-
 /* ===== 科技感加载动画（TechLoader） =====
    内层只放中心圆环 + label。节点外壳的 HUD 四角 + 扫描 + 进度光带
    已上移到 .pea-node.is-generating 内的 .pea-node-hud，让 4 个角贴在节点框 4 角，
@@ -1133,39 +1211,123 @@ body {
   line-height: 1.5;
 }
 
-/* 详情折叠：终端日志风格 */
-.pea-node-failure-detail-toggle {
-  align-self: flex-start;
-  position: relative;
-  z-index: 1;
-  font-size: 10.5px;
-  color: rgba(200, 220, 255, 0.5);
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
+/* ═════════════════════════════════════════════════════════════════════════════
+   错误详情浮层（取代节点内联滚动）：毛玻璃遮罩 + 居中科技卡。
+   ═════════════════════════════════════════════════════════════════════════════ */
+.pea-error-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 16, 0.55);
+  backdrop-filter: blur(6px) saturate(120%);
+  animation: pea-dialog-fade 0.18s ease-out;
+}
+.pea-error-dialog {
+  width: min(560px, 100%);
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-top-color: rgba(245, 158, 11, 0.35);
+  background:
+    linear-gradient(180deg, rgba(245, 158, 11, 0.05), rgba(16, 18, 24, 0) 30%),
+    rgba(18, 20, 28, 0.96);
+  box-shadow:
+    inset 0 1px 0 rgba(245, 158, 11, 0.22),
+    0 24px 70px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  animation: pea-dialog-pop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.pea-error-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.pea-error-dialog-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.pea-error-dialog-titles {
+  flex: 1;
+  min-width: 0;
+}
+.pea-error-dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f8fafc;
   letter-spacing: 0.3px;
-  transition: color 0.15s ease;
 }
-.pea-node-failure-detail-toggle:hover {
-  color: rgba(200, 220, 255, 0.88);
+.pea-error-dialog-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: rgba(248, 250, 252, 0.5);
 }
-.pea-node-failure-detail {
-  margin: 0;
-  padding: 10px 12px;
-  font-size: 10.5px;
-  line-height: 1.55;
-  color: rgba(200, 220, 255, 0.62);
-  background: rgba(0, 0, 0, 0.42);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+.pea-error-dialog-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: none;
   border-radius: 8px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 120px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(248, 250, 252, 0.6);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.pea-error-dialog-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+}
+.pea-error-dialog-body {
+  margin: 0;
+  padding: 16px 18px;
   overflow: auto;
+  flex: 1;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  position: relative;
-  z-index: 1;
+  font-size: 12px;
+  line-height: 1.65;
+  color: rgba(203, 213, 225, 0.92);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background:
+    repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(255, 255, 255, 0.012) 3px, rgba(255, 255, 255, 0.012) 6px),
+    rgba(0, 0, 0, 0.28);
+}
+.pea-error-dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+@keyframes pea-dialog-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pea-dialog-pop {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pea-error-dialog-backdrop,
+  .pea-error-dialog { animation: none; }
 }
 
 /* 操作：关闭 (ghost) + 重新生成 (tech primary) */
@@ -3838,7 +4000,7 @@ body {
   background: transparent;
   border: none;
   outline: none;
-  color: #fff;
+  color: var(--pea-text-primary);
   font-size: 13px;
   line-height: 1.55;
   padding: 4px 0;
@@ -3846,7 +4008,7 @@ body {
   font-family: inherit;
 }
 .node-input-textarea::placeholder {
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--pea-text-muted);
 }
 /* 状态栏：参考截图2 单行排列，不换行 */
 .node-input-status {
@@ -3915,41 +4077,411 @@ body {
   background: rgba(255, 255, 255, 0.06);
   color: #fff;
 }
-.node-input-tapies {
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 节点输入栏 · 生成按钮(简洁版)
+ * 紧凑设计：消耗提示 + 发射按钮，适配系统风格。
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* 整体胶囊 */
+.pe-launcher {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.7);
-  padding: 2px 6px 2px 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+  height: 32px;
+  padding: 0 8px 0 10px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(40, 50, 70, 0.9) 0%, rgba(20, 26, 38, 0.95) 100%);
+  border: 1px solid rgba(125, 221, 255, 0.2);
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(63, 169, 245, 0.12),
+    0 4px 12px -2px rgba(30, 141, 239, 0.35),
+    0 2px 6px -1px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  transition:
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.2s ease;
 }
-.node-input-tapies-icon {
-  font-size: 11px;
+.pe-launcher:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(125, 221, 255, 0.35),
+    0 6px 16px -2px rgba(30, 141, 239, 0.5),
+    0 2px 8px -1px rgba(0, 0, 0, 0.6);
 }
-.node-input-send {
-  width: 30px;
-  height: 30px;
+.pe-launcher:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* 消耗区域 (仅数字, 无图标 / 无单位标签) */
+.pe-cost {
+  display: inline-flex;
+  align-items: center;
+  padding-right: 8px;
+  border-right: 1px solid rgba(125, 221, 255, 0.15);
+  margin-right: 4px;
+}
+.pe-cost-num {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  letter-spacing: -0.2px;
+  text-shadow: 0 0 8px rgba(125, 221, 255, 0.35);
+}
+
+/* 科技感生成按钮 */
+.pe-trigger {
+  position: relative;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: var(--pea-brand);
-  color: #fff;
+  background: radial-gradient(circle at 35% 30%, #8EDBFF 0%, #2A9BFF 60%, #1A7FE8 100%);
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
-  transition: background 0.12s ease, transform 0.12s ease;
+  color: #fff;
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+    inset 0 -1px 2px rgba(10, 74, 176, 0.6),
+    0 0 0 1px rgba(125, 221, 255, 0.3),
+    0 2px 6px rgba(30, 141, 239, 0.5);
+  transition:
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.2s ease;
 }
-.node-input-send:hover:not(:disabled) {
-  background: var(--pea-brand-strong);
-  transform: scale(1.04);
+.pe-launcher:hover .pe-trigger {
+  transform: scale(1.08);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.5),
+    inset 0 -1px 2px rgba(10, 74, 176, 0.6),
+    0 0 0 1px rgba(191, 233, 255, 0.5),
+    0 3px 10px rgba(30, 141, 239, 0.7);
 }
-.node-input-send:disabled {
-  background: rgba(255, 255, 255, 0.15);
-  color: rgba(255, 255, 255, 0.5);
+.pe-trigger:active {
+  transform: scale(0.95);
+}
+
+/* 生成图标: 中心火花核心 + 轨道粒子翻动 */
+.pe-gen-icon {
+  width: 16px;
+  height: 16px;
+}
+.pe-gen-spark {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pe-spark-pulse 2s ease-in-out infinite;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.6));
+}
+@keyframes pe-spark-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.92; }
+  50%      { transform: scale(1.18); opacity: 1; }
+}
+/* 整组粒子绕中心旋转 */
+.pe-gen-particles {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pe-orbit 3.2s linear infinite;
+}
+@keyframes pe-orbit {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+/* 单颗粒子自身缩放翻动 (错峰) */
+.pe-particle {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: pe-flip 1.6s ease-in-out infinite;
+}
+.pe-particle.p2 { animation-delay: 0.4s; }
+.pe-particle.p3 { animation-delay: 0.8s; }
+.pe-particle.p4 { animation-delay: 1.2s; }
+@keyframes pe-flip {
+  0%, 100% { transform: scale(0.5); opacity: 0.45; }
+  50%      { transform: scale(1.15); opacity: 1; }
+}
+/* hover 加速粒子流动 */
+.pe-launcher:hover .pe-gen-particles { animation-duration: 1.6s; }
+.pe-launcher:hover .pe-particle { animation-duration: 0.8s; }
+.pe-launcher:hover .pe-gen-spark { animation-duration: 1s; }
+
+/* disabled 状态 */
+.pe-launcher.disabled {
   cursor: not-allowed;
+  opacity: 0.4;
+}
+.pe-launcher.disabled .pe-trigger {
+  background: radial-gradient(circle at 35% 30%, #666 0%, #444 60%, #222 100%);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.1), 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* submitting 状态 */
+.pe-launcher.submitting .pe-trigger {
+  background: radial-gradient(circle at 35% 30%, #8EDBFF 0%, #2A9BFF 60%, #1A7FE8 100%);
+  animation: pe-breath 1.2s ease-in-out infinite;
+}
+@keyframes pe-breath {
+  0%, 100% { box-shadow: inset 0 1px 1px rgba(255,255,255,0.4), 0 0 0 1px rgba(125,221,255,0.3), 0 2px 6px rgba(30,141,239,0.5); }
+  50%      { box-shadow: inset 0 1px 1px rgba(255,255,255,0.5), 0 0 0 1px rgba(191,233,255,0.6), 0 3px 10px rgba(30,141,239,0.7); }
+}
+
+/* 生成中：按钮切换为「停止」按钮，明确可点击（修复"生成中按钮不能点击"） */
+.pe-launcher.is-stopping {
+  cursor: pointer !important;
+  background: linear-gradient(180deg, rgba(70, 40, 40, 0.92) 0%, rgba(38, 22, 22, 0.96) 100%);
+  border-color: rgba(255, 120, 100, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 120, 90, 0.18),
+    0 4px 12px -2px rgba(255, 90, 70, 0.35),
+    0 2px 6px -1px rgba(0, 0, 0, 0.5);
+}
+.pe-launcher.is-stopping:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 0 0 1px rgba(255, 140, 110, 0.45),
+    0 6px 16px -2px rgba(255, 90, 70, 0.5),
+    0 2px 8px -1px rgba(0, 0, 0, 0.6);
+}
+.pe-launcher.is-stopping .pe-cost-num {
+  color: rgba(255, 235, 230, 0.95);
+  text-shadow: 0 0 8px rgba(255, 120, 90, 0.4);
+}
+.pe-launcher.is-stopping .pe-trigger {
+  background: radial-gradient(circle at 35% 30%, #FF9E8E 0%, #FF5A4D 60%, #E83A2A 100%);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+    inset 0 -1px 2px rgba(120, 20, 10, 0.6),
+    0 0 0 1px rgba(255, 120, 90, 0.35),
+    0 2px 6px rgba(255, 90, 70, 0.5);
+}
+.pe-stop-icon {
+  width: 14px;
+  height: 14px;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.4));
+}
+
+/* 减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .pe-launcher,
+  .pe-trigger,
+  .pe-gen-icon,
+  .pe-gen-spark,
+  .pe-gen-particles,
+  .pe-particle {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ * 浅色主题适配：节点输入栏 + 生成按钮
+ * 默认样式为深色（适配暗色画布），此处补充浅色模式覆盖。
+ * ══════════════════════════════════════════════════════════════════════ */
+html:not(.dark) .node-input-bar {
+  background: rgba(249, 251, 255, 0.97);
+  border-color: rgba(60, 80, 120, 0.10);
+  box-shadow:
+    0 12px 32px rgba(30, 50, 80, 0.08),
+    0 2px 8px rgba(30, 50, 80, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .node-input-tools button {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.06);
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .node-input-tools button:hover {
+  background: rgba(0, 0, 0, 0.07);
+}
+html:not(.dark) .node-input-textarea {
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .node-input-textarea::placeholder {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .node-input-status {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+
+/* 浅色：模型选择芯片 */
+html:not(.dark) .node-input-model-chip {
+  color: var(--pea-text-primary);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .node-input-model-chip:hover {
+  background: rgba(0, 0, 0, 0.07);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+html:not(.dark) .node-model-chip-arrow { opacity: 0.45; }
+
+/* 浅色：参数文字 */
+html:not(.dark) .node-input-param {
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .node-input-param-icon {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .node-input-icon-btn {
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .node-input-icon-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .node-input-model,
+html:not(.dark) .node-input-model-icon {
+  color: var(--pea-text-primary);
+}
+
+/* 浅色：生成按钮整体 */
+html:not(.dark) .pe-launcher {
+  background: linear-gradient(180deg, #3b9eff 0%, #1a7fe8 100%);
+  border: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 2px 8px rgba(26, 127, 232, 0.35),
+    0 4px 16px -2px rgba(26, 127, 232, 0.2);
+}
+html:not(.dark) .pe-launcher:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 12px rgba(26, 127, 232, 0.45),
+    0 6px 20px -2px rgba(26, 127, 232, 0.25);
+}
+
+/* 浅色：生成中「停止」按钮 */
+html:not(.dark) .pe-launcher.is-stopping {
+  background: linear-gradient(180deg, #ff7a66 0%, #e8402c 100%);
+  border: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 2px 8px rgba(232, 64, 44, 0.35),
+    0 4px 16px -2px rgba(232, 64, 44, 0.2);
+}
+html:not(.dark) .pe-launcher.is-stopping:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 12px rgba(232, 64, 44, 0.45),
+    0 6px 20px -2px rgba(232, 64, 44, 0.25);
+}
+html:not(.dark) .pe-launcher.is-stopping .pe-cost-num {
+  color: rgba(255, 255, 255, 0.97);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+html:not(.dark) .pe-launcher.is-stopping .pe-trigger {
+  background: radial-gradient(circle at 35% 30%, #ffd0c4 0%, #ff9e8e 60%, #ff5a4d 100%);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.4),
+    inset 0 -1px 2px rgba(150, 30, 15, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.3),
+    0 2px 6px rgba(232, 64, 44, 0.5);
+}
+
+/* 浅色：消耗数字 */
+html:not(.dark) .pe-cost {
+  border-right-color: rgba(255, 255, 255, 0.28);
+}
+html:not(.dark) .pe-cost-num {
+  color: rgba(255, 255, 255, 0.95);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  letter-spacing: -0.2px;
+}
+
+/* 浅色：触发核心（更亮的蓝色） */
+html:not(.dark) .pe-trigger {
+  background: radial-gradient(circle at 35% 30%, #b8e2ff 0%, #5cc6ec 60%, #3b9eff 100%);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.55),
+    0 1px 4px rgba(26, 127, 232, 0.35);
+}
+html:not(.dark) .pe-launcher:hover .pe-trigger {
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.65),
+    0 2px 8px rgba(26, 127, 232, 0.45);
+}
+/* 浅色：粒子颜色加深以在亮底上可见 */
+html:not(.dark) .pe-particle.p1,
+html:not(.dark) .pe-particle.p3 { fill: #1a7fe8; }
+html:not(.dark) .pe-particle.p2,
+html:not(.dark) .pe-particle.p4 { fill: #3b9eff; }
+html:not(.dark) .pe-gen-spark path {
+  fill: url(#pea-gen-spark-light);
+}
+
+/* 浅色：disabled 态 */
+html:not(.dark) .pe-launcher.disabled {
+  opacity: 0.42;
+  background: linear-gradient(180deg, #c8d4e0 0%, #a8bccf 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.3), 0 1px 3px rgba(0,0,0,0.08);
+}
+html:not(.dark) .pe-launcher.disabled .pe-trigger {
+  background: radial-gradient(circle at 35% 30%, #d0dae6 0%, #b0c4d8 60%, #98adbf 100%);
+  box-shadow: inset 0 1px 1px rgba(255,255,255,0.3), 0 1px 3px rgba(0,0,0,0.06);
+}
+html:not(.dark) .pe-launcher.disabled .pe-cost-num {
+  color: rgba(80, 100, 120, 0.85);
+  text-shadow: none;
+}
+
+/* 浅色：引用条 */
+html:not(.dark) .node-ref-tool {
+  color: var(--pea-text-secondary);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .node-ref-tool:hover {
+  background: rgba(0, 0, 0, 0.07);
+}
+html:not(.dark) .node-ref-bar {
+  border-top-color: rgba(0, 0, 0, 0.06);
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+/* 浅色：缩略图容器 */
+html:not(.dark) .node-ref-thumb {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.10);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+html:not(.dark) .node-ref-thumb:hover {
+  border-color: rgba(0, 0, 0, 0.18);
+}
+/* 浅色：文本引用图标 */
+html:not(.dark) .node-ref-text-icon {
+  color: var(--pea-text-muted);
+}
+
+/* 浅色：比例·分辨率芯片 */
+html:not(.dark) .node-input-aspect-chip {
+  color: var(--pea-text-primary);
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.07);
+}
+html:not(.dark) .node-input-aspect-chip:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.10);
+}
+html:not(.dark) .node-count-btn {
+  color: var(--pea-text-primary);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .node-count-btn-hint {
+  color: var(--pea-text-muted);
 }
 
 /* ===== 卡片式模型选择器（参考截图2/3） ===== */
@@ -4474,6 +5006,299 @@ body {
   pointer-events: auto; /* 明确允许交互 */
 }
 
+/* ═══ 浮层弹出（模型/比例/数量）浅色主题适配 ═══ */
+html:not(.dark) .node-model-picker,
+html:not(.dark) .node-aspect-picker,
+html:not(.dark) .node-count-btn-dropdown {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.14), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+html:not(.dark) .picker-scroll {
+  scrollbar-color: rgba(0,0,0,0.15) transparent;
+}
+html:not(.dark) .picker-scroll::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); }
+html:not(.dark) .picker-card {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .picker-card:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.10);
+}
+html:not(.dark) .picker-card-active {
+  background: rgba(31, 162, 220, 0.08);
+  border-color: rgba(31, 162, 220, 0.3);
+}
+html:not(.dark) .picker-card-locked {
+  opacity: 0.45;
+}
+html:not(.dark) .picker-card-name {
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .picker-tag {
+  background: rgba(31, 162, 220, 0.10);
+  color: var(--pea-brand-strong);
+}
+html:not(.dark) .picker-card-active .picker-tag {
+  background: rgba(31, 162, 220, 0.15);
+}
+html:not(.dark) .picker-empty {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .picker-footer {
+  border-top-color: rgba(0, 0, 0, 0.06);
+}
+html:not(.dark) .picker-selected-row {
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .picker-est {
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .picker-est b {
+  color: var(--pea-brand);
+}
+html:not(.dark) .aspect-label {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .aspect-ratio-btn {
+  color: var(--pea-text-secondary);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .aspect-ratio-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .aspect-ratio-btn.active {
+  background: rgba(31, 162, 220, 0.10);
+  border-color: rgba(31, 162, 220, 0.35);
+  color: var(--pea-brand);
+}
+html:not(.dark) .aspect-res-btn {
+  color: var(--pea-text-secondary);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .aspect-res-btn.active {
+  background: rgba(31, 162, 220, 0.10);
+  border-color: rgba(31, 162, 220, 0.35);
+  color: var(--pea-brand);
+}
+html:not(.dark) .aspect-duration-btn {
+  color: var(--pea-text-secondary);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .aspect-duration-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+html:not(.dark) .aspect-duration-btn.active {
+  background: rgba(31, 162, 220, 0.10);
+  border-color: rgba(31, 162, 220, 0.35);
+  color: var(--pea-brand);
+}
+html:not(.dark) .node-count-opt {
+  color: var(--pea-text-primary);
+  background: transparent;
+}
+html:not(.dark) .node-count-opt:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+html:not(.dark) .node-count-opt.active {
+  background: rgba(31, 162, 220, 0.12);
+  color: var(--pea-brand);
+}
+
+/* ===== 浅色主题：画布工具栏 / 节点卡片 / 徽章 ===== */
+
+/* 节点结果功能条（图片上方深色按钮栏）*/
+html:not(.dark) .pea-node-result-toolbar {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+html:not(.dark) .pea-node-toolbar-btn {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .pea-node-toolbar-btn:hover {
+  background: rgba(0, 0, 0, 0.07);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-node-toolbar-btn.active {
+  color: var(--pea-brand);
+  background: rgba(59, 158, 255, 0.10);
+}
+
+/* 节点主体卡片（深色圆角框）*/
+html:not(.dark) .pea-node-body-card {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(0, 0, 0, 0.07);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+html:not(.dark) .pea-node-body-card:hover {
+  box-shadow:
+    0 12px 36px rgba(0, 0, 0, 0.12),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+/* 节点顶部徽章（视频生成 / 图片生成 tag）*/
+html:not(.dark) .pea-node-badge {
+  background: rgba(255, 255, 255, 0.90);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06), inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+  color: var(--pea-text-primary);
+}
+
+/* 节点结果星标（左上角收藏）*/
+html:not(.dark) .pea-node-result-star {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .pea-node-result-star:hover {
+  background: rgba(0, 0, 0, 0.12);
+  color: var(--pea-text-secondary);
+}
+
+/* 画布底部控制条（缩放等）*/
+html:not(.dark) .pea-canvas-controls-pill {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-canvas-controls-btn {
+  color: var(--pea-text-secondary);
+  /* 确保图标有足够对比度：浅色下 secondary=#555560 在白底上对比度约 4.6:1，达到 AA 标准 */
+}
+html:not(.dark) .pea-canvas-controls-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-canvas-controls-btn.active {
+  background: rgba(59, 158, 255, 0.12);
+  color: var(--pea-brand, #1A7FE8);
+}
+/* 浅色下滑块轨道 */
+html:not(.dark) .pea-canvas-controls-slider-wrap input[type='range'] {
+  background: rgba(0, 0, 0, 0.10);
+}
+html:not(.dark) .pea-canvas-controls-slider-wrap input[type='range']::-webkit-slider-thumb {
+  background: #333;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+html:not(.dark) .pea-canvas-controls-slider-wrap input[type='range']::-moz-range-thumb {
+  background: #333;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+/* 浅色下帮助按钮 */
+html:not(.dark) .pea-canvas-controls-help {
+  border-color: rgba(0, 0, 0, 0.10);
+  background: #fff;
+  color: var(--pea-text-secondary);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+/* 左侧垂直工具栏 */
+html:not(.dark) .pea-toolbar {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+html:not(.dark) .pea-tlb-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* 多图角标 */
+html:not(.dark) .pea-node-image-badge {
+  color: var(--pea-text-secondary);
+}
+
+/* 添加节点菜单 */
+html:not(.dark) .pea-add-menu {
+  background: #fff;
+  color: var(--pea-text-primary);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+html:not(.dark) .pea-add-menu-title,
+html:not(.dark) .pea-add-menu-group {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .pea-add-menu-item {
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-add-menu-item:hover,
+html:not(.dark) .pea-add-menu-item.hl {
+  background: rgba(0, 0, 0, 0.04);
+}
+html:not(.dark) .pea-add-menu-icon {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+html:not(.dark) .pea-add-menu-item.hl .pea-add-menu-icon {
+  background: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .pea-add-menu-sub {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .pea-add-menu-tag {
+  background: rgba(59, 158, 255, 0.10);
+  color: var(--pea-brand);
+}
+
+/* 节点上传按钮 */
+html:not(.dark) .pea-node-media-upload {
+  border-color: rgba(0, 0, 0, 0.12);
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .pea-node-media-upload:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.20);
+  color: var(--pea-text-primary);
+}
+
+/* 连线右键菜单 */
+html:not(.dark) .pea-edge-menu {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-edge-menu-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* 文本节点工具栏（H1/H2/H3 格式栏）*/
+html:not(.dark) .tnt-bar {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .tnt-btn {
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .tnt-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .tnt-btn.active {
+  background: rgba(59, 158, 255, 0.10);
+  color: var(--pea-brand);
+}
+html:not(.dark) .tnt-label {
+  color: var(--pea-text-muted);
+  background: rgba(0, 0, 0, 0.05);
+}
+html:not(.dark) .tnt-sep {
+  background: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .tnt-color {
+  border-color: rgba(0, 0, 0, 0.15);
+}
+html:not(.dark) .text-node-toolbar {
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+}
+
 /* ===== 截图 #2：节点输入栏使用 fixed 视口定位，避免受画布缩放影响 ===== */
 /* 编辑框锚点：位于节点内部，编辑框 portal 进此容器，随节点平移无缝贴合。 */
 .pea-node-editor-anchor {
@@ -4806,6 +5631,100 @@ body {
 }
 .projects-card-more:hover { background: var(--pea-bg-elevated); color: var(--pea-text-primary); }
 
+/* ═════════════ 顶栏余额按钮（能量水晶风格，与画布芯片一致） ═════════════ */
+.pea-topnav-balance {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 12px 0 8px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--pea-border);
+  color: var(--pea-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+    background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.pea-topnav-balance:hover {
+  transform: translateY(-1px);
+  border-color: rgba(125, 221, 255, 0.3);
+  background: rgba(125, 221, 255, 0.06);
+  box-shadow: 0 2px 8px rgba(31, 162, 220, 0.1);
+}
+.pea-topnav-balance:active {
+  transform: translateY(0) scale(0.98);
+}
+/* 深色主题：顶栏余额按钮玻璃态 */
+.dark .pea-topnav-balance {
+  background: linear-gradient(180deg, rgba(30, 38, 55, 0.7) 0%, rgba(18, 24, 36, 0.8) 100%);
+  border-color: rgba(125, 221, 255, 0.15);
+  color: rgba(245, 248, 252, 0.92);
+  backdrop-filter: blur(10px) saturate(140%);
+}
+.dark .pea-topnav-balance:hover {
+  background: linear-gradient(180deg, rgba(30, 38, 55, 0.85) 0%, rgba(18, 24, 36, 0.92) 100%);
+  border-color: rgba(125, 221, 255, 0.32);
+  box-shadow: 0 4px 14px rgba(59, 158, 255, 0.1), 0 0 20px rgba(107, 95, 255, 0.04);
+}
+/* 顶栏水晶图标（复用画布芯片的 gem 样式，尺寸略小以适配导航栏） */
+.pea-topnav-balance .pea-balance-gem {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 2px rgba(125, 221, 255, 0.25));
+  transition: filter 0.3s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.pea-topnav-balance:hover .pea-balance-gem {
+  filter: drop-shadow(0 0 5px rgba(125, 221, 255, 0.45));
+  animation: gemPulse 1.6s ease-in-out infinite;
+}
+/* 顶栏余额数字 */
+.pea-topnav-balance .pea-balance-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px;
+  line-height: 1;
+}
+
+/* 顶栏社区按钮 */
+.pea-topnav-community {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: var(--pea-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.pea-topnav-community:hover { background: var(--pea-bg-elevated); color: var(--pea-text-primary); }
+
+/* 顶栏分享按钮 */
+.pea-topnav-share {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: var(--pea-text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.pea-topnav-share:hover { background: var(--pea-bg-elevated); color: var(--pea-text-primary); }
+
 /* 新建卡片（虚线） */
 .projects-card-create {
   background: transparent;
@@ -4992,22 +5911,106 @@ body {
   align-items: center;
   gap: 8px;
 }
+/* ═════════════ 账户余额芯片（能量水晶风格） ═════════════ */
+/* 浅色主题：微蓝白实底 + ���牌蓝边框 */
 .pea-canvas-tapies {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
+  gap: 8px;
+  height: 34px;
+  padding: 0 14px 0 10px;
   border-radius: 999px;
-  background: var(--pea-bg-panel);
-  border: 1px solid var(--pea-border);
-  color: var(--pea-text-primary);
-  font-size: 12px;
+  background: linear-gradient(180deg, #f6f8fc 0%, #eef3fa 100%);
+  border: 1px solid rgba(26, 127, 232, 0.18);
+  color: var(--pea-text-primary, #1a1a2e);
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition:
+    transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+    background 0.22s ease,
+    box-shadow 0.22s ease,
+    border-color 0.22s ease;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 1px 3px rgba(30, 60, 100, 0.08);
 }
-.pea-canvas-tapies:hover { background: var(--pea-bg-elevated); }
+.pea-canvas-tapies:hover {
+  transform: translateY(-1px);
+  border-color: rgba(26, 127, 232, 0.35);
+  background: linear-gradient(180deg, #eef3fa 0%, #e4ecf8 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 2px 6px rgba(30, 60, 100, 0.12),
+    0 0 14px rgba(59, 158, 255, 0.08);
+}
+.pea-canvas-tapies:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* 深色主题：画布余额芯片玻璃态 */
+.dark .pea-canvas-tapies {
+  background:
+    linear-gradient(180deg, rgba(30, 38, 55, 0.85) 0%, rgba(18, 24, 36, 0.92) 100%);
+  border: 1px solid rgba(125, 221, 255, 0.18);
+  color: rgba(245, 248, 252, 0.92);
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1px 3px rgba(0, 0, 0, 0.15),
+    0 0 12px rgba(59, 158, 255, 0.06);
+}
+.dark .pea-canvas-tapies:hover {
+  border-color: rgba(125, 221, 255, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 2px 6px rgba(0, 0, 0, 0.2),
+    0 0 20px rgba(59, 158, 255, 0.12),
+    0 0 40px rgba(107, 95, 255, 0.05);
+}
+
+/* 能量水晶图标 */
+.pea-balance-gem {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 2px rgba(59, 130, 246, 0.25));
+  transition: filter 0.3s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.pea-canvas-tapies:hover .pea-balance-gem {
+  filter: drop-shadow(0 0 5px rgba(59, 130, 246, 0.4));
+  animation: gemPulse 1.6s ease-in-out infinite;
+}
+/* 深色主题：图标增强发光 */
+.dark .pea-balance-gem {
+  filter: drop-shadow(0 0 3px rgba(125, 221, 255, 0.35));
+}
+.dark .pea-canvas-tapies:hover .pea-balance-gem {
+  filter: drop-shadow(0 0 6px rgba(125, 221, 255, 0.55));
+}
+@keyframes gemPulse {
+  0%, 100% { transform: scale(1) rotate(0deg); }
+  50% { transform: scale(1.08) rotate(5deg); }
+}
+
+/* 余额数字 */
+.pea-balance-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px;
+  transition: text-shadow 0.3s ease;
+}
+.pea-canvas-tapies:hover .pea-balance-num {
+  text-shadow: 0 0 10px rgba(59, 130, 246, 0.15);
+}
+/* 深色主题：数字发光 */
+.dark .pea-balance-num {
+  text-shadow: 0 0 8px rgba(125, 221, 255, 0.15);
+}
+.dark .pea-canvas-tapies:hover .pea-balance-num {
+  text-shadow: 0 0 14px rgba(125, 221, 255, 0.28);
+}
 .pea-canvas-community {
   display: inline-flex;
   align-items: center;
@@ -5138,16 +6141,15 @@ body {
 }
 
 /* ---- 浅色微调：让画布头部/操作区有可读层次 ---- */
+/* 注：.pea-canvas-tapies 不在此列——它有独立的玻璃态阴影系统 */
 .pea-canvas-host .pea-canvas-header-trigger,
 .pea-canvas-host .pea-canvas-dropdown,
-.pea-canvas-host .pea-canvas-tapies,
 .pea-canvas-host .pea-canvas-iconbtn,
 .pea-canvas-host .pea-canvas-bottom-prompt {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 .dark .pea-canvas-host .pea-canvas-header-trigger,
 .dark .pea-canvas-host .pea-canvas-dropdown,
-.dark .pea-canvas-host .pea-canvas-tapies,
 .dark .pea-canvas-host .pea-canvas-iconbtn,
 .dark .pea-canvas-host .pea-canvas-bottom-prompt {
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
@@ -5937,7 +6939,7 @@ body {
   background: transparent;
   border: none;
   outline: none;
-  color: #fff;
+  color: var(--pea-text-primary);
   font-size: 14px;
   /* 标准字重 500：避免 450 这种非标准值在 GPU 合成层里被灰度抗锯齿渲染发虚
      （表现为「鼠标移上去才清晰」）。500 是系统字体真实存在的档位，各状态一致清晰。 */
@@ -5956,7 +6958,7 @@ body {
 }
 .node-prompt-editor:empty::before {
   content: attr(data-placeholder);
-  color: rgba(255, 255, 255, 0.36);
+  color: var(--pea-text-muted);
   pointer-events: none;
   display: block;
 }
@@ -6823,15 +7825,14 @@ body {
   min-width: 180px;
   min-height: 140px;
   border-radius: 18px;
-  /* 透明背景：让画布点阵网格透出（参考图样式）。
-     取消 backdrop-filter 和 overflow:hidden，避免遮住/裁掉子节点。
-     边框极细极淡，仅作为容器的微弱轮廓。 */
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  /* 极淡背景 + 可见边框：既能识别组范围，又不遮挡画布点阵网格。
+     取消 backdrop-filter 和 overflow:hidden，避免遮住/裁掉子节点。 */
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.30);
   display: flex;
   flex-direction: column;
   overflow: visible;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
   /* 关键：让 group 内部子节点能正常接收事件，
      自身不拦截（子节点由 .pea-group-node > * 选择器重新启用）。 */
@@ -6840,8 +7841,8 @@ body {
 .pea-group-node > * { pointer-events: auto; }
 
 .pea-group-node.selected {
-  border-color: rgba(31, 162, 220, 0.55);
-  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.08) inset;
+  border-color: rgba(31, 162, 220, 0.80);
+  box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.12) inset, 0 0 16px rgba(31, 162, 220, 0.20);
 }
 
 /* 组名称：浮在容器外左上角，无图标，白字阴影保证可读性（参考图2） */
@@ -6924,8 +7925,10 @@ body {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  border: 3px solid var(--pgn-swatch-color, rgba(255, 255, 255, 0.35));
+  background: transparent;
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 /* 颜色选择面板：竖排圆点色板 */
@@ -7146,16 +8149,47 @@ body {
   z-index: 5 !important; /* 子节点抬升，不被兄弟组容器遮挡 */
 }
 
+/* 覆盖 ReactFlow 默认 group 节点样式：默认的 .react-flow__node-group 自带
+   1px 深色直角边框 + 3px 小圆角 + 浅色背景，会与内部 .pea-group-node 的
+   18px 大圆角形成「外层直角框、内层圆角框」的双层错位感。 */
+.react-flow__node-group,
+.react-flow__node-group.selectable:hover,
+.react-flow__node-group.selectable.selected,
+.react-flow__node-group.selectable:focus,
+.react-flow__node-group.selectable:focus-visible {
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 18px !important;
+}
+
 /* ── 亮色适配 ── */
 .light .pea-group-node {
-  background: transparent;
-  border-color: rgba(0, 0, 0, 0.06);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.02) inset;
+  background: rgba(240, 242, 245, 0.95);
+  border-color: rgba(0, 0, 0, 0.24);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06) inset;
 }
 .light .pea-group-node.selected {
-  border-color: rgba(31, 162, 220, 0.45);
-  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.08) inset;
+  border-color: rgba(31, 162, 220, 0.78);
+  box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.10) inset, 0 0 16px rgba(31, 162, 220, 0.20);
 }
+
+/* 当系统偏好浅色但 html/body 未显式添加 .light 类时（常见于 headless 测试或未初始化主题），
+   用媒体查询兜底，避免 group 继续应用暗色白色边框导致在浅灰画布上看不见。 */
+@media (prefers-color-scheme: light) {
+  .pea-group-node {
+    background: rgba(240, 242, 245, 0.95);
+    border-color: rgba(0, 0, 0, 0.24);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06) inset;
+  }
+  .pea-group-node.selected {
+    border-color: rgba(31, 162, 220, 0.78);
+    box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.10) inset, 0 0 16px rgba(31, 162, 220, 0.20);
+  }
+  .pea-group-node-label { color: rgba(0, 0, 0, 0.82); text-shadow: none; }
+}
+
 .light .pgn-header {
   background: rgba(0, 0, 0, 0.02);
   border-bottom-color: rgba(0, 0, 0, 0.05);

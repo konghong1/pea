@@ -40,6 +40,18 @@ const COLOR_PRESETS: { color: string; label: string }[] = [
   { color: 'rgba(249,115,22,0.16)', label: '橙' },
 ];
 
+/** 把背景色转换成更醒目的色环颜色（提高 alpha，让颜色能被看见）。 */
+function swatchRingColor(color: string): string {
+  if (color === 'transparent') return 'rgba(255,255,255,0.35)';
+  const m = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+  if (m) {
+    const [_, r, g, b, a] = m;
+    const alpha = a ? Math.min(parseFloat(a) * 4, 0.9) : 0.9;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  return color;
+}
+
 /**
  * GroupNode — 打组容器节点。
  *
@@ -161,12 +173,8 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
             <span
               className="pgn-color-swatch"
               style={{
-                background: bgColor === 'transparent' ? 'transparent' : bgColor,
-                borderColor:
-                  bgColor === 'transparent'
-                    ? 'rgba(255,255,255,0.35)'
-                    : bgColor,
-              }}
+                '--pgn-swatch-color': swatchRingColor(bgColor),
+              } as React.CSSProperties}
             />
             <span>切换背景</span>
           </button>
@@ -274,7 +282,7 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
       <div
         className={`pea-group-node ${selected ? 'selected' : ''}`}
         data-group-container={id}
-        style={{ background: bgColor }}
+        style={bgColor === 'transparent' ? undefined : { background: bgColor }}
       >
         {/* 组名称：左上角，无图标（参考图2） */}
         <div className="pea-group-node-label">{label}</div>

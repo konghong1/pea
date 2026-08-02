@@ -43,6 +43,11 @@ class BaseProviderAdapter(abc.ABC):
     注册到 PROVIDER_REGISTRY 一行即可, 完全不碰 build_adapter 工厂逻辑。
     """
 
+    # 参考图解析策略 (Strategy): 默认 None = 沿用 resolve_refs 的"转公网 URL"实现。
+    # 子类若声明 Base64InlineStrategy 并覆写 resolve_refs, 即可完全跳过公网转存
+    # (MiniMax / Anthropic 都直接吃 data URI, 少一整条隧道故障链)。
+    ref_strategy: Any = None
+
     def __init__(self, cfg: dict):
         self.base_url: str = cfg.get("base_url", "")
         self.api_key: str = cfg.get("api_key", "")
@@ -288,14 +293,42 @@ class MockAdapter(BaseProviderAdapter):
         raise NotImplementedError("mock provider is always synchronous")
 
 
+_builtin_loaded = False
+
+
+def _ensure_builtin_providers() -> None:
+    """延迟导入 app.providers 包, 触发各适配器的 @register_provider 注册。
+
+    为什么延迟: 适配器模块要 ``from app.async_core.provider_adapter import
+    BaseProviderAdapter``, 若本模块顶层反过来 import app.providers 就成环。
+    在工厂函数体内导入即可打断, 且只付一次代价 (_builtin_loaded 幂等)。
+    """
+    global _builtin_loaded
+    if _builtin_loaded:
+        return
+    _builtin_loaded = True
+    try:
+        import app.providers  # noqa: F401  (import 即注册)
+
+        logger.info("[provider] 内置适配器已注册: %s", sorted(PROVIDER_REGISTRY))
+    except Exception as exc:  # noqa: BLE001
+        # 不让某个厂商模块的导入错误拖垮整个编排器 —— 已注册的仍可用
+        logger.error("[provider] 内置适配器加载失败: %s", exc, exc_info=exc)
+
+
 def build_adapter(cfg: dict) -> BaseProviderAdapter:
     """工厂: 按 provider_type 从 PROVIDER_REGISTRY 解析适配器; 未知类型回退 OpenAI 兼容。
 
-    加新模型无需改动本函数 —— 只需在其适配器类上加 ``@register_provider("xxx")``。
+    加新模型无需改动本函数 —— 只需在其适配器类上加 ``@register_provider("xxx")``,
+    并在 ``app/providers/__init__.py`` import 一行。
     """
-    ptype = cfg.get("provider_type") or "openai-compatible"
+    _ensure_builtin_providers()
+    ptype = (cfg.get("provider_type") or "openai-compatible").strip()
     cls = PROVIDER_REGISTRY.get(ptype)
     if cls is None:
-        # 未知/缺省类型按 OpenAI 兼容(Agnes)处理
+        logger.warning(
+            "[provider] 未知 provider_type=%r, 回退 openai-compatible (已注册: %s)",
+            ptype, sorted(PROVIDER_REGISTRY),
+        )
         cls = PROVIDER_REGISTRY.get("openai-compatible", AgnesAdapter)
     return cls(cfg)

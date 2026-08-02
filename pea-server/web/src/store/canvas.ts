@@ -36,6 +36,45 @@ export type PeaNodeData = {
   meta?: Record<string, unknown>;
 };
 
+/**
+ * 把内存中的画布节点/边序列化为可持久化的最小结构。
+ * 与 openCanvas 口径一致：保留完整 data（含 prompt/params），不裁剪字段。
+ * 同时供 CanvasEditor 的 autosave / flushSave 与 store 的 saveCanvasNow 复用，避免逻辑分叉。
+ */
+export function cleanGraph(
+  nodes: Node<PeaNodeData>[],
+  edges: Edge[],
+): { nodes: any[]; edges: any[] } {
+  return {
+    nodes: nodes.map((n) => {
+      const base: Record<string, unknown> = {
+        id: n.id,
+        type: n.type || 'pea',
+        position: n.position,
+        data: n.data,
+      };
+      if (n.type === 'group') {
+        base.parentNode = n.parentNode;
+        base.extent = n.extent;
+        base.style = n.style ? { width: n.style.width, height: n.style.height } : undefined;
+      }
+      if (n.parentNode) {
+        base.parentNode = n.parentNode;
+        base.extent = n.extent;
+      }
+      return base;
+    }),
+    edges: edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle ?? null,
+      targetHandle: e.targetHandle ?? null,
+      type: e.type || 'pea',
+    })),
+  };
+}
+
 interface CanvasState {
   canvasId: number | null;
   version: number;
@@ -92,6 +131,9 @@ interface CanvasState {
   bumpSave: () => void;
   /** 获取某节点的直接上游输入节点（按边建立顺序排序）。 */
   getUpstreamInputs: (nodeId: string) => Node<PeaNodeData>[];
+  /** 立即落盘（非防抖）：关键写入（如提交生成 prompt）后调用，确保内容立刻写库，
+   *  不依赖 1s 防抖 autosave，避免刷新/切走时丢失。幂等（version 乐观锁）。 */
+  saveCanvasNow: () => Promise<boolean>;
   /** 批量添加边（用于多选插入节点后的自动连线）。 */
   addEdges: (newEdges: Edge[]) => void;
   /**
@@ -783,6 +825,57 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     });
   },
   bumpSave: () => set({ saveCount: get().saveCount + 1 }),
+  /**
+   * 立即落盘（非防抖）：在关键写入（如提交生成 prompt）后调用，
+   * 确保用户内容立刻写库，避免依赖 1s 防抖 autosave 在刷新/切走时丢失。
+   * 幂等（version 乐观锁，重复 PUT 第二次 409 被忽略）。
+   */
+  /**
+   * 立即落盘（非防抖）：在关键写入（如提交生成 prompt）后调用，
+   * 确保用户内容立刻写库，避免依赖 1s 防抖 autosave 在刷新/切走时丢失。
+   *
+   * 关键修复：原先 409/网络错误被 `catch {}` 静默吞掉，导致 prompt(editorText)
+   * 永远没写进后端；而 submit() 又紧接着 `localStorage.removeItem(draftKey)` 删掉
+   * 唯一兜底草稿 → 退出重进后编辑框空白（已复现）。
+   * 现改为：
+   *   1) 409 乐观锁冲突 → 重新拉取后端权威 version 后重试一次（last-write-wins，单用户画布安全），
+   *      确保本次用户内容真正落库；
+   *   2) 返回 boolean 表示是否真正落盘，供调用方决定是否清除 localStorage 兜底草稿。
+   */
+  saveCanvasNow: async (): Promise<boolean> => {
+    const s = get();
+    if (s.canvasId == null) return false;
+    try {
+      const { data } = await api.put(`/canvases/${s.canvasId}`, {
+        graph_json: cleanGraph(s.nodes, s.edges),
+        version: s.version,
+      });
+      get().markSaved(data.version);
+      return true;
+    } catch (err: any) {
+      // 乐观锁冲突：本地 version 落后后端（常见于 autosave 与本次保存竞态）。
+      // 重新拉取权威 version 并重试，避免用户刚输入的 prompt 被静默丢弃。
+      if (err?.response?.status === 409) {
+        try {
+          const g = await api.get(`/canvases/${s.canvasId}`);
+          const serverVersion: number = g.data.version;
+          set({ version: serverVersion });
+          const { data } = await api.put(`/canvases/${s.canvasId}`, {
+            graph_json: cleanGraph(get().nodes, get().edges),
+            version: serverVersion,
+          });
+          get().markSaved(data.version);
+          return true;
+        } catch (retryErr) {
+          console.error('[saveCanvasNow] 409 重试仍失败，保留 localStorage 兜底草稿', retryErr);
+          return false;
+        }
+      }
+      // 其他错误（画布已删除 / 网络异常）：记录但不抛出，避免中断生成流程。
+      console.error('[saveCanvasNow] 保存失败，保留 localStorage 兜底草稿', err);
+      return false;
+    }
+  },
   getUpstreamInputs: (nodeId) => {
     const { nodes, edges } = get();
     const upstreamEdges = edges
@@ -867,13 +960,19 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   },
   applyJobResult: (jobId, patch) =>
     set((s) => {
+      // 防御：绝不能因后端回写 payload 里携带 prompt: undefined/null 而把用户已输入的提示词清空。
+      // （生成结果回写只关心 generating/resultUrl/error 等字段，prompt 必须始终保留。）
+      const safePatch: Partial<PeaNodeData> = { ...patch };
+      if (safePatch.prompt === undefined || safePatch.prompt === null) {
+        delete safePatch.prompt;
+      }
       // 1) 正常路径: jobNodeMap 找到 -> 直接 patch
       const nodeId = s.jobNodeMap[jobId];
       if (nodeId) {
         return {
           dirty: true,
           nodes: s.nodes.map((n) =>
-            n.id === nodeId ? { ...n, data: { ...n.data, ...patch } } : n,
+            n.id === nodeId ? { ...n, data: { ...n.data, ...safePatch } } : n,
           ),
         };
       }
@@ -886,7 +985,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         return {
           dirty: true,
           nodes: s.nodes.map((n) =>
-            n.id === fallbackId ? { ...n, data: { ...n.data, ...patch } } : n,
+            n.id === fallbackId ? { ...n, data: { ...n.data, ...safePatch } } : n,
           ),
         };
       }
