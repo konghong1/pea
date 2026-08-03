@@ -739,6 +739,7 @@ export default function NodeChatPrompt() {
           resultUrls: undefined,
           resultIndex: 0,
           savedToLibrary: false,
+          isFavorite: false,
         });
         useCanvas.getState().removeJob(ev.jobId);
         toast.error(ev.error || '生成失败，已退款');
@@ -1435,6 +1436,7 @@ useEffect(() => {
         resultUrls: undefined,
         resultIndex: 0,
         savedToLibrary: false,
+        isFavorite: false,
         lastJobId: res.jobId,
       });
       toast.success(referenceImages.length ? `已受理，含 ${referenceImages.length} 张参考图` : '已受理，生成中…');

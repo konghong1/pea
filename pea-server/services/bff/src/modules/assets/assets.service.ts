@@ -192,10 +192,11 @@ export class AssetsService {
     const scope = dto.scope ?? 'personal';
     const source = isGenObject ? 'generated' : 'upload';
 
+    const isFavorite = dto.is_favorite ? 1 : 0;
     const r = await this.db.query<any>(
       `INSERT INTO assets
-       (owner_id, folder_id, name, object_key, content_type, size, scope, source)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (owner_id, folder_id, name, object_key, content_type, size, scope, source, is_favorite)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
         dto.folder_id ?? null,
@@ -205,6 +206,7 @@ export class AssetsService {
         stat.size ?? 0,
         scope,
         source,
+        isFavorite,
       ],
     );
 
@@ -218,6 +220,7 @@ export class AssetsService {
       size: stat.size ?? 0,
       scope,
       source,
+      is_favorite: isFavorite === 1,
       url,
     };
   }

@@ -15,18 +15,68 @@ import {
   MoreOutlined,
   DeleteOutlined,
   EditOutlined,
+  CopyOutlined,
+  DownloadOutlined,
   CloseOutlined,
   FileOutlined,
   PictureOutlined,
 } from '@ant-design/icons';
 import { App, Button, Dropdown, Input, Modal, Tooltip } from 'antd';
 import { assetsApi, type AssetFolder, type Asset, type AssetScope } from '../api/assets';
+import { getFileUrl } from '../api/files';
 import { toast } from '../store/toast';
+import MoveToFolderModal from './MoveToFolderModal';
 
 type View = 'root' | 'favorites' | 'folder';
 
 interface MaterialPanelProps {
   onClose: () => void;
+}
+
+/** 素材缩略图：优先用后端 url，裂图时走 BFF 代理 blob URL 兜底。 */
+function AssetThumb({
+  asset,
+  size = 'sm',
+  showLabel = false,
+  className = '',
+}: {
+  asset: Asset;
+  size?: 'sm' | 'md';
+  showLabel?: boolean;
+  className?: string;
+}) {
+  const [src, setSrc] = useState(asset.url);
+  const isImage = /^image\//.test(asset.content_type);
+  const isVideo = /^video\//.test(asset.content_type);
+
+  useEffect(() => {
+    setSrc(asset.url);
+  }, [asset.url]);
+
+  const handleError = useCallback(async () => {
+    if (!isImage && !isVideo) return;
+    try {
+      const blobUrl = await getFileUrl(asset.object_key);
+      if (blobUrl) setSrc(blobUrl);
+    } catch {
+      // 兜底失败则保留占位
+    }
+  }, [asset.object_key, isImage, isVideo]);
+
+  return (
+    <div className={`pea-material-thumb ${size} ${className}`} title={asset.name}>
+      <div className="pea-material-thumb-img">
+        {isImage ? (
+          <img src={src} alt="" loading="lazy" onError={handleError} />
+        ) : isVideo ? (
+          <video src={src} muted preload="metadata" onError={handleError} />
+        ) : (
+          <PictureOutlined />
+        )}
+      </div>
+      {showLabel && <div className="pea-material-thumb-label">{asset.name}</div>}
+    </div>
+  );
 }
 
 export default function MaterialPanel({ onClose }: MaterialPanelProps) {
@@ -41,6 +91,7 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
+  const [moveTarget, setMoveTarget] = useState<Asset | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refreshFolders = useCallback(async () => {
@@ -205,6 +256,82 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
     });
   };
 
+  const renameAsset = (a: Asset) => {
+    let value = a.name;
+    modal.confirm({
+      title: '重命名',
+      content: (
+        <Input
+          defaultValue={a.name}
+          maxLength={80}
+          onChange={(e) => {
+            value = e.target.value;
+          }}
+          onPressEnter={() => {
+            Modal.destroyAll();
+            doRenameAsset(a.id, value);
+          }}
+        />
+      ),
+      onOk: () => doRenameAsset(a.id, value),
+    });
+  };
+
+  const doRenameAsset = async (id: number, name: string) => {
+    const n = name.trim();
+    if (!n) return;
+    try {
+      await assetsApi.updateAsset(id, { name: n });
+      refreshAssets();
+      message.success('已重命名');
+    } catch {
+      toast.error('重命名失败');
+    }
+  };
+
+  const duplicateAsset = async (a: Asset) => {
+    try {
+      await assetsApi.importAsset(
+        a.object_key,
+        `${a.name.replace(/\.[^.]+$/, '')} 副本`,
+        a.scope,
+        a.folder_id,
+        a.is_favorite,
+      );
+      refreshAssets();
+      message.success('已创建副本');
+    } catch {
+      toast.error('创建副本失败');
+    }
+  };
+
+  const downloadAsset = async (a: Asset) => {
+    try {
+      const url = a.url || (await getFileUrl(a.object_key));
+      if (!url) return;
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = a.name;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch {
+      toast.error('下载失败');
+    }
+  };
+
+  const doMoveAsset = async (a: Asset, folderId: number | null) => {
+    try {
+      await assetsApi.updateAsset(a.id, { folder_id: folderId });
+      refreshAssets();
+      message.success('已移动');
+    } catch {
+      toast.error('移动失败');
+    }
+  };
+
   const openFolder = (f: AssetFolder) => {
     setFolderId(f.id);
     setFolderName(f.name);
@@ -229,6 +356,7 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   ];
 
   const folderMenu = (f: AssetFolder) => ({
+    theme: 'dark' as const,
     items: [
       { key: 'rename', icon: <EditOutlined />, label: '重命名', onClick: () => renameFolder(f) },
       { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true, onClick: () => deleteFolder(f) },
@@ -236,19 +364,47 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   });
 
   const assetMenu = (a: Asset) => ({
+    theme: 'dark' as const,
     items: [
+      {
+        key: 'rename',
+        icon: <EditOutlined />,
+        label: '重命名',
+        onClick: () => renameAsset(a),
+      },
+      {
+        key: 'move',
+        icon: <FolderOpenOutlined />,
+        label: '移动到...',
+        onClick: () => setMoveTarget(a),
+      },
+      {
+        key: 'duplicate',
+        icon: <CopyOutlined />,
+        label: '创建副本',
+        onClick: () => duplicateAsset(a),
+      },
+      {
+        key: 'download',
+        icon: <DownloadOutlined />,
+        label: '下载',
+        onClick: () => downloadAsset(a),
+      },
       {
         key: 'favorite',
         icon: a.is_favorite ? <StarOutlined /> : <StarFilled />,
         label: a.is_favorite ? '取消收藏' : '收藏',
         onClick: () => toggleFavorite(a),
       },
-      { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true, onClick: () => deleteAsset(a) },
+      {
+        key: 'delete',
+        icon: <DeleteOutlined />,
+        label: '删除',
+        danger: true,
+        onClick: () => deleteAsset(a),
+      },
     ],
   });
-
-  const isImage = (a: Asset) => /^image\//.test(a.content_type);
-  const isVideo = (a: Asset) => /^video\//.test(a.content_type);
 
   const folderMap = useMemo(() => {
     const map = new Map<number, AssetFolder>();
@@ -262,14 +418,16 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   );
 
   const assetsByFolder = useMemo(() => {
+    // root 视图下，收藏素材只在「收藏」入口展示，避免在文件夹树/根目录区域重复出现
+    const source = view === 'root' ? assets.filter((a) => !a.is_favorite) : assets;
     const map = new Map<number | null, Asset[]>();
-    assets.forEach((a) => {
+    source.forEach((a) => {
       const key = a.folder_id ?? null;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(a);
     });
     return map;
-  }, [assets]);
+  }, [assets, view]);
 
   const childFoldersOf = useCallback(
     (parentId: number) => folders.filter((f) => f.parent_id === parentId),
@@ -300,23 +458,7 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   }, [assets]);
 
   const renderAssetThumb = (a: Asset, size: 'sm' | 'md' = 'sm') => (
-    <div
-      key={a.id}
-      className={`pea-material-thumb ${size}`}
-      title={a.name}
-      onClick={() => { /* 未来可预览 */ }}
-    >
-      <div className="pea-material-thumb-img">
-        {isImage(a) ? (
-          <img src={a.url} alt={a.name} loading="lazy" />
-        ) : isVideo(a) ? (
-          <video src={a.url} muted preload="metadata" />
-        ) : (
-          <PictureOutlined />
-        )}
-      </div>
-      <div className="pea-material-thumb-label">{a.name}</div>
-    </div>
+    <AssetThumb key={a.id} asset={a} size={size} />
   );
 
   const renderFolderTree = (f: AssetFolder, depth = 0) => {
@@ -368,8 +510,18 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
           <div className="pea-material-folder-children">
             {children.map((child) => renderFolderTree(child, depth + 1))}
             {folderAssets.length > 0 && (
-              <div className="pea-material-folder-assets">
-                {folderAssets.map((a) => renderAssetThumb(a, 'sm'))}
+              <div className="pea-material-asset-list">
+                {folderAssets.map((a) => (
+                  <div key={a.id} className="pea-material-asset-item" title={a.name}>
+                    <AssetThumb asset={a} size="sm" />
+                    <span className="pea-material-asset-item-name">{a.name}</span>
+                    <Dropdown menu={assetMenu(a)} placement="bottomRight" arrow>
+                      <button type="button" className="pea-material-more" aria-label="更多">
+                        <MoreOutlined />
+                      </button>
+                    </Dropdown>
+                  </div>
+                ))}
               </div>
             )}
             {folderAssets.length === 0 && children.length === 0 && (
@@ -422,7 +574,7 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
               <span>AI 角色</span>
             </button>
           </Tooltip>
-          <Dropdown menu={{ items: addMenuItems }} placement="bottomRight" arrow>
+          <Dropdown menu={{ items: addMenuItems, theme: 'dark' }} placement="bottomRight" arrow>
             <button type="button" className="pea-material-iconbtn" aria-label="新建">
               <PlusOutlined />
             </button>
@@ -480,14 +632,11 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
             )}
             {rootFolders.map((f) => renderFolderTree(f))}
 
-            {/* 根目录下未归入文件夹的素材 */}
+            {/* 根目录下未归入文件夹的素材，直接展示不再显示“未分类”标题 */}
             {(assetsByFolder.get(null)?.length ?? 0) > 0 && (
-              <>
-                <div className="pea-material-section">未分类</div>
-                <div className="pea-material-folder-assets root">
-                  {assetsByFolder.get(null)?.map((a) => renderAssetThumb(a, 'sm'))}
-                </div>
-              </>
+              <div className="pea-material-root-assets">
+                {assetsByFolder.get(null)?.map((a) => renderAssetThumb(a, 'sm'))}
+              </div>
             )}
           </>
         )}
@@ -501,7 +650,21 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
               <div key={day} className="pea-material-fav-group">
                 <div className="pea-material-fav-date">{day}</div>
                 <div className="pea-material-fav-grid">
-                  {items.map((a) => renderAssetThumb(a, 'md'))}
+                  {items.map((a) => (
+                    <div key={a.id} className="pea-material-thumb-wrap" title={a.name}>
+                      <div className="pea-material-fav-star">
+                        <StarFilled />
+                      </div>
+                      <AssetThumb asset={a} size="md" />
+                      <div className="pea-material-thumb-actions">
+                        <Dropdown menu={assetMenu(a)} placement="bottomRight" arrow>
+                          <button type="button" aria-label="更多">
+                            <MoreOutlined />
+                          </button>
+                        </Dropdown>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             ))}
@@ -513,43 +676,43 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
             {assets.length === 0 && !loading && (
               <div className="pea-material-empty">文件夹为空，点击 + 上传</div>
             )}
-            {assets.map((a) => (
-              <div key={a.id} className="pea-material-asset">
-                <div className="pea-material-asset-thumb">
-                  {isImage(a) ? (
-                    <img src={a.url} alt={a.name} loading="lazy" />
-                  ) : (
-                    <PictureOutlined />
-                  )}
-                </div>
-                <div className="pea-material-asset-meta">
-                  <div className="pea-material-asset-name" title={a.name}>
-                    {a.name}
-                  </div>
-                  <div className="pea-material-asset-sub">
-                    {(a.size / 1024).toFixed(1)} KB · {a.content_type || '文件'}
-                  </div>
-                </div>
-                <div className="pea-material-asset-actions">
-                  <button
-                    type="button"
-                    className={a.is_favorite ? 'favorite' : ''}
-                    onClick={() => toggleFavorite(a)}
-                    aria-label={a.is_favorite ? '取消收藏' : '收藏'}
-                  >
-                    {a.is_favorite ? <StarFilled /> : <StarOutlined />}
-                  </button>
-                  <Dropdown menu={assetMenu(a)} placement="bottomRight" arrow>
-                    <button type="button" aria-label="更多">
-                      <MoreOutlined />
+            <div className="pea-material-folder-assets root">
+              {assets.map((a) => (
+                <div key={a.id} className="pea-material-thumb-wrap" title={a.name}>
+                  <AssetThumb asset={a} size="sm" />
+                  <div className="pea-material-thumb-actions">
+                    <button
+                      type="button"
+                      className={a.is_favorite ? 'favorite' : ''}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFavorite(a);
+                      }}
+                      aria-label={a.is_favorite ? '取消收藏' : '收藏'}
+                    >
+                      {a.is_favorite ? <StarFilled /> : <StarOutlined />}
                     </button>
-                  </Dropdown>
+                    <Dropdown menu={assetMenu(a)} placement="bottomRight" arrow>
+                      <button type="button" aria-label="更多">
+                        <MoreOutlined />
+                      </button>
+                    </Dropdown>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </>
         )}
       </div>
+
+      <MoveToFolderModal
+        open={!!moveTarget}
+        onClose={() => setMoveTarget(null)}
+        scope={scope}
+        onMove={async (folderId) => {
+          if (moveTarget) await doMoveAsset(moveTarget, folderId);
+        }}
+      />
     </div>
   );
 }

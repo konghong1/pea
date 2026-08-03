@@ -23,7 +23,8 @@ export type PeaNodeData = {
   resultUrl?: string;     // 模型生成的结果 URL（图片/视频等，兼容旧数据）
   resultUrls?: string[];  // 模型生成的多张结果 URL（image 节点支持多图）
   resultIndex?: number;   // 当前展示 resultUrls 中的第几张
-  savedToLibrary?: boolean; // 是否已保存到素材库
+  savedToLibrary?: boolean; // 是否已通过「保存到素材库」导入
+  isFavorite?: boolean;   // 是否已通过左上角星标「收藏」
   generating?: boolean;   // 是否正在生成中
   /** 最近一次生成任务的 jobId（受理成功后写入）。
    *  关键：用于加载画布时与后端核对真实状态，防止 WS 事件丢失后节点永远卡在 generating。 */

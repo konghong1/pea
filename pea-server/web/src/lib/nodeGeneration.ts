@@ -42,6 +42,7 @@ export function pollNodeJobResult(jobId: string) {
           resultUrls: urls,
           resultIndex: 0,
           savedToLibrary: false,
+          isFavorite: false,
         });
         useCanvas.getState().removeJob(jobId);
         const count = urls?.length ?? 1;
@@ -59,6 +60,7 @@ export function pollNodeJobResult(jobId: string) {
           resultUrls: undefined,
           resultIndex: 0,
           savedToLibrary: false,
+          isFavorite: false,
         });
         useCanvas.getState().removeJob(jobId);
         toast.error(data?.error || '生成失败，已退款');
@@ -120,6 +122,7 @@ export async function retryNodeGeneration(nodeId: string) {
       resultUrls: undefined,
       resultIndex: 0,
       savedToLibrary: false,
+      isFavorite: false,
       lastJobId: res.jobId,
     }, false);
     toast.success('已重新发起生成');

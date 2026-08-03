@@ -12,38 +12,34 @@ import {
 import { assetsApi, type AssetFolder, type AssetScope } from '../api/assets';
 import { toast } from '../store/toast';
 
-interface SaveToLibraryModalProps {
+interface MoveToFolderModalProps {
   open: boolean;
   onClose: () => void;
-  defaultName?: string;
-  onSave: (payload: { scope: AssetScope; folderId: number | null }) => Promise<void>;
+  scope: AssetScope;
+  onMove: (folderId: number | null) => Promise<void>;
 }
 
 /**
- * 保存到素材库弹窗（参考新版设计）：
+ * 移动素材到文件夹弹窗：
  * - 深色一体化面板
- * - 右上角「+ 新建文件夹」
- * - 胶囊分段切换 个人 / 团队
  * - 树状文件夹结构，可展开/折叠、点选高亮
- * - 新建文件夹直接在目标文件夹下方内联输入（Finder 风格）
- * - 底部取消 / 保存
+ * - 右上角「+ 新建文件夹」（便于直接创建目标文件夹）
+ * - 底部取消 / 移动
  */
-export default function SaveToLibraryModal({
+export default function MoveToFolderModal({
   open,
   onClose,
-  defaultName,
-  onSave,
-}: SaveToLibraryModalProps) {
-  const [scope, setScope] = useState<AssetScope>('personal');
+  scope,
+  onMove,
+}: MoveToFolderModalProps) {
   const [folders, setFolders] = useState<AssetFolder[]>([]);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [isCreating, setIsCreating] = useState(false);
-  /** 正在哪个文件夹下新建子文件夹；null 表示在根目录下新建 */
   const [creatingUnder, setCreatingUnder] = useState<number | null>(null);
   const [newName, setNewName] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   const loadFolders = useCallback(async () => {
     if (!open) return;
@@ -62,13 +58,15 @@ export default function SaveToLibraryModal({
     loadFolders();
   }, [loadFolders]);
 
-  // 切换 scope 时重置选中到根目录，并退出新建状态
+  // 打开时重置选中状态
   useEffect(() => {
-    setSelectedId(null);
-    setIsCreating(false);
-    setCreatingUnder(null);
-    setNewName('');
-  }, [scope]);
+    if (open) {
+      setSelectedId(null);
+      setIsCreating(false);
+      setCreatingUnder(null);
+      setNewName('');
+    }
+  }, [open]);
 
   const rootFolders = useMemo(() => folders.filter((f) => f.parent_id == null), [folders]);
 
@@ -119,13 +117,13 @@ export default function SaveToLibraryModal({
     setCreatingUnder(null);
   };
 
-  const handleSave = async () => {
-    setSaving(true);
+  const handleMove = async () => {
+    setMoving(true);
     try {
-      await onSave({ scope, folderId: selectedId });
+      await onMove(selectedId);
       onClose();
     } finally {
-      setSaving(false);
+      setMoving(false);
     }
   };
 
@@ -182,9 +180,7 @@ export default function SaveToLibraryModal({
           <span className="pea-save-lib-folder-name">{folder.name}</span>
         </button>
 
-        {/* 在当前文件夹下方直接新建子文件夹 */}
         {isCreating && creatingUnder === folder.id && renderNewInput(depth + 1)}
-
         {isExpanded && children.map((child) => renderTree(child, depth + 1))}
       </div>
     );
@@ -199,14 +195,10 @@ export default function SaveToLibraryModal({
         <div className="pea-save-lib-header">
           <div className="pea-save-lib-title">
             <FolderOutlined />
-            <span>保存到素材库</span>
+            <span>移动到</span>
           </div>
           <div className="pea-save-lib-header-actions">
-            <button
-              type="button"
-              className="pea-save-lib-new-btn"
-              onClick={startCreate}
-            >
+            <button type="button" className="pea-save-lib-new-btn" onClick={startCreate}>
               <PlusOutlined />
               <span>新建文件夹</span>
             </button>
@@ -216,31 +208,10 @@ export default function SaveToLibraryModal({
           </div>
         </div>
 
-        {/* Scope switch */}
-        <div className="pea-save-lib-scope">
-          <button
-            type="button"
-            className={scope === 'personal' ? 'active' : ''}
-            onClick={() => setScope('personal')}
-          >
-            个人
-          </button>
-          <button
-            type="button"
-            className={scope === 'team' ? 'active' : ''}
-            onClick={() => setScope('team')}
-          >
-            团队
-          </button>
-        </div>
-
         {/* Tree */}
         <div className="pea-save-lib-tree">
-          {/* 在根目录下新建时，输入框放在树的最开始 */}
           {isCreating && creatingUnder === null && renderNewInput(0)}
-
           {rootFolders.map((f) => renderTree(f))}
-
           {folders.length === 0 && !loading && !isCreating && (
             <div className="pea-save-lib-empty">暂无文件夹，点击右上角新建</div>
           )}
@@ -248,16 +219,16 @@ export default function SaveToLibraryModal({
 
         {/* Footer */}
         <div className="pea-save-lib-footer">
-          <Button className="pea-save-lib-cancel" onClick={onClose} disabled={saving}>
+          <Button className="pea-save-lib-cancel" onClick={onClose} disabled={moving}>
             取消
           </Button>
           <Button
             className="pea-save-lib-confirm"
             type="primary"
-            loading={saving}
-            onClick={handleSave}
+            loading={moving}
+            onClick={handleMove}
           >
-            保存
+            移动
           </Button>
         </div>
       </div>

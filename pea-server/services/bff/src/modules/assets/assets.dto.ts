@@ -101,4 +101,8 @@ export class ImportAssetDto {
   @IsOptional()
   @IsIn(['personal', 'team'])
   scope?: 'personal' | 'team';
+
+  @IsOptional()
+  @IsBoolean()
+  is_favorite?: boolean;
 }

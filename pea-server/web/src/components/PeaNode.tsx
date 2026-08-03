@@ -10,8 +10,8 @@ import { NODE_DEF_OF, PeaNodeKind } from '../constants/nodeTypes';
 import NodeIcon, { GeneratingBadge, UploadBadge, kindColor } from './NodeIcon';
 import TextNodeToolbar from './TextNodeToolbar';
 import TextNodeEditorModal from './TextNodeEditorModal';
-import SaveToLibraryModal from './SaveToLibraryModal';
 import TechLoader from './TechLoader';
+import SaveToLibraryModal from './SaveToLibraryModal';
 import { assetsApi, type AssetScope } from '../api/assets';
 import { retryNodeGeneration } from '../lib/nodeGeneration';
 import {
@@ -215,6 +215,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       resultUrls: undefined,
       resultIndex: 0,
       savedToLibrary: false,
+      isFavorite: false,
       meta: { ...nodeMeta, fileName: f.name },
     });
     if (!fileKey) toast.error('上传失败，已用本地预览（刷新后可能丢失）');
@@ -612,9 +613,10 @@ function ResultMediaView({
   useLayoutEffect(() => { setChromeReady(true); }, []);
   const update = useCanvas((s) => s.updateNodeData);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [mediaError, setMediaError] = useState(false);
-  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [savingToLibrary, setSavingToLibrary] = useState(false);
   // 兼容性兜底：历史节点可能保存了外部模型视角的公网 CDN URL（如花生壳域名），
   // 当浏览器无法访问该域名时，fallback 到同域 /media/<key> 重试。
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
@@ -626,7 +628,48 @@ function ResultMediaView({
     setFallbackUrl(null);
   }, [urls[index]]);
 
+  const objectKeyForImport = useMemo(() => extractObjectKey(data, currentUrl), [data, currentUrl]);
+  const defaultAssetName = useMemo(() => {
+    const fileName = (data.meta?.fileName as string) || data.label || '未命名';
+    return fileName;
+  }, [data]);
+
+  const doImportAsset = async (payload: {
+    scope: AssetScope;
+    folderId: number | null;
+    isFavorite?: boolean;
+  }) => {
+    if (!objectKeyForImport || savingToLibrary) return;
+    setSavingToLibrary(true);
+    try {
+      await assetsApi.importAsset(
+        objectKeyForImport,
+        defaultAssetName,
+        payload.scope,
+        payload.folderId ?? undefined,
+        payload.isFavorite,
+      );
+      // 收藏与保存到素材库拆分为两个独立状态
+      update(id, payload.isFavorite ? { isFavorite: true } : { savedToLibrary: true });
+      toast.success(payload.isFavorite ? '已收藏到素材库' : '已保存到素材库');
+    } catch {
+      toast.error(payload.isFavorite ? '收藏到素材库失败' : '保存到素材库失败');
+    } finally {
+      setSavingToLibrary(false);
+    }
+  };
+
   const handleSaveToLibrary = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (data.isFavorite) {
+      toast.info('该素材已收藏');
+      return;
+    }
+    // 星标保持一键收藏：个人根目录 + 标记收藏
+    doImportAsset({ scope: 'personal', folderId: null, isFavorite: true });
+  };
+
+  const handleToolbarSave = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (data.savedToLibrary) {
       toast.info('该素材已保存到素材库');
@@ -635,25 +678,8 @@ function ResultMediaView({
     setSaveModalOpen(true);
   };
 
-  const objectKeyForImport = useMemo(() => extractObjectKey(data, currentUrl), [data, currentUrl]);
-  const defaultAssetName = useMemo(() => {
-    const fileName = (data.meta?.fileName as string) || data.label || '未命名';
-    return fileName;
-  }, [data]);
-
-  const doImportAsset = async (payload: { scope: AssetScope; folderId: number | null }) => {
-    if (!objectKeyForImport) {
-      toast.error('无法识别素材来源，保存失败');
-      throw new Error('no object key');
-    }
-    try {
-      await assetsApi.importAsset(objectKeyForImport, defaultAssetName, payload.scope, payload.folderId ?? undefined);
-      update(id, { savedToLibrary: true });
-      toast.success('已保存到素材库');
-    } catch {
-      toast.error('保存到素材库失败');
-      throw new Error('import failed');
-    }
+  const handleModalSave = async (payload: { scope: AssetScope; folderId: number | null }) => {
+    await doImportAsset({ ...payload, isFavorite: false });
   };
 
   const handleFullscreen = (e: React.MouseEvent) => {
@@ -698,17 +724,22 @@ function ResultMediaView({
           </span>
         )}
 
-        {/* 左上角收藏星标（保存到素材库） */}
+        {/* 左上角收藏星标（一键收藏到素材库） */}
         <button
           type="button"
-          className={`pea-node-result-star ${data.savedToLibrary ? 'saved' : ''}`}
+          className={`pea-node-result-star ${data.isFavorite ? 'saved' : ''} ${savingToLibrary ? 'saving' : ''}`}
           onClick={handleSaveToLibrary}
-          aria-label="保存到素材库"
-          title="保存到素材库"
+          aria-label="收藏"
+          title={data.isFavorite ? '已收藏' : savingToLibrary ? '收藏中…' : '收藏'}
+          disabled={savingToLibrary}
         >
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none">
-            <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
-          </svg>
+          {savingToLibrary ? (
+            <span className="pea-node-result-star-spinner" aria-hidden />
+          ) : (
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none">
+              <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+            </svg>
+          )}
         </button>
 
         {/* 右上角：上传媒体显示"替换"按钮（始终可见）；多结果时追加数量角标 */}
@@ -809,7 +840,7 @@ function ResultMediaView({
       {chromeReady && chromeRef.current && createPortal(
         <ResultToolbar
           currentUrl={currentUrl}
-          onSave={handleSaveToLibrary}
+          onSave={handleToolbarSave}
           saved={!!data.savedToLibrary}
           onFullscreen={handleFullscreen}
         />,
@@ -826,15 +857,15 @@ function ResultMediaView({
           onClose={() => setLightboxOpen(false)}
           onIndexChange={onIndexChange}
           onSave={() => setSaveModalOpen(true)}
+          saved={!!data.savedToLibrary}
         />
       )}
 
-      {/* 保存到素材库弹窗 */}
       <SaveToLibraryModal
         open={saveModalOpen}
         onClose={() => setSaveModalOpen(false)}
         defaultName={defaultAssetName}
-        onSave={doImportAsset}
+        onSave={handleModalSave}
       />
     </>
   );
@@ -905,7 +936,7 @@ function ResultToolbar({
         </svg>
       </ToolbarButton>
       <div className="pea-node-toolbar-divider" />
-      <ToolbarButton label="保存到素材库" onClick={onSave} active={saved}>
+      <ToolbarButton label="保存" onClick={onSave} active={saved}>
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6">
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
           <path d="M12 11v6" />
@@ -980,6 +1011,7 @@ function MediaLightbox({
   onClose,
   onIndexChange,
   onSave,
+  saved,
 }: {
   kind: PeaNodeKind;
   urls: string[];
@@ -988,10 +1020,16 @@ function MediaLightbox({
   onClose: () => void;
   onIndexChange: (i: number) => void;
   onSave: () => void;
+  saved: boolean;
 }) {
   const [current, setCurrent] = useState(index);
   const [fileSize, setFileSize] = useState<string>('-');
   const currentUrl = urls[current] || urls[0];
+
+  const handleSave = () => {
+    if (saved) return;
+    onSave();
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1098,8 +1136,13 @@ function MediaLightbox({
         <InfoRow label="创建者" value={String(data.meta?.creator || '—')} />
 
         <div className="pea-node-lightbox-actions">
-          <button type="button" className="pea-node-lightbox-action primary" onClick={onSave}>
-            保存到素材库
+          <button
+            type="button"
+            className={`pea-node-lightbox-action primary ${saved ? 'saved' : ''}`}
+            onClick={handleSave}
+            disabled={saved}
+          >
+            {saved ? '已保存' : '保存到素材库'}
           </button>
           <button type="button" className="pea-node-lightbox-action" onClick={() => { onIndexChange(current); onClose(); }}>
             Apply to canvas

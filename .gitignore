@@ -14,6 +14,8 @@ dist/
 build/
 out/
 *.tsbuildinfo
+# Vite 临时配置文件缓存（build/dev 时自动生成，非源码）
+pea-server/web/vite.config.js.timestamp-*.mjs
 
 # ===== Python =====
 __pycache__/
