@@ -10,10 +10,12 @@ export interface ProviderView {
   id: string;
   name: string;
   providerType: string;
+  protocol: string;
+  vendor: string;
   baseUrl: string;
   apiKeyMasked: string;
   hasApiKey: boolean;
-  kind: 'image' | 'video' | 'text' | 'audio';
+  kind: 'image' | 'video' | 'text' | 'audio' | '3d';
   enabled: boolean;
   isDefault: boolean;
   config: any;
@@ -23,6 +25,8 @@ export interface UpsertProviderInput {
   id?: string;
   name: string;
   providerType?: string;
+  protocol?: string;
+  vendor?: string;
   baseUrl?: string;
   apiKey?: string;
   kind?: ProviderView['kind'];
@@ -32,7 +36,7 @@ export interface UpsertProviderInput {
 }
 
 /** 远端模型能力类型 (比 ai_models.model_type 更宽, 覆盖提供商实际返回的各类模型)。 */
-export type RemoteModelType = 'image' | 'video' | 'text' | 'audio' | 'embedding';
+export type RemoteModelType = 'image' | 'video' | 'text' | 'audio' | 'embedding' | '3d';
 
 export interface RemoteModelEntry {
   id: string;
@@ -44,14 +48,38 @@ export interface RemoteModelEntry {
  * 从模型 id / provider 元数据推断能力类型 (参考 ai-agent 的 _suggest_model_type)。
  * 优先级: provider 返回的结构化类型/能力 → model id 关键字启发式 (image→video→embedding→audio→text 兜底)。
  */
+/**
+ * 关键字表的铁律: **只放能力级词, 绝不放厂商/系列名**。
+ *
+ * 反面教材 (已修): 曾把裸 'doubao' 放进 IMAGE_HINTS。但 doubao 是火山方舟的
+ * 全谱系品牌 —— 文本(doubao-pro)、图像(doubao-seedream)、视频(doubao-seedance)、
+ * 向量(doubao-embedding)、3D(doubao-seed3d) 全都叫 doubao-*。一个裸厂商名命中,
+ * 127 个模型里 99 个被判成 image。同类地雷还有 'gemini' / 'tongyi'。
+ *
+ * 另一类地雷是**过短的泛词**: 'art' 会命中 doubao-sm[art]-router;
+ * 裸 'wan' 会命中图像模型 wanx。子串匹配没有词边界概念, 宁可写长不可写短。
+ *
+ * 'vision' 也已移除 —— VLM(视觉语言模型) 是"图进文出"的对话模型, 不是文生图。
+ */
 const IMAGE_HINTS = [
   'dall-e', 'dalle', 'image', 'imagen', 'stable-diffusion', 'sdxl', 'flux', 'cogview',
-  'niji', 'illustrious', 'pony', 'draw', 'paint', 'cartoon', 'art', 'vision',
-  'gpt-image', 'gemini', 'midjourney', 'wanx', 'tongyi', 'doubao', 'jiimagine',
+  'niji', 'illustrious', 'pony', 'draw', 'paint', 'cartoon',
+  'gpt-image', 'midjourney', 'wanx', 'jiimagine',
+  // 火山方舟图像族: Seedream(文生图) / SeedEdit(图生图编辑)
+  'seedream', 'seededit',
+  // Google 图像族: nano-banana 是 gemini-*-image 的品牌别名 (models/nano-banana-pro-preview),
+  // 该 id 里不含 'image', 不单独列就会掉进 text 兜底。
+  // 'imagen' 已在上方; 裸 'gemini' 绝不能加 (它是 Google 全谱系品牌名)。
+  'nano-banana',
 ];
 const VIDEO_HINTS = [
-  'sora', 'video', 'kling', 'cogvideo', 'runway', 'pika', 'luma', 'veo', 'wan',
-  'seedance', 'digo', 'hunyuan-video', 'doubao-video', 'kami', 'mochi',
+  'sora', 'video', 'kling', 'cogvideo', 'runway', 'pika', 'luma', 'veo',
+  'digo', 'hunyuan-video', 'doubao-video', 'kami', 'mochi',
+  // 火山方舟视频族: Seedance / Seaweed
+  'seedance', 'seaweed',
+  // 通义万相视频 (wan2-1-14b-t2v / i2v / flf2v)。
+  // 必须带版本号: 裸 'wan' 会误伤图像模型 wanx。
+  'wan2-', 'wan2.',
   // MiniMax 视频族: H 系列(v2) / 海螺(v1) / 定向生成系列。
   // 'minimax-h' 只命中 H3 等视频模型, 不会误伤文本的 MiniMax-M2。
   'minimax-h', 'hailuo', 't2v-', 'i2v-', 's2v-',
@@ -63,12 +91,38 @@ const EMBEDDING_HINTS = [
 const AUDIO_HINTS = [
   'tts', 'whisper', 'speech', 'audio', 'voice', 'music', 'suno', 'udio',
   'cosyvoice', 'chattts', 'bark', 'fishaudio',
+  // Google 音乐生成族 (lyria-3-clip-preview / lyria-3-pro-preview), 走 generateContent,
+  // 权威字段区分不出来, 只能靠 id。
+  'lyria',
 ];
+// 3D 生成族 (火山方舟 3DGeneration / Seed3D / Hyper3D / HiMeta3D)。用具体前缀, 绝不放裸 '3d' 以免误伤。
+const _3D_HINTS = ['seed3d', 'hyper3d', 'hitem3d'];
 
 export function suggestModelType(modelId: string, raw?: any): RemoteModelType {
   const lower = (modelId || '').toLowerCase();
   if (raw && typeof raw === 'object') {
-    const explicit = raw.type || raw.category || raw.model_type || raw.task;
+    // Google Gemini 的权威能力声明是 supportedGenerationMethods (方法名数组)。
+    // 只有三个方法能唯一确定能力, 其余必须放行到关键字启发式:
+    //   predict            -> Imagen 文生图
+    //   predictLongRunning -> Veo 视频
+    //   embedContent       -> 向量
+    // ⚠️ generateContent **不能**判成 text —— Gemini 的图像(gemini-3-pro-image)、
+    //    TTS(gemini-2.5-flash-preview-tts)、音乐(lyria-*) 全都走 generateContent,
+    //    一刀切会把整个图像族误判成文本 (与当年 doubao 全线误判为 image 同类错误)。
+    const methods = raw.supportedGenerationMethods || raw.supported_generation_methods;
+    if (Array.isArray(methods)) {
+      const set = methods.map((x: any) => String(x));
+      if (set.includes('predictLongRunning')) return 'video';
+      if (set.includes('predict')) return 'image';
+      if (set.includes('embedContent')) return 'embedding';
+      // generateContent / countTokens / generateAnswer -> 落到下方 id 关键字启发式
+    }
+    // raw.domain 是火山方舟 /api/v3/models 的权威能力声明:
+    //   LLM / VLM / ImageGeneration / VideoGeneration / Embedding / 3DGeneration / Router
+    // 实测 127 个模型里 96 个带该字段。漏读它会让这批模型白白降级到关键字猜测 ——
+    // 这正是 doubao-* 全线被误判为 image 的直接诱因。新接厂商时务必检查其
+    // /models 响应里是否还有别的权威字段名, 有就加进这个列表。
+    const explicit = raw.type || raw.category || raw.model_type || raw.task || raw.domain;
     // Anthropic 的 /v1/models 每项都带 type:"model" —— 这是对象种类标记而非能力类型,
     // 不排除掉会让后续的类型推断误以为拿到了权威信息。
     if (typeof explicit === 'string' && explicit.toLowerCase() === 'model') {
@@ -79,7 +133,10 @@ export function suggestModelType(modelId: string, raw?: any): RemoteModelType {
       if (/(video|movie|film)/.test(e)) return 'video';
       if (/(embed)/.test(e)) return 'embedding';
       if (/(audio|speech|tts|voice|music|sound)/.test(e)) return 'audio';
-      if (/(text|chat|llm|language)/.test(e)) return 'text';
+      if (/(3d|threed)/.test(e)) return '3d';
+      // vlm = 视觉语言模型 (图进文出), 归 text —— 'llm' 匹配不到 'vlm', 必须显式列出。
+      if (/(text|chat|llm|vlm|language)/.test(e)) return 'text';
+      // 未覆盖的权威值 (如火山 Router) 继续往下走关键字启发式, 最终由 text 兜底。
     }
     const caps =
       raw.capabilities || raw.modality || raw.modalities ||
@@ -91,13 +148,61 @@ export function suggestModelType(modelId: string, raw?: any): RemoteModelType {
       if (/(video|movie|film)/.test(c)) return 'video';
       if (/(embed)/.test(c)) return 'embedding';
       if (/(audio|speech|voice|music|sound)/.test(c)) return 'audio';
+      if (/(3d|threed)/.test(c)) return '3d';
     }
   }
   if (IMAGE_HINTS.some((k) => lower.includes(k))) return 'image';
   if (VIDEO_HINTS.some((k) => lower.includes(k))) return 'video';
   if (EMBEDDING_HINTS.some((k) => lower.includes(k))) return 'embedding';
   if (AUDIO_HINTS.some((k) => lower.includes(k))) return 'audio';
+  if (_3D_HINTS.some((k) => lower.includes(k))) return '3d';
   return 'text';
+}
+
+/**
+ * 协议族枚举: 与编排器 PROVIDER_REGISTRY 的 protocol 维度一致。
+ * - openai-compatible    OpenAI Chat Completions 兼容协议
+ * - anthropic-compatible Anthropic Messages 协议
+ * - vendor-native        厂商自有协议 (如 MiniMax 原生 v2/v1), 需配合 vendor 字段路由；该厂商必须在编排器实现原生适配器，否则调用报错
+ *
+ * 注意: 旧代码的 "minimax" 这类厂商名**不属于**协议族, 一并归到 vendor-native + vendor=minimax。
+ */
+export const PROTOCOL_FAMILIES = [
+  'openai-compatible',
+  'anthropic-compatible',
+  'vendor-native',
+] as const;
+
+/**
+ * 已知厂商白名单 (仅作前端下拉提示, 不强制; 留空表示自定义厂商)。
+ * 与编排器 @register_provider(protocol, vendor) 的 vendor 维度对应。
+ */
+export const KNOWN_VENDORS = ['minimax', 'agnes', 'volcengine', 'gemini', 'openai', 'anthropic'] as const;
+
+/** 该 provider 是否为 Google Gemini (原生 Generative Language API)。
+ *
+ * 判定优先 vendor 字段, base_url 域名兜底 —— 前者应对自定义中转域名,
+ * 后者应对历史数据里 vendor 未填的行。 */
+function isGeminiProvider(vendor?: string, baseUrl?: string): boolean {
+  if ((vendor || '').toLowerCase() === 'gemini') return true;
+  return /generativelanguage\.googleapis\.com/i.test(baseUrl || '');
+}
+
+function toView(r: any): ProviderView {
+  return {
+    id: r.id,
+    name: r.name,
+    providerType: r.provider_type,
+    protocol: r.protocol || r.provider_type || 'openai-compatible',
+    vendor: r.vendor || '',
+    baseUrl: r.base_url,
+    apiKeyMasked: maskKey(r.api_key),
+    hasApiKey: !!r.api_key,
+    kind: r.kind,
+    enabled: !!r.enabled,
+    isDefault: !!r.is_default,
+    config: r.config_json,
+  };
 }
 
 /**
@@ -131,13 +236,38 @@ const MINIMAX_STATIC_MODELS: RemoteModelEntry[] = [
   { id: 'speech-02-turbo', owned_by: 'minimax', modelType: 'audio' },
 ];
 
-/** 该提供商是否需要静态目录补齐 (按 provider_type + base_url 双重判定)。 */
-function staticCatalogFor(providerType: string, baseUrl: string): RemoteModelEntry[] {
-  const t = (providerType || '').toLowerCase();
+/**
+ * 火山方舟静态模型目录 (与 MiniMax 同理: 部分能力不在统一 /api/v3/models 列表里, 需补齐)。
+ *  - 3D: doubao-seed3d-2-0-260328 / hyper3d-gen2-260112 / hitem3d-2-0-251223。
+ *        实际上这三个也在 /api/v3/models 里 (domain=3DGeneration), suggestModelType 现已能识别并归类为 '3d';
+ *        此处静态补齐仅作兜底 (防止个别账号 domain 字段缺失时降级成 text)。
+ *  - 音乐: doubao-music —— 走独立 IAM 网关(imagination), 不在 /api/v3/models 中, 必须静态补齐。
+ *        编排器侧为占位分支, 待开通服务并提供 IAM AK/SK 后接入 (见 volcengine.py)。
+ */
+const VOLCENGINE_STATIC_MODELS: RemoteModelEntry[] = [
+  { id: 'doubao-seed3d-2-0-260328', owned_by: 'volcengine', modelType: '3d' },
+  { id: 'hyper3d-gen2-260112', owned_by: 'volcengine', modelType: '3d' },
+  { id: 'hitem3d-2-0-251223', owned_by: 'volcengine', modelType: '3d' },
+  { id: 'doubao-music', owned_by: 'volcengine', modelType: 'audio' },
+];
+
+/** 该提供商是否需要静态目录补齐 (按 protocol + vendor + base_url 三重判定, 方案 A)。 */
+function staticCatalogFor(protocol: string, vendor: string, baseUrl: string): RemoteModelEntry[] {
+  const t = (protocol || '').toLowerCase();
+  const v = (vendor || '').toLowerCase();
   const u = (baseUrl || '').toLowerCase();
-  // anthropic 兼容层只暴露文本模型, 其 /v1/models 已够用, 无需补齐。
-  if (t === 'minimax' || (t !== 'anthropic-compatible' && u.includes('minimax'))) {
+  // 厂商原生协议 + MiniMax 厂商 -> 静态目录补齐 (视频/图像/音频分散在各专用端点)。
+  if ((t === 'vendor-native' && v === 'minimax') || t === 'minimax') {
     return MINIMAX_STATIC_MODELS;
+  }
+  // 宽松兜底: base_url 命中 minimax 域名但 protocol 未标 vendor-native (旧/手配)。
+  // anthropic 兼容层只暴露文本模型, 其 /v1/models 已够用, 无需补齐。
+  if (t !== 'anthropic-compatible' && u.includes('minimax')) {
+    return MINIMAX_STATIC_MODELS;
+  }
+  // 火山方舟: /api/v3/models 不含音乐 (且 3D 需靠 suggestModelType 兜底), 静态补齐。
+  if ((t === 'vendor-native' && v === 'volcengine') || t === 'volcengine' || u.includes('volcengine')) {
+    return VOLCENGINE_STATIC_MODELS;
   }
   return [];
 }
@@ -151,7 +281,7 @@ export class ProvidersService {
 
   async listProviders(): Promise<ProviderView[]> {
     const rows = await this.db.query<any[]>(
-      `SELECT id, name, provider_type, base_url, api_key, kind, enabled, is_default, config_json
+      `SELECT id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default, config_json
        FROM ai_providers ORDER BY is_default DESC, id`,
     );
     return rows.map(toView);
@@ -176,18 +306,32 @@ export class ProvidersService {
     const dup = await this.db.query<any[]>('SELECT id FROM ai_providers WHERE id = ?', [id]);
     if (dup.length) throw new BadRequestException('provider id already exists');
 
+    // 方案 A: protocol 为主维度, 默认 openai-compatible; provider_type 同步写入保持兼容。
+    const protocol = (input.protocol ?? input.providerType ?? 'openai-compatible').trim();
+    if (!PROTOCOL_FAMILIES.includes(protocol as any)) {
+      throw new BadRequestException(`unknown protocol '${protocol}' (expected one of ${PROTOCOL_FAMILIES.join(', ')})`);
+    }
+    const vendor = (input.vendor ?? '').trim();
+    // vendor-native 必须有厂商; 其它协议厂商可为空 (兼容层厂商由 base_url 推断)。
+    if (protocol === 'vendor-native' && !vendor) {
+      throw new BadRequestException("protocol='vendor-native' requires a vendor (e.g. minimax)");
+    }
+    const providerType = protocol; // 向后兼容: provider_type 与 protocol 同值
+
     await this.db.transaction(async (conn) => {
       if (input.isDefault) {
         await conn.query('UPDATE ai_providers SET is_default = 0');
       }
       await conn.query(
         `INSERT INTO ai_providers
-           (id, name, provider_type, base_url, api_key, kind, enabled, is_default, config_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default, config_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           input.name ?? id,
-          input.providerType ?? 'openai-compatible',
+          providerType,
+          vendor,
+          protocol,
           input.baseUrl ?? '',
           input.apiKey ?? '',
           input.kind ?? 'image',
@@ -202,11 +346,27 @@ export class ProvidersService {
 
   async updateProvider(id: string, input: Partial<UpsertProviderInput>): Promise<ProviderView> {
     await this.getRaw(id); // 404 if missing
+
+    // 协议/厂商变更时做同样的守门校验 (与 createProvider 一致)。
+    const current = await this.getRaw(id);
+    const nextProtocol = (input.protocol ?? input.providerType ?? current.provider_type ?? 'openai-compatible').trim();
+    if (!PROTOCOL_FAMILIES.includes(nextProtocol as any)) {
+      throw new BadRequestException(`unknown protocol '${nextProtocol}' (expected one of ${PROTOCOL_FAMILIES.join(', ')})`);
+    }
+    const nextVendor = (input.vendor !== undefined ? input.vendor : current.vendor ?? '').trim();
+    if (nextProtocol === 'vendor-native' && !nextVendor) {
+      throw new BadRequestException("protocol='vendor-native' requires a vendor (e.g. minimax)");
+    }
+
     await this.db.transaction(async (conn) => {
       const sets: string[] = [];
       const vals: any[] = [];
       if (input.name !== undefined) { sets.push('name = ?'); vals.push(input.name); }
-      if (input.providerType !== undefined) { sets.push('provider_type = ?'); vals.push(input.providerType); }
+      if (input.protocol !== undefined || input.providerType !== undefined) {
+        sets.push('provider_type = ?'); vals.push(nextProtocol);
+        sets.push('protocol = ?'); vals.push(nextProtocol);
+      }
+      if (input.vendor !== undefined) { sets.push('vendor = ?'); vals.push(nextVendor); }
       if (input.baseUrl !== undefined) { sets.push('base_url = ?'); vals.push(input.baseUrl); }
       // 空/未传 api_key 时保留原值, 避免管理员编辑其他字段时误清空密钥。
       if (input.apiKey !== undefined && input.apiKey !== '') { sets.push('api_key = ?'); vals.push(input.apiKey); }
@@ -246,15 +406,36 @@ export class ProvidersService {
     //   服务器上无此代理, 兜底反而把真实的主地址错误掩盖成
     //   "connect ECONNREFUSED 172.17.0.1:33210", 极难排查。
     const gateway = (process.env.PEA_AI_GATEWAY || '').trim().replace(/\/+$/, '');
-    const errDetail = (e: any): string =>
-      e?.response?.data
-        ? JSON.stringify(e.response.data).slice(0, 300)
-        : e?.message ?? 'unknown';
+    // 把 axios 异常转成可读详情: 优先带 HTTP 状态码 + 针对性提示, 即使响应体为空也能看懂。
+    const errDetail = (e: any): string => {
+      const status = e?.response?.status;
+      if (status) {
+        const hint =
+          status === 401 || status === 403
+            ? ' (检查 provider 的 api_key 是否有效/有权限)'
+            : status >= 500
+              ? ' (上游服务异常, 稍后重试)'
+              : '';
+        const body = e.response.data;
+        const bodyStr = body
+          ? (typeof body === 'string' ? body : JSON.stringify(body)).slice(0, 200)
+          : '';
+        return `HTTP ${status}${bodyStr ? `: ${bodyStr}` : ''}${hint}`;
+      }
+      // 连接层失败 (无 HTTP 响应): DNS/TLS/超时等, 透传原始 message
+      return e?.message ?? 'unknown (无响应)';
+    };
     // Anthropic Messages 协议的模型端点认证方式与 OpenAI 不同: 需要 x-api-key +
     // anthropic-version。两个头都发是安全的 —— MiniMax 兼容层与官方都接受。
-    const isAnthropic = String(p.provider_type || '').toLowerCase() === 'anthropic-compatible';
+    // 判定改用 protocol 字段 (方案 A: 协议与厂商解耦)。
+    const isAnthropic = String(p.protocol || p.provider_type || '').toLowerCase() === 'anthropic-compatible';
+    const isGemini = isGeminiProvider(p.vendor, p.base_url);
     const authHeaders = (): Record<string, string> => {
       if (!p.api_key) return {};
+      // ⚠️ Gemini 只认 x-goog-api-key, 且**多带一个 Authorization: Bearer 会直接 401**
+      //   ("Expected OAuth 2 access token..." —— Google 认为你在用 OAuth 却给了个 API key)。
+      //   所以这里必须 return, 不能像 Anthropic 那样叠加。已实测。
+      if (isGemini) return { 'x-goog-api-key': p.api_key };
       const h: Record<string, string> = { Authorization: `Bearer ${p.api_key}` };
       if (isAnthropic) {
         h['x-api-key'] = p.api_key;
@@ -263,7 +444,7 @@ export class ProvidersService {
       return h;
     };
     const tryFetch = async (baseUrl: string): Promise<any[]> => {
-      const url = normalizeModelsUrl(baseUrl);
+      const url = normalizeModelsUrl(baseUrl, p.vendor);
       const { data } = await axios.get(url, {
         // 🔑 与 ai-agent 的 httpx(trust_env=False) 等价: 强制不走 HTTPS_PROXY 环境变量,
         // 直接出网。否则容器里的 HTTPS_PROXY=host.docker.internal:33210(开发机专属死代理)
@@ -272,9 +453,13 @@ export class ProvidersService {
         headers: authHeaders(),
         timeout: 20000,
       });
-      return Array.isArray(data?.data) ? data.data : [];
+      // OpenAI/Anthropic 系是 {data:[...]}; Google 原生是 {models:[...]}。
+      // 两种形态都收, 避免为一家厂商再分叉一条抓取链路。
+      if (Array.isArray(data?.data)) return data.data;
+      if (Array.isArray(data?.models)) return data.models;
+      return [];
     };
-    const staticCatalog = staticCatalogFor(p.provider_type, p.base_url);
+    const staticCatalog = staticCatalogFor(p.protocol || p.provider_type, p.vendor, p.base_url);
     let list: any[] = [];
     const primary = p.base_url.replace(/\/+$/, '');
     const useGateway = !!gateway && gateway !== primary;
@@ -308,9 +493,11 @@ export class ProvidersService {
       }
     }
     const models: RemoteModelEntry[] = list
-      .filter((m: any) => m && m.id)
+      // Google 原生 /models 用 `name` 作标识 (如 "models/gemini-2.5-flash"), 没有 `id`;
+      // OpenAI/Anthropic 系用 `id`。两者都收, 否则 Gemini 模型会被整批过滤掉。
+      .filter((m: any) => m && (m.id || m.name))
       .map((m: any) => {
-        const mid = String(m.id);
+        const mid = String(m.id || m.name);
         return { id: mid, owned_by: m.owned_by, modelType: suggestModelType(mid, m) };
       });
     // 静态目录补齐: 远端已返回的同名条目以远端为准 (大小写不敏感去重)。
@@ -354,7 +541,7 @@ export class ProvidersService {
 
   private async getView(id: string): Promise<ProviderView> {
     const rows = await this.db.query<any[]>(
-      `SELECT id, name, provider_type, base_url, api_key, kind, enabled, is_default, config_json
+      `SELECT id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default, config_json
        FROM ai_providers WHERE id = ?`,
       [id],
     );
@@ -368,24 +555,26 @@ function maskKey(key: string | null): string {
   return `${key.slice(0, 6)}****${key.slice(-4)}`;
 }
 
-function toView(r: any): ProviderView {
-  return {
-    id: r.id,
-    name: r.name,
-    providerType: r.provider_type,
-    baseUrl: r.base_url,
-    apiKeyMasked: maskKey(r.api_key),
-    hasApiKey: !!r.api_key,
-    kind: r.kind,
-    enabled: !!r.enabled,
-    isDefault: !!r.is_default,
-    config: r.config_json,
-  };
-}
-
-/** base_url 归一化到 {host}/v1/models (无论是否已带 /v1)。 */
-function normalizeModelsUrl(baseUrl: string): string {
+/**
+ * base_url 归一化到模型列表端点。
+ * - Gemini 原生 Generative Language API: 走 /v1beta/models (非 OpenAI 的 /v1/models),
+ *   且必须带 pageSize (实测 58 个模型一次拉全, 无 nextPageToken 分页)。
+ *   容忍 base 带或不带 /v1beta 两种写法。
+ * - Volcengine 方舟 base 以 /api/v3 结尾 -> {base}/models (其 OpenAI 兼容前缀是 /api/v3, 非 /v1)。
+ * - 其它 (Agnes 的 /v1, MiniMax 裸域名) 维持原行为: 剥 /v1 后拼 /v1/models。
+ */
+function normalizeModelsUrl(baseUrl: string, vendor?: string): string {
   let base = baseUrl.replace(/\/+$/, '');
+  const isGemini =
+    (vendor || '').toLowerCase() === 'gemini' ||
+    /generativelanguage\.googleapis\.com/i.test(base);
+  if (isGemini) {
+    // 官方模型发现端点: GET /v1beta/models?pageSize=1000。
+    // 注意: 多带 /v1beta 时用正则保底, 避免拼成 /v1beta/v1beta/models。
+    if (!/v1beta\/?$/i.test(base)) base = `${base}/v1beta`;
+    return `${base}/models?pageSize=1000`;
+  }
+  if (base.endsWith('/api/v3')) return `${base}/models`;
   if (base.endsWith('/v1')) base = base.slice(0, -3);
   return `${base}/v1/models`;
 }

@@ -23,6 +23,7 @@ import {
   UpdateAssetDto,
   UpdateAssetFolderDto,
   UploadAssetQueryDto,
+  ImportAssetDto,
 } from './assets.dto';
 
 @Controller('assets')
@@ -94,6 +95,15 @@ export class AssetsController {
       q.folder_id,
       q.scope ?? 'personal',
     );
+  }
+
+  @Post('import')
+  @HttpCode(201)
+  async importAsset(
+    @CurrentUser() u: { sub: number },
+    @Body() dto: ImportAssetDto,
+  ) {
+    return this.assets.importFromObject(u.sub, dto);
   }
 
   @Patch(':id')

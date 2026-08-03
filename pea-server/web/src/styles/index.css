@@ -27,10 +27,11 @@
 
   /* ── 连线令牌（亮色背景 #f4f4f7）───────────────────────────────────────
      空闲连线要"退到背景里"：低饱和的冷灰蓝 + 低透明 + 微模糊；
-     激活（选中边 / 选中或拖动端点节点）才切到品牌蓝并发光。 */
-  --pea-edge-idle: rgba(88, 106, 128, 0.34);
+     激活（选中边 / 选中或拖动端点节点）才切到品牌蓝并发光。
+     2026-08-03：提升 idle 对比度并减弱 blur，避免在 group 浅灰背景上完全看不见。 */
+  --pea-edge-idle: rgba(70, 90, 115, 0.52);
   --pea-edge-idle-w: 1.5px;
-  --pea-edge-idle-blur: 0.45px;
+  --pea-edge-idle-blur: 0.25px;
   --pea-edge-hover: rgba(31, 162, 220, 0.55);
   --pea-edge-active: rgba(31, 162, 220, 0.92);
   --pea-edge-active-w: 2.1px;
@@ -890,6 +891,21 @@ body {
   color: rgba(255, 255, 255, 0.35);
 }
 
+/* 浅色模式：通用占位卡片文字颜色 — 加深确保可读性 */
+html:not(.dark) .pea-node-generic-card {
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .pea-node-generic-label {
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-node-generic-prompt {
+  color: #4a4a55;
+}
+html:not(.dark) .pea-node-generic-hint {
+  color: #7a7a85;
+  opacity: 0.85;
+}
+
 /* 节点卡片回显提示词（图片/视频/音频/生成节点） */
 .pea-node-prompt-echo {
   margin-top: 10px;
@@ -918,6 +934,19 @@ body {
   margin-top: 6px;
   font-size: 10px;
   color: rgba(255, 255, 255, 0.45);
+}
+/* 浅色模式：提示词回显区域 — 加深颜色确保可读性 */
+html:not(.dark) .pea-node-prompt-echo {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .pea-node-prompt-echo-label {
+  color: #6b6b75;
+}
+html:not(.dark) .pea-node-prompt-echo-text {
+  color: #2a2a30;
+}
+html:not(.dark) .pea-node-prompt-echo-params {
+  color: #7a7a85;
 }
 
 /* 失败卡内回显当时提示词 — 紧凑布局，避免与错误信息争抢空间 */
@@ -1642,52 +1671,69 @@ body {
 .tnt-bar {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   background: #1e1e1e;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
-  padding: 5px 8px;
+  border-radius: 14px;
+  padding: 5px 10px;
   pointer-events: auto;
 }
-.tnt-color {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: #fff;
-  cursor: pointer;
-  padding: 0;
-  flex-shrink: 0;
-}
-.tnt-sep {
-  width: 1px;
-  height: 18px;
-  background: rgba(255, 255, 255, 0.1);
-  margin: 0 2px;
-}
 .tnt-btn {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
   border: none;
   background: transparent;
   color: #9ca3af;
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: 0.12s;
+  transition: all 0.12s ease;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  padding: 0;
 }
 .tnt-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.10);
   color: #e5e7eb;
+  transform: translateY(-1px);
+}
+.tnt-btn:active {
+  background: rgba(255, 255, 255, 0.16);
+  transform: scale(0.94) translateY(0);
 }
 .tnt-btn.active {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  background: rgba(31, 162, 220, 0.18);
+  color: #38e1ff;
+}
+
+/* 颜色选择圆点按钮 */
+.tnt-btn-color {
+  padding: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.15);
+  background: transparent !important;
+  overflow: hidden;
+}
+.tnt-btn-color .tnt-color-dot {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: block;
+  box-shadow: inset 0 -1px 2px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.2);
+  transition: transform 0.15s ease;
+}
+.tnt-btn-color:hover .tnt-color-dot {
+  transform: scale(1.15);
+}
+.tnt-btn-color:hover {
+  background: transparent !important;
+  border-color: rgba(255, 255, 255, 0.35) !important;
+  transform: scale(1.1);
 }
 .tnt-label {
   font-size: 11px;
@@ -2235,6 +2281,365 @@ body {
   color: var(--pea-warn);
 }
 
+/* ===== 保存到素材库弹窗 ===== */
+.pea-save-lib-modal .ant-modal-content {
+  background: var(--pea-bg-panel);
+  border: 1px solid var(--pea-border);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+.pea-save-lib-modal .ant-modal-header {
+  background: transparent;
+  border-bottom: 1px solid var(--pea-border);
+  padding: 16px 20px;
+}
+
+.pea-save-lib-modal .ant-modal-title {
+  color: var(--pea-text-primary);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.pea-save-lib-modal .ant-modal-body {
+  padding: 16px 20px;
+  color: var(--pea-text-primary);
+}
+
+.pea-save-lib-modal .ant-modal-footer {
+  background: transparent;
+  border-top: 1px solid var(--pea-border);
+  padding: 12px 20px;
+}
+
+.pea-save-lib-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+}
+
+.pea-save-lib-scope {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--pea-bg-elevated);
+  border: 1px solid var(--pea-border);
+  border-radius: 12px;
+  margin-bottom: 14px;
+}
+
+.pea-save-lib-scope button {
+  flex: 1;
+  height: 30px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.pea-save-lib-scope button.active {
+  background: color-mix(in srgb, var(--pea-text-primary) 10%, transparent);
+  color: var(--pea-text-primary);
+}
+
+.pea-save-lib-new {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--pea-border);
+  background: transparent;
+  color: var(--pea-text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.pea-save-lib-new:hover {
+  border-color: var(--pea-brand);
+  color: var(--pea-brand);
+  background: color-mix(in srgb, var(--pea-brand) 6%, transparent);
+}
+
+.pea-save-lib-new-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pea-save-lib-new-input input {
+  flex: 1;
+  background: var(--pea-bg-elevated);
+  border-color: var(--pea-border);
+  color: var(--pea-text-primary);
+}
+
+.pea-save-lib-new-input input::placeholder {
+  color: var(--pea-text-muted);
+}
+
+.pea-save-lib-tree {
+  max-height: 320px;
+  overflow-y: auto;
+  border-radius: 12px;
+  border: 1px solid var(--pea-border);
+  background: var(--pea-bg-elevated);
+  padding: 6px;
+}
+
+.pea-save-lib-folder {
+  width: 100%;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pea-save-lib-folder:hover,
+.pea-save-lib-folder.selected {
+  background: color-mix(in srgb, var(--pea-brand) 10%, transparent);
+  color: var(--pea-brand);
+}
+
+.pea-save-lib-folder-toggle {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--pea-text-muted);
+  flex-shrink: 0;
+}
+
+.pea-save-lib-folder-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: inherit;
+  flex-shrink: 0;
+}
+
+.pea-save-lib-folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pea-save-lib-empty {
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--pea-text-muted);
+}
+
+.pea-save-lib-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.pea-save-lib-footer .ant-btn {
+  border-radius: 10px;
+}
+
+.pea-save-lib-footer .ant-btn-primary {
+  background: var(--pea-brand);
+  border-color: var(--pea-brand);
+}
+
+/* ===== 素材库树形 + 缩略图视图 ===== */
+.pea-material-folder-branch {
+  margin-bottom: 2px;
+}
+
+.pea-material-folder-row-wrap {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pea-material-folder-row {
+  flex: 1;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.pea-material-folder-row:hover,
+.pea-material-folder-row.expanded {
+  background: var(--pea-bg-elevated);
+}
+
+.pea-material-folder-toggle {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--pea-text-muted);
+  flex-shrink: 0;
+  border-radius: 4px;
+}
+
+.pea-material-folder-toggle:hover {
+  background: color-mix(in srgb, var(--pea-text-primary) 8%, transparent);
+  color: var(--pea-text-primary);
+}
+
+.pea-material-folder-toggle-placeholder {
+  width: 16px;
+  flex-shrink: 0;
+}
+
+.pea-material-folder-icon {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--pea-text-secondary);
+  flex-shrink: 0;
+}
+
+.pea-material-folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pea-material-folder-count {
+  font-size: 11px;
+  color: var(--pea-text-muted);
+  background: var(--pea-bg-deep);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.pea-material-folder-children {
+  padding-left: 14px;
+  border-left: 1px solid var(--pea-border);
+  margin-left: 18px;
+  margin-top: 2px;
+}
+
+.pea-material-folder-assets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 10px;
+  padding: 8px 0 12px;
+}
+
+.pea-material-folder-assets.root {
+  padding-left: 8px;
+}
+
+.pea-material-folder-empty {
+  padding: 10px 8px;
+  font-size: 12px;
+  color: var(--pea-text-muted);
+}
+
+.pea-material-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 12px;
+  transition: transform 0.18s ease;
+}
+
+.pea-material-thumb:hover {
+  transform: translateY(-2px);
+}
+
+.pea-material-thumb-img {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--pea-bg-elevated);
+  border: 1px solid var(--pea-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--pea-text-muted);
+  font-size: 20px;
+}
+
+.pea-material-thumb-img img,
+.pea-material-thumb-img video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pea-material-thumb-label {
+  font-size: 11px;
+  color: var(--pea-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pea-material-thumb.md .pea-material-thumb-img {
+  border-radius: 16px;
+}
+
+.pea-material-fav-group {
+  margin-bottom: 18px;
+}
+
+.pea-material-fav-date {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pea-text-primary);
+  margin: 0 8px 10px;
+}
+
+.pea-material-fav-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 12px;
+  padding: 0 8px;
+}
+
 /* ===== 画布底部 Composer (add-pal) ===== */
 .pea-composer {
   position: fixed;
@@ -2585,7 +2990,8 @@ body {
   filter: drop-shadow(0 0 3px var(--pea-edge-glow));
 }
 /* 鼠标悬停连线（命中区在上，:hover 冒泡到组） —— 轻提示 */
-.react-flow__edge:hover .pea-edge-line:not(.is-active) {
+.react-flow__edge:hover .pea-edge-line:not(.is-active),
+.pea-edge-line.is-hovered {
   stroke: var(--pea-edge-hover);
   filter: none;
 }
@@ -2941,10 +3347,10 @@ body {
 .pea-toast {
   pointer-events: auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;     /* 长内容顶部对齐 (避免单行错误居中被遮住) */
   gap: 10px;
   min-width: 220px;
-  max-width: 380px;
+  max-width: 540px;             /* 加宽以容纳长错误消息 (e.g. 上游 JSON 摘要) */
   padding: 10px 14px;
   border-radius: 10px;
   background: #fff;
@@ -2967,6 +3373,29 @@ body {
 .pea-toast-icon {
   font-size: 16px;
   display: flex;
+  flex-shrink: 0;              /* 图标不被压缩, 保持对齐 */
+  padding-top: 1px;             /* 与多行文字首行视觉对齐 */
+}
+.pea-toast-text {
+  flex: 1 1 auto;
+  min-width: 0;                 /* 允许 flex item 收缩到比内容窄 */
+  word-break: break-word;       /* 长 token / URL 自动换行 */
+  overflow-wrap: anywhere;      /* 比 break-word 更激进, JSON/路径也能断 */
+  max-height: 280px;            /* 极长错误可滚动, 不撑爆视口 */
+  overflow-y: auto;
+  line-height: 1.5;
+  white-space: pre-wrap;        /* 保留上游原始换行结构 */
+}
+/* 滚动条样式 — 极简风格, 避免破坏轻量感 */
+.pea-toast-text::-webkit-scrollbar {
+  width: 6px;
+}
+.pea-toast-text::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 3px;
+}
+.dark .pea-toast-text::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
 }
 @keyframes pea-toast-in {
   from { opacity: 0; transform: translateY(-10px) scale(0.96); }
@@ -5141,6 +5570,17 @@ html:not(.dark) .pea-node-body-card:hover {
     inset 0 0 0 1px rgba(0, 0, 0, 0.04);
 }
 
+/* 文本节点正文：浅色模式下使用深色文字，确保对比度 */
+html:not(.dark) .pea-node-text-edit {
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-node-text-edit:empty::before {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .pea-node-text-edit:focus {
+  background: rgba(0, 0, 0, 0.03);
+}
+
 /* 节点顶部徽章（视频生成 / 图片生成 tag）*/
 html:not(.dark) .pea-node-badge {
   background: rgba(255, 255, 255, 0.90);
@@ -5257,15 +5697,37 @@ html:not(.dark) .pea-node-media-upload:hover {
   color: var(--pea-text-primary);
 }
 
-/* 连线右键菜单 */
+/* 连线右键菜单 / 连线末端节点选择菜单 */
 html:not(.dark) .pea-edge-menu {
   background: #fff;
   border-color: rgba(0, 0, 0, 0.08);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-edge-menu-item {
   color: var(--pea-text-primary);
 }
 html:not(.dark) .pea-edge-menu-item:hover {
   background: rgba(0, 0, 0, 0.04);
+}
+html:not(.dark) .pea-edge-menu-icon {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .pea-edge-menu-item.hl .pea-edge-menu-icon {
+  background: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .pea-edge-menu-label {
+  color: var(--pea-text-primary);
+  font-weight: 600;
+}
+html:not(.dark) .pea-edge-menu-sub {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .pea-edge-menu-tag {
+  background: rgba(59, 158, 255, 0.10);
+  color: var(--pea-brand, #1A7FE8);
 }
 
 /* 文本节点工具栏（H1/H2/H3 格式栏）*/
@@ -5292,8 +5754,8 @@ html:not(.dark) .tnt-label {
 html:not(.dark) .tnt-sep {
   background: rgba(0, 0, 0, 0.08);
 }
-html:not(.dark) .tnt-color {
-  border-color: rgba(0, 0, 0, 0.15);
+html:not(.dark) .tnt-btn-color {
+  border-color: rgba(0, 0, 0, 0.12);
 }
 html:not(.dark) .text-node-toolbar {
   filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
@@ -7825,14 +8287,15 @@ html:not(.dark) .text-node-toolbar {
   min-width: 180px;
   min-height: 140px;
   border-radius: 18px;
-  /* 极淡背景 + 可见边框：既能识别组范围，又不遮挡画布点阵网格。
+  /* 组容器必须透明背景：ReactFlow 的 edges SVG 层位于 nodes 层之下，
+     若组背景为实色，组内连线会被完全盖住（"打组后看不到线"）。
+     因此默认仅保留可见边框来标识组范围；用户仍可用"切换背景"显式着色。
      取消 backdrop-filter 和 overflow:hidden，避免遮住/裁掉子节点。 */
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.30);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.34);
   display: flex;
   flex-direction: column;
   overflow: visible;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
   /* 关键：让 group 内部子节点能正常接收事件，
      自身不拦截（子节点由 .pea-group-node > * 选择器重新启用）。 */
@@ -8140,13 +8603,23 @@ html:not(.dark) .text-node-toolbar {
   background: rgba(255, 255, 255, 0.07);
 }
 
-/* ── ReactFlow 组节点 wrapper 调整 ── */
-.react-flow__node.group {
-  z-index: 1 !important; /* 组容器压在普通节点之下，子节点在其上 */
+/* ── ReactFlow 组节点 wrapper 调整 ──
+   组容器必须始终位于其子节点之下。否则「选中组」时，应用层自带规则
+   `.react-flow__node.selected { z-index: 30 !important }` 会把选中组抬到 30，
+   高于未抬升的子节点(z=0)；此时组容器 wrapper(pointer-events:all) 盖在子节点之上：
+     (1) 拦截子节点鼠标事件 → 子节点收不到 onMouseEnter → .pea-node.hover 不触发；
+     (2) 组容器的半透明背景框盖住子节点连接点 → 即使 handle opacity:1 也"看不到连接"。
+   这正是「新建组后点击组内节点看不到连接」的根因。
+   修复：用更高优先级的 !important 选择器强制组容器 z-index:0（含选中态），
+   确保任意状态下组容器都不会压在子节点之上。ReactFlow 的 group 类型 wrapper
+   class 是 .react-flow__node-group（不是 .group），且无 parent 属性可供属性选择器命中。 */
+.react-flow__node-group {
+  z-index: 0 !important;
 }
-
-.react-flow__node[groupParentId] {
-  z-index: 5 !important; /* 子节点抬升，不被兄弟组容器遮挡 */
+/* 选中态也必须压到 0：特异性(0,3,0) 高于 `.react-flow__node.selected`(0,2,0)，
+   从而在两者都是 !important 时胜出，避免选中组被抬到 30 而盖住子节点。 */
+.react-flow__node.react-flow__node-group.selected {
+  z-index: 0 !important;
 }
 
 /* 覆盖 ReactFlow 默认 group 节点样式：默认的 .react-flow__node-group 自带
@@ -8164,14 +8637,55 @@ html:not(.dark) .text-node-toolbar {
   border-radius: 18px !important;
 }
 
-/* ── 亮色适配 ── */
+/* ── ReactFlow 连线层级调整 ──
+   ReactFlow 默认 edges SVG 层在 DOM 中位于 nodes 层之前；因此默认情况下 nodes
+   已经覆盖 edges。之前错误地把整个 edges 层抬到 z-index:5，导致所有连线都
+   盖在节点上，违反「没选中时线不能覆盖节点」。
+   修复：让 edges 层回归默认层级（不设置 z-index，由 DOM 顺序决定，nodes 在上）。
+   只有被选中/高亮的单条边，才通过 EdgeLabelRenderer 把视觉副本渲染到 nodes
+   层之上；同时 edges 容器保持 pointer-events:none，单条边保持 visibleStroke，
+   不影响节点点击/拖拽。 */
+.react-flow__edges {
+  pointer-events: none !important;
+}
+.react-flow__edge {
+  pointer-events: visibleStroke !important;
+}
+
+/* EdgeLabelRenderer 中的高亮边副本：绝对定位、溢出可见、不参与命中（由独立命中区负责）。 */
+.pea-edge-above {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.pea-edge-above .pea-edge-line,
+.pea-edge-above .pea-edge-halo,
+.pea-edge-above .pea-edge-flow,
+.pea-edge-above .pea-edge-beads,
+.pea-edge-above .pea-edge-comet,
+.pea-edge-above .pea-edge-src-pulse {
+  pointer-events: none;
+}
+/* 透明命中区：悬停/点击穿过节点时也能命中这条边。 */
+.pea-edge-hit {
+  pointer-events: stroke !important;
+  cursor: pointer;
+}
+
+/* ── 亮色适配 ──
+   必须保持透明背景，否则 edges 层（在 nodes 层之下）会被组背景盖住，
+   导致组内连线不可见。边框加粗/加深以补偿无填充时的边界识别度。 */
 .light .pea-group-node {
-  background: rgba(240, 242, 245, 0.95);
-  border-color: rgba(0, 0, 0, 0.24);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06) inset;
+  background: transparent;
+  border: 1px solid rgba(0, 0, 0, 0.32);
+  box-shadow: none;
 }
 .light .pea-group-node.selected {
-  border-color: rgba(31, 162, 220, 0.78);
+  border: 1px solid rgba(31, 162, 220, 0.78);
   box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.10) inset, 0 0 16px rgba(31, 162, 220, 0.20);
 }
 
@@ -8179,12 +8693,12 @@ html:not(.dark) .text-node-toolbar {
    用媒体查询兜底，避免 group 继续应用暗色白色边框导致在浅灰画布上看不见。 */
 @media (prefers-color-scheme: light) {
   .pea-group-node {
-    background: rgba(240, 242, 245, 0.95);
-    border-color: rgba(0, 0, 0, 0.24);
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06) inset;
+    background: transparent;
+    border: 1px solid rgba(0, 0, 0, 0.32);
+    box-shadow: none;
   }
   .pea-group-node.selected {
-    border-color: rgba(31, 162, 220, 0.78);
+    border: 1px solid rgba(31, 162, 220, 0.78);
     box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.10) inset, 0 0 16px rgba(31, 162, 220, 0.20);
   }
   .pea-group-node-label { color: rgba(0, 0, 0, 0.82); text-shadow: none; }
@@ -8231,3 +8745,285 @@ html:not(.dark) .text-node-toolbar {
 .light .pgn-layout-item { color: rgba(0, 0, 0, 0.6); }
 .light .pgn-layout-item:hover { background: rgba(0, 0, 0, 0.04); color: rgba(0, 0, 0, 0.85); }
 .light .pgn-layout-item.active { color: #1a8ccf; background: rgba(31, 162, 220, 0.06); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   文本节点全屏编辑弹窗 (TextNodeEditorModal)
+   玻璃态 + 现代感设计，左右分屏编辑/预览
+   ═══════════════════════════════════════════════════════════════════════════ */
+.text-node-editor-modal .ant-modal-content {
+  border-radius: 20px;
+  overflow: hidden;
+  background: var(--tne-bg, #1a1a22);
+  box-shadow:
+    0 40px 100px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.text-node-editor-modal .ant-modal-header {
+  background: transparent !important;
+}
+.text-node-editor-modal .ant-modal-title {
+  color: var(--tne-text, #e8e8ee) !important;
+}
+.text-node-editor-modal .ant-modal-close-x {
+  color: var(--tne-muted, #888) !important;
+  font-size: 16px;
+  width: 44px;
+  height: 44px;
+  line-height: 44px;
+}
+.text-node-editor-modal .ant-modal-close:hover {
+  color: var(--tne-text, #e8e8ee) !important;
+}
+
+/* 未保存指示点 */
+.tne-unsaved-dot {
+  color: #f39c12;
+  font-size: 11px;
+  animation: tne-pulse-dot 1.6s ease-in-out infinite;
+}
+@keyframes tne-pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ── 工具栏 ── */
+.tne-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 20px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid var(--tne-border, rgba(128, 128, 140, 0.14));
+  flex-wrap: wrap;
+}
+.tne-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.tne-toolbar-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--tne-border, rgba(128, 128, 140, 0.2));
+  margin: 0 8px;
+  flex-shrink: 0;
+}
+.tne-toolbar-spacer {
+  flex: 1;
+}
+
+.tne-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--tne-secondary, #9ca3af);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+.tne-tool-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--tne-text, #e8e8ee);
+}
+.tne-tool-btn:active {
+  background: rgba(255, 255, 255, 0.14);
+  transform: scale(0.96);
+}
+
+/* 颜色选择圆点 */
+.tne-color-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  display: inline-block;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease;
+}
+.tne-tool-btn:hover .tne-color-dot {
+  transform: scale(1.2);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* ── 编辑/预览分屏区域 ── */
+.tne-editor-wrap {
+  display: flex;
+  height: 520px;
+  overflow: hidden;
+}
+.tne-editor-pane,
+.tne-preview-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.tne-pane-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tne-muted, #888);
+  background: rgba(0, 0, 0, 0.08);
+  border-bottom: 1px solid var(--tne-border, rgba(128, 128, 140, 0.1));
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.tne-editor-content,
+.tne-preview-content {
+  flex: 1;
+  padding: 16px 20px;
+  overflow-y: auto;
+  outline: none;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--tne-text, #e8e8ee);
+  word-wrap: break-word;
+  word-break: break-word;
+}
+.tne-editor-content {
+  caret-color: var(--tne-accent, #1fa2dc);
+}
+.tne-editor-content:focus {
+  background: rgba(255, 255, 255, 0.02);
+}
+.tne-editor-content:empty::before {
+  content: '开始输入内容…';
+  color: var(--tne-muted, #555);
+  pointer-events: none;
+}
+
+/* 预览区只读样式 */
+.tne-preview-content {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--tne-secondary, #c0c0c8);
+  pointer-events: none;
+}
+.tne-preview-content h1,
+.tne-preview-content h2,
+.tne-preview-content h3 {
+  color: var(--tne-text, #e8e8ee);
+  margin: 0.8em 0 0.4em;
+  line-height: 1.35;
+}
+.tne-preview-content h1 { font-size: 1.65em; font-weight: 700; }
+.tne-preview-content h2 { font-size: 1.35em; font-weight: 600; }
+.tne-preview-content h3 { font-size: 1.12em; font-weight: 600; }
+.tne-preview-content p { margin: 0.5em 0; }
+.tne-preview-content blockquote {
+  border-left: 3px solid var(--tne-accent, #1fa2dc);
+  padding-left: 14px;
+  margin: 0.8em 0;
+  color: var(--tne-muted, #888);
+  font-style: italic;
+}
+.tne-preview-content code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+.tne-preview-content pre {
+  background: rgba(0, 0, 0, 0.25);
+  padding: 12px 16px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+.tne-preview-content pre code {
+  background: transparent;
+  padding: 0;
+}
+.tne-preview-content ul,
+.tne-preview-content ol {
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+.tne-preview-content hr {
+  border: none;
+  border-top: 1px solid var(--tne-border, rgba(128, 128, 140, 0.2));
+  margin: 1em 0;
+}
+
+/* 分隔条 */
+.tne-divider {
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--tne-border, rgba(128, 128, 140, 0.25)) 20%,
+    var(--tne-border, rgba(128, 128, 140, 0.25)) 80%,
+    transparent
+  );
+  flex-shrink: 0;
+}
+
+/* ── 浅色模式适配 ── */
+html:not(.dark) .text-node-editor-modal .ant-modal-content {
+  background: #fff;
+  box-shadow:
+    0 40px 100px rgba(0, 0, 0, 0.15),
+    0 0 0 1px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+html:not(.dark) .tne-toolbar {
+  background: rgba(0, 0, 0, 0.02);
+}
+html:not(.dark) .tne-tool-btn {
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .tne-tool-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .tne-editor-content {
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .tne-editor-content:empty::before {
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .tne-editor-content:focus {
+  background: rgba(0, 0, 0, 0.02);
+}
+html:not(.dark) .tne-preview-content {
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .tne-preview-content h1,
+html:not(.dark) .tne-preview-content h2,
+html:not(.dark) .tne-preview-content h3 {
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .tne-preview-content blockquote {
+  border-left-color: var(--pea-brand, #1A7FE8);
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .tne-preview-content code {
+  background: rgba(0, 0, 0, 0.06);
+}
+html:not(.dark) .tne-preview-content pre {
+  background: rgba(0, 0, 0, 0.05);
+}
+html:not(.dark) .tne-pane-header {
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--pea-text-muted);
+}
+html:not(.dark) .tne-color-dot {
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}

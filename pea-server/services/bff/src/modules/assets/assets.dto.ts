@@ -82,3 +82,23 @@ export class UploadAssetQueryDto {
   @IsIn(['personal', 'team'])
   scope?: 'personal' | 'team';
 }
+
+export class ImportAssetDto {
+  /** 目标 MinIO 对象 key；也接受 /media/<key> 或带签名的完整 URL，后端会提取 key */
+  @IsString()
+  object_key: string;
+
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  folder_id?: number;
+
+  @IsOptional()
+  @IsIn(['personal', 'team'])
+  scope?: 'personal' | 'team';
+}

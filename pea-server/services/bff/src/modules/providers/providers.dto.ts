@@ -32,7 +32,7 @@ export class CreateProviderDto {
 
   @IsOptional()
   @IsIn(['image', 'video', 'text', 'audio'])
-  kind?: 'image' | 'video' | 'text' | 'audio';
+  kind?: 'image' | 'video' | 'text' | 'audio' | '3d';
 
   @IsOptional()
   @IsBoolean()
@@ -60,7 +60,7 @@ export class UpdateProviderDto {
   apiKey?: string;
 
   @IsOptional() @IsIn(['image', 'video', 'text', 'audio'])
-  kind?: 'image' | 'video' | 'text' | 'audio';
+  kind?: 'image' | 'video' | 'text' | 'audio' | '3d';
 
   @IsOptional() @IsBoolean()
   enabled?: boolean;

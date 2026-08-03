@@ -1162,7 +1162,10 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         draggable: true,
         position: { x: n.position.x - gx, y: n.position.y - gy },
         selected: false,
-        zIndex: 0,
+        // 子节点 zIndex 显式高于组容器(被 CSS 强制为 0)。
+        // 这样即便组被选中、或 ReactFlow 未对子节点做选中抬升，子节点仍稳定位于组之上，
+        // 不会被组容器 wrapper 拦截鼠标事件/遮挡连接点，从而能正常 hover 并显示连接点。
+        zIndex: 1,
       };
     });
 
@@ -1193,6 +1196,8 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         ...n,
         parentNode: undefined,
         extent: undefined,
+        // 解组后恢复默认层级，避免遗留 group 时的 zIndex:1
+        zIndex: 0,
         position: {
           x: n.position.x + gp.x,
           y: n.position.y + gp.y,

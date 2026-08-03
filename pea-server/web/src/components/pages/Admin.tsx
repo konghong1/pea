@@ -100,22 +100,54 @@ export default function Admin() {
 
 /* ══════════════════════════ 提供商 ══════════════════════════ */
 
-const PROVIDER_KINDS = ['image', 'video', 'text', 'audio'] as const;
+const PROVIDER_KINDS = ['image', 'video', 'text', 'audio', '3d'] as const;
 
-// 适配器类型 —— 必须与后端 app/providers 下 @register_provider 的注册名逐字一致，
-// 否则编排器会回退到 openai-compatible 并在调用时报出难以定位的协议错误。
-const PROVIDER_TYPE_OPTIONS = [
-  { value: 'openai-compatible', label: 'openai-compatible（Agnes / OpenAI 兼容）' },
-  { value: 'minimax', label: 'minimax（视频 v2+v1 / 图像 / 文本 / 音乐 / 语音）' },
-  { value: 'anthropic-compatible', label: 'anthropic-compatible（Anthropic Messages 协议）' },
-  { value: 'mock', label: 'mock（本地占位，不出网）' },
-];
+// 系统支持的厂商目录 —— 前端下拉仅列这些, 用户无需理解协议/厂商概念。
+// 选定厂商后 protocol / vendor 由后台按映射定死 (见下方 SUPPORTED_VENDORS)。
+// 每接入一家新厂商, 在此加一行即可; 后端需先实现对应适配器 (provider_adapter 注册)。
+const SUPPORTED_VENDORS = [
+  {
+    value: 'agnes',
+    label: 'Agnes',
+    protocol: 'openai-compatible',
+    vendor: 'agnes',
+    defaultId: 'agnes',
+    defaultName: 'Agnes AI',
+  },
+  {
+    value: 'minimax',
+    label: 'MiniMax',
+    protocol: 'vendor-native',
+    vendor: 'minimax',
+    defaultId: 'minimax',
+    defaultName: 'MiniMax 海螺',
+  },
+  {
+    value: 'volcengine',
+    label: '火山方舟 Volcengine',
+    protocol: 'openai-compatible',
+    vendor: 'volcengine',
+    defaultId: 'volcengine',
+    defaultName: '火山方舟 Volcengine',
+  },
+  {
+    value: 'gemini',
+    label: 'Google Gemini',
+    protocol: 'vendor-native',
+    vendor: 'gemini',
+    defaultId: 'gemini',
+    defaultName: 'Google Gemini',
+  },
+] as const;
 
-const PROVIDER_TYPE_COLOR: Record<string, string> = {
-  'openai-compatible': 'blue',
-  minimax: 'volcano',
-  'anthropic-compatible': 'geekblue',
-  mock: 'default',
+// 厂商 value → 展示名 (用于列表标签; 兼容历史记录里未列出的厂商原样显示)。
+const VENDOR_LABEL: Record<string, string> = {
+  agnes: 'Agnes',
+  minimax: 'MiniMax',
+  volcengine: 'Volcengine',
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+  anthropic: 'Anthropic',
 };
 
 function ProvidersPane() {
@@ -181,13 +213,10 @@ function ProvidersPane() {
     },
     { title: 'ID', dataIndex: 'id', width: 120 },
     {
-      title: '类型',
-      dataIndex: 'providerType',
-      width: 190,
-      render: (v: string) => (
-        <Tag color={PROVIDER_TYPE_COLOR[v] ?? 'default'} style={{ marginInlineEnd: 0 }}>
-          {v}
-        </Tag>
+      title: '厂商',
+      width: 160,
+      render: (_: any, r: ProviderView) => (
+        <Tag color="geekblue">{VENDOR_LABEL[r.vendor] ?? r.vendor ?? r.protocol}</Tag>
       ),
     },
     {
@@ -203,7 +232,7 @@ function ProvidersPane() {
       render: (v, r) =>
         r.hasApiKey ? <code>{v}</code> : <Tag color="orange">未配置</Tag>,
     },
-    { title: '媒介', dataIndex: 'kind', width: 80, render: (v) => <Tag>{v}</Tag> },
+    { title: '主类型', dataIndex: 'kind', width: 80, render: (v) => <Tag>{v}</Tag> },
     {
       title: '启用',
       dataIndex: 'enabled',
@@ -423,10 +452,13 @@ function ProviderModal({
   const isEdit = !!record;
 
   useEffect(() => {
+    const sel = record ? SUPPORTED_VENDORS.find((x) => x.vendor === record.vendor) : undefined;
     form.setFieldsValue({
       id: record?.id ?? '',
       name: record?.name ?? '',
-      providerType: record?.providerType ?? 'openai-compatible',
+      protocol: record?.protocol ?? 'openai-compatible',
+      vendor: record?.vendor ?? '',
+      vendorSel: sel?.value,
       baseUrl: record?.baseUrl ?? '',
       apiKey: '',
       kind: record?.kind ?? 'image',
@@ -442,6 +474,8 @@ function ProviderModal({
     } catch {
       return;
     }
+    // vendorSel 为内部派生字段, 不提交给后端
+    delete v.vendorSel;
     setSaving(true);
     try {
       if (isEdit) {
@@ -475,6 +509,37 @@ function ProviderModal({
       destroyOnClose
     >
       <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        {/* 协议/厂商由所选厂商定死, 作为隐藏字段随表单提交 */}
+        <Form.Item name="protocol" hidden>
+          <Input />
+        </Form.Item>
+        <Form.Item name="vendor" hidden>
+          <Input />
+        </Form.Item>
+        <Form.Item
+          label="厂商"
+          name="vendorSel"
+          tooltip="系统支持的厂商；选定后协议与厂商由后台按映射自动定死，无需手动选择"
+          rules={[{ required: true, message: '请选择厂商' }]}
+        >
+          <Select
+            options={SUPPORTED_VENDORS.map((v) => ({ value: v.value, label: v.label }))}
+            placeholder="选择我们支持的厂商"
+            onChange={(val: string) => {
+              const pick = SUPPORTED_VENDORS.find((x) => x.value === val);
+              if (!pick) return;
+              const patch: Record<string, string> = {
+                protocol: pick.protocol,
+                vendor: pick.vendor,
+              };
+              if (!isEdit) {
+                patch.id = pick.defaultId;
+                patch.name = pick.defaultName;
+              }
+              form.setFieldsValue(patch);
+            }}
+          />
+        </Form.Item>
         <Form.Item
           label="ID"
           name="id"
@@ -489,18 +554,11 @@ function ProviderModal({
           <Input placeholder="展示名称" />
         </Form.Item>
         <Form.Item
-          label="提供商类型"
-          name="providerType"
-          tooltip="决定后端用哪个适配器发请求，必须与上游实际协议一致，选错会直接 4xx"
-        >
-          <Select options={PROVIDER_TYPE_OPTIONS} />
-        </Form.Item>
-        <Form.Item
           label="Base URL"
           name="baseUrl"
-          tooltip="MiniMax 请填到域名为止（端点横跨 /v1 与 /v2，由适配器自行拼版本号）"
+          tooltip="MiniMax 请填到域名为止（端点横跨 /v1 与 /v2，由适配器自行拼版本号）；Gemini 填 https://generativelanguage.googleapis.com 即可（可带 /v1beta），其余由适配器拼装"
         >
-          <Input placeholder="https://apihub.agnes-ai.com/v1 或 https://api.minimaxi.com" />
+          <Input placeholder="https://apihub.agnes-ai.com/v1 或 https://api.minimaxi.com 或 https://generativelanguage.googleapis.com" />
         </Form.Item>
         <Form.Item
           label="API Key"
@@ -510,7 +568,11 @@ function ProviderModal({
         >
           <Input.Password placeholder={isEdit ? '留空则保留原密钥' : 'sk-...'} autoComplete="new-password" />
         </Form.Item>
-        <Form.Item label="默认媒介" name="kind">
+        <Form.Item
+          label="主类型"
+          name="kind"
+          tooltip="仅展示用，不影响该厂商下多模型并存（如火山可同时有文/图/视频模型）"
+        >
           <Select options={PROVIDER_KINDS.map((k) => ({ value: k, label: k }))} />
         </Form.Item>
         <Space size={32}>
@@ -528,15 +590,16 @@ function ProviderModal({
 
 /* ══════════════════════════ 模型 & 定价 ══════════════════════════ */
 
-const MODEL_TYPES = ['image', 'video', 'text'] as const;
+const MODEL_TYPES = ['image', 'video', 'text', 'audio', '3d'] as const;
 
 // 远端模型能力类型 → 中文标签 / antd Tag 颜色 (与后端 provider_remote_models.model_type 对齐)
 const REMOTE_TYPE_LABEL: Record<string, string> = {
   image: '图像',
   video: '视频',
   text: '文本',
-  audio: '音频',
+  audio: '音乐',
   embedding: '嵌入',
+  '3d': '3D',
 };
 const REMOTE_TYPE_COLOR: Record<string, string> = {
   image: 'magenta',
@@ -546,7 +609,7 @@ const REMOTE_TYPE_COLOR: Record<string, string> = {
   embedding: 'green',
 };
 // ai_models.model_type 仅支持这三类, 远端模型若被推断为 audio/embedding 则不自动回填类型。
-const COMPATIBLE_MODEL_TYPES = ['image', 'video', 'text'];
+const COMPATIBLE_MODEL_TYPES = ['image', 'video', 'text', 'audio', '3d'];
 
 function ModelsPane() {
   const { message } = App.useApp();
@@ -744,7 +807,7 @@ function ModelModal({
       if (!byType.has(t)) byType.set(t, []);
       byType.get(t)!.push(m);
     }
-    const order = ['image', 'video', 'text', 'audio', 'embedding'];
+    const order = ['image', 'video', 'text', 'audio', 'embedding', '3d'];
     return order
       .filter((t) => byType.has(t))
       .map((t) => ({
@@ -903,7 +966,7 @@ function ModelModal({
         </Space>
         <Space style={{ display: 'flex' }} align="start" size={12} wrap>
           <Form.Item label="类型" name="modelType" style={{ width: 130 }}>
-            <Select options={MODEL_TYPES.map((t) => ({ value: t, label: t }))} />
+            <Select options={MODEL_TYPES.map((t) => ({ value: t, label: REMOTE_TYPE_LABEL[t] || t }))} />
           </Form.Item>
           <Form.Item label="权益门槛" name="minPlanLevel" tooltip="用户生效权益等级 ≥ 此值才可调用" style={{ width: 130 }}>
             <InputNumber min={0} style={{ width: '100%' }} />

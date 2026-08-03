@@ -189,12 +189,93 @@ def _strip_think(text: str) -> tuple[str, bool]:
     return out, starved
 
 
+def _classify_minimax_error(resp, what: str, body: dict | None) -> tuple[str, str]:
+    """把上游原始错误归类为 ``(friendly_msg, technical)`` 二元组。
+
+    - ``friendly_msg`` — 给前端 toast 的简短中文消息（≤ 60 字符）。前端 UI
+      空间有限, 把 200+ 字符的 JSON 原文糊上去会被截断/溢出。
+    - ``technical`` — 完整原始错误（含 request_id / type / message / base_resp），
+      仅用于 logger 排查, 不向前端暴露。
+
+    归类来源: MiniMax 官方 base_resp.status_code 语义 + HTTP 4xx/5xx 网关层。
+    1008 / insufficient_balance = 余额不足, 1004 = 鉴权失败, 2013 = 参数非法。
+    """
+    # 先尝试从 body 提取结构化字段
+    err = body.get("error") if isinstance(body, dict) else None
+    err_type = (err.get("type") if isinstance(err, dict) else None) or (
+        body.get("type") if isinstance(body, dict) else None
+    )
+    err_msg = (err.get("message") if isinstance(err, dict) else None) or (
+        body.get("message") if isinstance(body, dict) else None
+    )
+    base_resp = body.get("base_resp") if isinstance(body, dict) else None
+    base_code = base_resp.get("status_code") if isinstance(base_resp, dict) else None
+    base_msg = base_resp.get("status_msg") if isinstance(base_resp, dict) else None
+    request_id = body.get("request_id") if isinstance(body, dict) else None
+
+    # 余额不足（最常见，单独优先匹配）
+    if resp.status_code == 402 or err_type == "insufficient_balance_error" or base_code == 1008:
+        friendly = "MiniMax 账户余额不足，请联系管理员充值后重试"
+        technical = (
+            f"insufficient balance | http={resp.status_code} err_type={err_type} "
+            f"base_code={base_code} request_id={request_id} msg={err_msg or base_msg}"
+        )
+        return friendly, technical
+
+    # 鉴权失败
+    if resp.status_code in (401, 403) or base_code in (1004, 1007):
+        friendly = "MiniMax 鉴权失败，请检查 API 密钥是否有效"
+        technical = (
+            f"auth failed | http={resp.status_code} base_code={base_code} "
+            f"request_id={request_id} msg={err_msg or base_msg}"
+        )
+        return friendly, technical
+
+    # 限流
+    if resp.status_code == 429 or base_code in (1006,):
+        friendly = "MiniMax 限流，请稍后再试"
+        technical = (
+            f"rate limited | http={resp.status_code} base_code={base_code} "
+            f"request_id={request_id} msg={err_msg or base_msg}"
+        )
+        return friendly, technical
+
+    # 参数非法
+    if resp.status_code == 400 or base_code in (2013, 1002):
+        friendly = "MiniMax 参数错误，请检查模型参数（时长/分辨率/参考图等）"
+        technical = (
+            f"invalid params | http={resp.status_code} base_code={base_code} "
+            f"request_id={request_id} msg={err_msg or base_msg}"
+        )
+        return friendly, technical
+
+    # 上游服务异常
+    if resp.status_code // 100 == 5:
+        friendly = "MiniMax 服务暂不可用，请稍后再试"
+        technical = (
+            f"upstream 5xx | http={resp.status_code} request_id={request_id} "
+            f"msg={err_msg or base_msg}"
+        )
+        return friendly, technical
+
+    # 其他兜底
+    friendly = f"MiniMax 调用失败（HTTP {resp.status_code}）"
+    technical = (
+        f"unknown error | http={resp.status_code} base_code={base_code} "
+        f"err_type={err_type} request_id={request_id} msg={err_msg or base_msg}"
+    )
+    return friendly, technical
+
+
 def _raise_for_minimax(resp, what: str, body: dict | None = None) -> dict:
     """MiniMax 双错误语义统一检查 —— v1 看 base_resp, v2 看 HTTP 码。
 
     返回解析后的 JSON body (调用方不用再 .json() 一次)。
     任一层判定失败都抛 RuntimeError, 由上层置 FAILED 并触发退款,
     绝不静默返回空结果 (扣费给假图是不可接受的)。
+
+    抛出时 RuntimeError 的 message 是**友好摘要**（≤ 60 字符, 适配前端 toast 宽度）。
+    完整原始错误（含 request_id / type / base_resp）只进 logger, 不向前端暴露。
     """
     # ① v2 / 网关层: 真实 HTTP 错误码
     if resp.status_code // 100 != 2:
@@ -204,9 +285,29 @@ def _raise_for_minimax(resp, what: str, body: dict | None = None) -> dict:
         except Exception:  # noqa: BLE001
             pass
         reason = getattr(resp, "reason_phrase", None) or getattr(resp, "reason", "") or "upstream error"
+        # HTML 错误页（Cloudflare / 网关降级）直接当上游异常报
         if txt.lstrip().startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML")):
-            raise RuntimeError(f"minimax {what} HTTP {resp.status_code}: {reason}")
-        raise RuntimeError(f"minimax {what} HTTP {resp.status_code}: {txt}")
+            friendly = f"MiniMax 网关返回异常（HTTP {resp.status_code}）"
+            technical = f"html error page | http={resp.status_code} reason={reason}"
+            logger.warning("[minimax] %s %s | technical=%s", what, friendly, technical)
+            raise RuntimeError(friendly)
+
+        # JSON 体错误 → 用归类器生成友好消息
+        try:
+            parsed = resp.json()
+        except Exception:
+            parsed = {}
+        if isinstance(parsed, dict):
+            friendly, technical = _classify_minimax_error(resp, what, parsed)
+            logger.warning("[minimax] %s %s | technical=%s | body=%s",
+                           what, friendly, technical, txt[:200])
+            raise RuntimeError(friendly)
+
+        # 非 JSON 也非 HTML，罕见
+        friendly = f"MiniMax 调用失败（HTTP {resp.status_code}）"
+        technical = f"non-json error | http={resp.status_code} txt={txt[:120]}"
+        logger.warning("[minimax] %s %s | technical=%s", what, friendly, technical)
+        raise RuntimeError(friendly)
 
     if body is None:
         try:
@@ -220,18 +321,21 @@ def _raise_for_minimax(resp, what: str, body: dict | None = None) -> dict:
     # ② v2 错误体: HTTP 200 也可能带 {"type":"error", ...} (极少数网关行为)
     if body.get("type") == "error":
         err = body.get("error") or {}
-        raise RuntimeError(
-            f"minimax {what} error: {err.get('message') or err.get('type') or _short(err)}"
-        )
+        # 用归类器把 Anthropic-style 错误也归类成友好消息
+        friendly, technical = _classify_minimax_error(resp, what, body)
+        logger.warning("[minimax] %s %s | technical=%s | body=%s",
+                       what, friendly, technical, _short(body))
+        raise RuntimeError(friendly)
 
     # ③ v1 核心陷阱: HTTP 200 + base_resp.status_code != 0 才是真实错误
     br = body.get("base_resp")
     if isinstance(br, dict):
         code = br.get("status_code")
         if code not in (0, None):
-            raise RuntimeError(
-                f"minimax {what} base_resp {code}: {br.get('status_msg') or 'unknown error'}"
-            )
+            friendly, technical = _classify_minimax_error(resp, what, body)
+            logger.warning("[minimax] %s %s | technical=%s | body=%s",
+                           what, friendly, technical, _short(body))
+            raise RuntimeError(friendly)
     return body
 
 
@@ -243,9 +347,12 @@ def _clamp(v: Any, lo: int, hi: int, default: int) -> int:
     return max(lo, min(hi, n))
 
 
-@register_provider("minimax")
+@register_provider("vendor-native", "minimax")
 class MiniMaxAdapter(BaseProviderAdapter):
-    """MiniMax 全模型适配器: 一个 provider_type 覆盖文本/图像/视频/音乐/语音。
+    """MiniMax 全模型适配器: 一个厂商(vendor=minimax)覆盖文本/图像/视频/音乐/语音。
+
+    注册键为 ("vendor-native", "minimax") —— 协议=vendor-native (厂商自有协议),
+    厂商=minimax。与前端「协议=厂商原生协议」「厂商=MiniMax」两个下拉一一对应。
 
     完成模式声明为 POLL —— 视频异步走句柄轮询; 图像/文本/音乐/语音在
     ``submit`` 里直接 ``SubmitOutcome(sync=True)`` 返回, 不进句柄表
@@ -284,16 +391,35 @@ class MiniMaxAdapter(BaseProviderAdapter):
     def _kind(self, req: dict) -> str:
         """确定实际要走的 MiniMax 端点族。
 
-        以 req['type'] 为主 (前端语义), model_name 为辅 (同一 type 下细分 v1/v2)。
-        model 名能明确指向某族时以 model 为准 —— 避免管理员把 image-01 错配成
-        type=video 时打到视频端点拿 2013。
+        ⚠️ 排查背景 (2026-08-03): 用户报 H3 走到了 v1 路径 (base_resp 1008),
+        几乎都是数据库 ``ai_models.model_name`` 被改成了 ``minimax-hailuo-3``
+        之类的名称 —— 前端显示名是 H3, 但 model_name 又带 hailuo 前缀, 导致
+        v1 命中。代码上没错, 但配置错乱被默默掩盖, 用户看到的是 "余额不足"
+        而不是 "模型走错端点了"。
+
+        故 _kind 加 [minimax-route] 日志: 视频族决策必须可观测, 遇到反直觉
+        组合 (H+数字 同时匹配 v1/v2) 时打 ERROR, 让运维一眼看到根因。
         """
-        model = self.model_name or ""
+        model = (self.model_name or "").strip()
         # ⚠️ 顺序要紧: 先判更具体的 v1 前缀 (minimax-hailuo...), 再判 v2 正则,
         #    否则 Hailuo 系列会被误判成 H 系列 (见 _V2_VIDEO_RE 注释里的联调事故)。
         if _model_matches(model, _V1_VIDEO_PREFIXES):
+            # 配置错乱检测: 若 model 同样满足 v2 正则 (H + 数字), 几乎可
+            # 肯定是把 "MiniMax-H3" 误存为 "minimax-hailuo-3" 的拼写事故.
+            # v1 端点上即便调通, 也会以 v1 价格 / 计费 / capability 计费.
+            if _V2_VIDEO_RE.match(model):
+                logger.error(
+                    "[minimax-route] 路由冲突: model=%r 同时命中 v1 (minimax-hailuo 前缀) "
+                    "与 v2 (minimax-h\\d 正则); 按当前顺序走 v1. "
+                    "请检查 ai_models.model_name —— 前端显示名是 H3 时, model_name "
+                    "应当是 'MiniMax-H3', 千万**不要**带 hailuo 前缀 (minimax-hailuo-3).",
+                    model,
+                )
+            else:
+                logger.info("[minimax-route] model=%s -> video_v1 (前缀命中)", model)
             return "video_v1"
-        if _V2_VIDEO_RE.match((model or "").strip()):
+        if _V2_VIDEO_RE.match(model):
+            logger.info("[minimax-route] model=%s -> video_v2 (H+数字 正则命中)", model)
             return "video_v2"
         if _model_matches(model, _IMAGE_PREFIXES):
             return "image"
@@ -333,15 +459,48 @@ class MiniMaxAdapter(BaseProviderAdapter):
         content: list[dict] = [{"type": "text", "text": req.get("prompt") or ""}]
 
         refs = self.ref_strategy.resolve(p.get("reference_images") or [], provider=self)
-        # 首帧 / 尾帧 / 通用参考图: 第一张作首帧 (最常见诉求 = 图生视频),
-        # 其余作 reference_image。data URI 直传, 无需公网。
-        for idx, r in enumerate(refs[:4]):
-            role = "first_frame" if idx == 0 else "reference_image"
-            content.append({
-                "type": "image_url",
-                "role": role,
-                "image_url": {"url": r},
-            })
+        # ── v2 content[] 角色映射 (前端 gen_mode -> MiniMax v2 角色) ──
+        # 前端 NodeChatPrompt.tsx L1347 把选项写入 params.gen_mode, 取值:
+        #   'first_last' (首尾帧模式) -> 第1张 first_frame + 末张 last_frame
+        #   'full_ref'   (全能参考模式, 默认) -> 仅首张 reference_image (主体参考)
+        # ⚠️ 两套角色互斥, 绝不可混用 —— 否则 400
+        #    "reference 场景不能混用 first_frame/middle_frame/last_frame, 请二选一(2013)"
+        # 联调事故 (2026-08-03): 旧代码**无视 gen_mode**, 多图时第1张塞 first_frame、
+        # 第2+张塞 reference_image, 两角色并存直接触发上面的 400. 本版严格按用户选择映射.
+        gen_mode = (str(p.get("gen_mode") or "full_ref")).strip().lower()
+        n_refs = len(refs)
+        if gen_mode == "first_last":
+            # 首尾帧模式: 严格 first_frame + last_frame 两段式, 不与 reference_image 混用
+            if n_refs >= 1:
+                content.append({
+                    "type": "image_url",
+                    "role": "first_frame",
+                    "image_url": {"url": refs[0]},
+                })
+            if n_refs >= 2:
+                content.append({
+                    "type": "image_url",
+                    "role": "last_frame",
+                    "image_url": {"url": refs[-1]},
+                })
+            if n_refs > 2:
+                logger.warning(
+                    "[minimax] v2 首尾帧模式收到 %d 张参考图, 仅取首尾 2 张下发, "
+                    "丢弃中间 %d 张 (model=%s)",
+                    n_refs, n_refs - 2, self.model_name,
+                )
+        else:  # full_ref 全能参考 (默认): 单张主体参考, 不混用首/末帧
+            if n_refs >= 1:
+                content.append({
+                    "type": "image_url",
+                    "role": "reference_image",
+                    "image_url": {"url": refs[0]},
+                })
+            if n_refs > 1:
+                logger.warning(
+                    "[minimax] v2 全能参考模式仅支持单张主体参考图, 丢弃其余 %d 张 (model=%s)",
+                    n_refs - 1, self.model_name,
+                )
 
         payload: dict[str, Any] = {
             "model": self.model_name,
@@ -408,12 +567,32 @@ class MiniMaxAdapter(BaseProviderAdapter):
             "prompt": req.get("prompt") or "",
         }
         refs = self.ref_strategy.resolve(p.get("reference_images") or [], provider=self)
+        # v1 Hailuo/T2V/I2V/S2V 仅支持首帧 (first_frame_image 字段), 无末帧概念.
+        # gen_mode 在 v1 上只影响"末帧是否被忽略"的提示, 首帧行为保持一致.
+        gen_mode = (str(p.get("gen_mode") or "full_ref")).strip().lower()
         if refs:
             if _model_matches(self.model_name, _S2V_PREFIXES):
                 # S2V-01: 主体参考走 subject_reference, 不是首帧
                 payload["subject_reference"] = [{"type": "character", "image": [refs[0]]}]
+                if gen_mode == "first_last" and len(refs) >= 2:
+                    logger.warning(
+                        "[minimax] v1 S2V 模型 %s 仅支持主体参考, '首尾帧'模式的末帧参数被忽略",
+                        self.model_name,
+                    )
             else:
+                # Hailuo v1 (T2V/I2V) 仅支持首帧 (first_frame_image), 无末帧概念
                 payload["first_frame_image"] = refs[0]
+                if gen_mode == "first_last" and len(refs) >= 2:
+                    logger.warning(
+                        "[minimax] v1 模型 %s 仅支持首帧 (first_frame_image), 不支持末帧; "
+                        "'首尾帧'模式的末帧参数被忽略 (model=%s)",
+                        self.model_name, self.model_name,
+                    )
+                elif len(refs) > 1:
+                    logger.info(
+                        "[minimax] v1 模型 %s 仅取首张参考图作为首帧, 其余 %d 张丢弃",
+                        self.model_name, len(refs) - 1,
+                    )
 
         dur = _clamp(p.get("duration"), 6, 10, 6)
         payload["duration"] = 10 if dur > 6 else 6  # v1 仅 6/10 两档

@@ -90,4 +90,17 @@ export class FilesService {
     }
     return this.client.removeObject(this.bucket, key);
   }
+
+  /** 同桶复制对象（服务端侧拷贝，不经过 BFF 内存）。 */
+  async copyObject(destKey: string, srcKey: string) {
+    if (!destKey || !srcKey || destKey.includes('..') || srcKey.includes('..')) {
+      throw new BadRequestException('invalid copy keys');
+    }
+    await this.client.copyObject(
+      this.bucket,
+      destKey,
+      `${this.bucket}/${srcKey}`,
+      new Minio.CopyConditions(),
+    );
+  }
 }

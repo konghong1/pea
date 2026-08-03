@@ -3,7 +3,7 @@ import { syncBalance } from '../lib/balanceSync';
 
 /* ═══════════════════════════ 用户侧类型 ═══════════════════════════ */
 
-export type ModelType = 'image' | 'video' | 'text';
+export type ModelType = 'image' | 'video' | 'text' | 'audio' | '3d';
 
 /** GET /users/me 返回结构 (camelCase, 与 BFF UsersService.getProfile 对齐)。 */
 export interface MeProfile {

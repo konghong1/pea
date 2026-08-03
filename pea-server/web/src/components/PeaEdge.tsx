@@ -122,6 +122,8 @@ export default function PeaEdge({
 
   // 点击落点在路径上的比例（0~1）。null = 未记录 → 退回连线中点。
   const [clickT, setClickT] = useState<number | null>(null);
+  // 鼠标是否悬停在透明命中区上（使穿过节点的线也能高亮并浮到节点上方）。
+  const [hovered, setHovered] = useState(false);
   // 取消选中后清空，下次若由键盘/程序选中则回到中点，不残留上次的落点。
   useEffect(() => {
     if (!selected) setClickT(null);
@@ -176,6 +178,9 @@ export default function PeaEdge({
   // 方向渐变：起点淡、终点亮 —— 即便动画被 reduced-motion 关掉，
   // 明暗梯度本身也在传达"从哪流向哪"。
   const gradId = useMemo(() => `pea-edge-grad-${String(id).replace(/[^\w-]/g, '_')}`, [id]);
+  // EdgeLabelRenderer 中的副本需要独立的 defs id，避免与 SVG 层重复 ID 冲突。
+  const aboveGradId = useMemo(() => `${gradId}-above`, [gradId]);
+  const showAbove = selected || active || hovered;
 
   // 删除芯片锚点：优先用「点击落点比例」换算出的路径坐标（跟随节点移动），
   // 拿不到时（程序/键盘选中）退回连线中点。每次渲染同步计算，永远与当前 d 一致。
@@ -193,6 +198,27 @@ export default function PeaEdge({
     } catch {
       /* 定位失败就退回中点，不影响选中 */
     }
+  };
+
+  // 命中区在 EdgeLabelRenderer（nodes 层之上），点击时手动同步选中状态：
+  // 先清空节点选中，再按 modifier 键决定单选/反选，最后记录落点给删除芯片定位。
+  const onHitPointerDown = (e: ReactMouseEvent<SVGPathElement>) => {
+    e.stopPropagation();
+    const store = useCanvas.getState();
+    const edges = store.edges;
+    const edge = edges.find((ed) => ed.id === id);
+    if (!edge) return;
+
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      store.onEdgesChange([{ type: 'select', id, selected: !edge.selected }]);
+    } else {
+      store.clearSelection();
+      const deselectOthers = edges
+        .filter((ed) => ed.id !== id && ed.selected)
+        .map((ed) => ({ type: 'select' as const, id: ed.id, selected: false }));
+      store.onEdgesChange([...deselectOthers, { type: 'select', id, selected: true }]);
+    }
+    recordClick(e);
   };
 
   return (
@@ -276,45 +302,131 @@ export default function PeaEdge({
         onPointerDown={recordClick}
       />
 
-      {selected && (
+      {/* 高亮视觉副本：渲染到 nodes 层之上，使选中/激活/悬停的边能盖在节点上。
+          同时附带透明命中区，保证穿过节点的线段仍可被悬停/点击。 */}
+      {showAbove && (
         <EdgeLabelRenderer>
-          {/* 定位锚：只负责「定位 + counter-scale」，内联 transform 会压过样式表，
-              所以 hover 的缩放/位移必须放在内层 button 上，否则会被内联样式吃掉。 */}
-          <div
-            className="pea-edge-del-anchor"
-            data-chip-anchored={clickT != null ? '1' : '0'}
+          <svg
+            className="pea-edge-above"
             style={{
               position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${chipPt.x}px, ${chipPt.y}px) scale(var(--pea-inv-zoom, 1))`,
-              pointerEvents: 'all',
+              top: 0,
+              left: 0,
+              width: 0,
+              height: 0,
+              overflow: 'visible',
             }}
           >
-          <button
-            type="button"
-            className="pea-edge-del"
-            onClick={(e) => {
-              e.stopPropagation();
-              removeEdge(id);
-            }}
-            onMouseDown={(e) => e.stopPropagation()}
-            title="断开连接"
-            aria-label="断开连接"
-          >
-            <svg viewBox="0 0 30 30" width="30" height="30" aria-hidden focusable="false">
-              {/* 外圈扫描环：虚线圆环缓慢自转，HUD 感的来源 */}
-              <circle className="pea-edge-del-ring" cx="15" cy="15" r="13.2" />
-              {/* 六边形玻璃核心 */}
+            {active && (
+              <defs>
+                <linearGradient
+                  id={aboveGradId}
+                  gradientUnits="userSpaceOnUse"
+                  x1={sX}
+                  y1={sY}
+                  x2={tX}
+                  y2={tY}
+                >
+                  <stop className="pea-edge-grad-from" offset="0%" />
+                  <stop className="pea-edge-grad-mid" offset="50%" />
+                  <stop className="pea-edge-grad-to" offset="100%" />
+                </linearGradient>
+                <marker
+                  id={`${aboveGradId}-arrow`}
+                  markerWidth="10"
+                  markerHeight="10"
+                  refX="8"
+                  refY="5"
+                  orient="auto"
+                  markerUnits="userSpaceOnUse"
+                >
+                  <path d="M 1 1 L 8 5 L 1 9" className="pea-edge-arrow" fill="none" />
+                </marker>
+              </defs>
+            )}
+
+            {active && <path className="pea-edge-halo" d={edgePath} fill="none" />}
+
+            <path
+              d={edgePath}
+              fill="none"
+              markerEnd={active ? `url(#${aboveGradId}-arrow)` : markerEnd}
+              style={style}
+              data-edge-id={id}
+              data-active={active ? '1' : '0'}
+              className={`react-flow__edge-path pea-edge-line${active ? ' is-active' : ''}${
+                selected ? ' is-selected' : ''
+              }${hovered && !active ? ' is-hovered' : ''}`}
+            />
+
+            {active && (
               <path
-                className="pea-edge-del-hex"
-                d="M15 3.6 L24.9 9.3 L24.9 20.7 L15 26.4 L5.1 20.7 L5.1 9.3 Z"
+                className="pea-edge-flow"
+                d={edgePath}
+                fill="none"
+                stroke={`url(#${aboveGradId})`}
               />
-              {/* 顶/底 HUD 装饰刻线 */}
-              <path className="pea-edge-del-tick" d="M15 3.6 L15 6.2 M15 23.8 L15 26.4" />
-              {/* 断开符号 × */}
-              <path className="pea-edge-del-x" d="M11.4 11.4 L18.6 18.6 M18.6 11.4 L11.4 18.6" />
-            </svg>
-          </button>
-          </div>
+            )}
+
+            {active && <path className="pea-edge-beads" d={edgePath} fill="none" />}
+
+            {active && (
+              <path className="pea-edge-comet" d={edgePath} fill="none" pathLength={100} />
+            )}
+
+            {active && <circle className="pea-edge-src-pulse" cx={sX} cy={sY} r="4" />}
+
+            {/* 透明命中区：悬停时浮起，点击时同步 ReactFlow 选中状态。 */}
+            <path
+              className="react-flow__edge-interaction pea-edge-hit"
+              d={edgePath}
+              fill="none"
+              strokeOpacity={0}
+              strokeWidth={22}
+              onMouseEnter={() => setHovered(true)}
+              onMouseLeave={() => setHovered(false)}
+              onPointerDown={onHitPointerDown}
+            />
+          </svg>
+
+          {/* 删除芯片：仅选中态出现。 */}
+          {selected && (
+            <div
+              className="pea-edge-del-anchor"
+              data-chip-anchored={clickT != null ? '1' : '0'}
+              style={{
+                position: 'absolute',
+                transform: `translate(-50%, -50%) translate(${chipPt.x}px, ${chipPt.y}px) scale(var(--pea-inv-zoom, 1))`,
+                pointerEvents: 'all',
+              }}
+            >
+              <button
+                type="button"
+                className="pea-edge-del"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeEdge(id);
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+                title="断开连接"
+                aria-label="断开连接"
+              >
+                <svg viewBox="0 0 30 30" width="30" height="30" aria-hidden focusable="false">
+                  {/* 外圈扫描环：虚线圆环缓慢自转，HUD 感的来源 */}
+                  <circle className="pea-edge-del-ring" cx="15" cy="15" r="13.2" />
+                  {/* 六边形玻璃核心 */}
+                  <path
+                    className="pea-edge-del-hex"
+                    d="M15 3.6 L24.9 9.3 L24.9 20.7 L15 26.4 L5.1 20.7 L5.1 9.3 Z"
+                  />
+                  {/* 顶/底 HUD 装饰刻线 */}
+                  <path className="pea-edge-del-tick" d="M15 3.6 L15 6.2 M15 23.8 L15 26.4" />
+                  {/* 断开符号 × */}
+                  <path className="pea-edge-del-x" d="M11.4 11.4 L18.6 18.6 M18.6 11.4 L11.4 18.6" />
+                </svg>
+              </button>
+            </div>
+          )}
         </EdgeLabelRenderer>
       )}
     </>

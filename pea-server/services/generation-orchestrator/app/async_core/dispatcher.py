@@ -35,13 +35,18 @@ logger = logging.getLogger(__name__)
 def _rehost(url: str, jtype: str, user_id: int, provider: str) -> str:
     """决策①: 外部临时 URL -> 自有稳定 CDN URL (转存到 MinIO).
 
-    跳过: 非 http(s) (如 data-URI) 或 mock provider (占位图无需转存).
+    跳过: 非 http(s) (如 data-URI) 直接原样返回, 无需转存.
+    跳过: 已经是自有 CDN 地址的 (幂等). 有些适配器必须在自己内部就完成转存 ——
+      典型是 Gemini/Veo: 结果 URI 要带 x-goog-api-key 头才能下载, 而本函数是**匿名** GET,
+      交给它必然 403。这类适配器返回的已是稳定地址, 再转存一次纯属浪费带宽,
+      且在 cdn_base_url 指向容器外地址的开发环境下还会失败告警, 制造噪音。
     转存失败 -> 降级用原始 URL (前端至少能显示, 虽不稳定) + 告警,
     不因存储抖动让生成整体失败.
     """
-    if provider == "mock":
-        return url
     if not url or not url.startswith("http"):
+        return url
+    cdn_base = (settings.cdn_base_url or "").rstrip("/")
+    if cdn_base.startswith("http") and url.startswith(cdn_base + "/"):
         return url
     try:
         return storage.store_from_url(url, jtype, user_id=user_id)
@@ -198,17 +203,12 @@ def dispatch(job_id: str, payload: dict) -> bool:
     user_id = int(payload.get("user_id", 0) or 0)
     jtype = payload.get("type", "image")
 
-    # 开发/联调极速开关: 命中 type 直接走 MockAdapter
-    if jtype in settings.force_mock_types_set:
-        cfg: Optional[dict] = {"provider_type": "mock"}
-    else:
-        cfg = load_model_provider_cfg(payload.get("model"))
-        if cfg is None or not cfg.get("provider_enabled"):
-            # 与旧 route 行为一致: 无模型/停用 -> 生产判失败 (allow_mock_fallback 默认 False)
-            logger.warning("[dispatcher] model %s unavailable (cfg=%s)", payload.get("model"), bool(cfg))
-            finalize_job(job_id, user_id, jtype, False,
-                         error=f"model '{payload.get('model')}' unavailable")
-            return True
+    cfg = load_model_provider_cfg(payload.get("model"))
+    if cfg is None or not cfg.get("provider_enabled"):
+        logger.warning("[dispatcher] model %s unavailable (cfg=%s)", payload.get("model"), bool(cfg))
+        finalize_job(job_id, user_id, jtype, False,
+                     error=f"model '{payload.get('model')}' unavailable")
+        return True
 
     adapter = build_adapter(cfg)
 

@@ -36,13 +36,24 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+# verify/ : 验证脚本(*.py)纳入版本管理；截图/二进制/报告等产物忽略
 verify/**/*.png
+verify/**/*.jpg
+verify/**/*.jpeg
+verify/**/*.gif
+verify/**/*.bmp
+verify/**/*.webp
 verify/**/*.log
-verify/**/*.txt
+verify/**/*.bin
 verify/**/*.json
+verify/**/*.md
+verify/**/*.html
+verify/**/*.txt
+verify/**/__pycache__/
 
-# ===== WorkBuddy runtime (track ONLY memory + skills) =====
-# 仅记忆目录与可复用技能纳入版本管理；运行期产物(报告/临时/缓存)不跟踪，防止仓库无限膨胀
-.workbuddy/artifacts/
-.workbuddy/scratch/
-.workbuddy/tmp/
+# ===== WorkBuddy / agent working artifacts (NEVER commit) =====
+# 记忆、技能、运行产物、变更概览等均不进版本管理；只保留项目本身的源码与文档
+.workbuddy/
+docs/overviews/
+overview_*.md
+pea-server/*_overview.md

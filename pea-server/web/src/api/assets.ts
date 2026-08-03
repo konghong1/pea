@@ -52,6 +52,9 @@ export const assetsApi = {
       params: { scope, folder_id },
     });
   },
+  importAsset(object_key: string, name: string, scope: AssetScope, folder_id?: number | null) {
+    return api.post<Asset>('/assets/import', { object_key, name, scope, folder_id });
+  },
   updateAsset(id: number, payload: Partial<Pick<Asset, 'name' | 'folder_id' | 'is_favorite'>>) {
     return api.patch(`/assets/${id}`, payload);
   },

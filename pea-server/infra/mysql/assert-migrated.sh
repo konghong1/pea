@@ -191,9 +191,11 @@ CREATE TABLE IF NOT EXISTS $DB.ai_providers (
     id VARCHAR(64) NOT NULL,
     name VARCHAR(120) NOT NULL,
     provider_type VARCHAR(40) NOT NULL DEFAULT 'openai-compatible',
+    vendor VARCHAR(40) NOT NULL DEFAULT '',
+    protocol VARCHAR(40) NOT NULL DEFAULT '',
     base_url VARCHAR(500) NOT NULL DEFAULT '',
     api_key VARCHAR(500) NOT NULL DEFAULT '',
-    kind ENUM('image','video','text','audio') NOT NULL DEFAULT 'image',
+    kind ENUM('image','video','text','audio','3d') NOT NULL DEFAULT 'image',
     enabled TINYINT NOT NULL DEFAULT 1,
     is_default TINYINT NOT NULL DEFAULT 0,
     config_json JSON NULL,
@@ -206,7 +208,7 @@ CREATE TABLE IF NOT EXISTS $DB.ai_models (
     provider_id VARCHAR(64) NOT NULL,
     model_name VARCHAR(200) NOT NULL,
     display_name VARCHAR(200) NOT NULL DEFAULT '',
-    model_type ENUM('image','video','text') NOT NULL DEFAULT 'image',
+    model_type ENUM('image','video','text','audio','3d') NOT NULL DEFAULT 'image',
     enabled TINYINT NOT NULL DEFAULT 1,
     is_default TINYINT NOT NULL DEFAULT 0,
     pricing_json JSON NULL,
@@ -226,7 +228,7 @@ CREATE TABLE IF NOT EXISTS $DB.provider_remote_models (
     provider_id VARCHAR(64) NOT NULL,
     remote_model_id VARCHAR(255) NOT NULL,
     owned_by VARCHAR(255) NULL,
-    model_type ENUM('image','video','text','audio','embedding') NOT NULL DEFAULT 'text',
+    model_type ENUM('image','video','text','audio','embedding','3d') NOT NULL DEFAULT 'text',
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (id),
@@ -234,6 +236,7 @@ CREATE TABLE IF NOT EXISTS $DB.provider_remote_models (
     KEY idx_remote_provider (provider_id),
     CONSTRAINT fk_remote_provider FOREIGN KEY (provider_id) REFERENCES $DB.ai_providers (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
 CREATE TABLE IF NOT EXISTS $DB.billing_plans (
     id VARCHAR(64) NOT NULL,
     name VARCHAR(120) NOT NULL,
@@ -263,6 +266,14 @@ CREATE TABLE IF NOT EXISTS $DB.user_plans (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 "
 
+# 6.3.1 ⚠️ 先确保 vendor / protocol 列存在 —— 必须在下方种子 INSERT 之前!
+# 老卷的 ai_providers 由 01-schema.sql 首启时建表 (彼时还没有这两列), 这里
+# CREATE TABLE IF NOT EXISTS 是 no-op, 若不在此提前补列, 下面的种子会因
+# "Unknown column 'vendor'" 直接 1054 崩溃 (2026-08-03 dbmigrate exit 1 根因)。
+# 新库 (CREATE TABLE 已含这两列) 此处为 no-op, 无副作用。
+add_col_if_missing ai_providers vendor   "vendor VARCHAR(40) NOT NULL DEFAULT '' AFTER provider_type"
+add_col_if_missing ai_providers protocol "protocol VARCHAR(40) NOT NULL DEFAULT '' AFTER vendor"
+
 # 6.4 种子 (幂等)
 echo "[assert-migrated] seeding admin / agnes / plans (idempotent)..."
 $MYSQL_BIN -e "
@@ -280,15 +291,12 @@ FROM $DB.users u
 WHERE u.email='admin@pea.ai'
   AND NOT EXISTS (SELECT 1 FROM $DB.ledger_entries l WHERE l.txn_id = CONCAT('grant:', u.id));
 
-INSERT INTO $DB.ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
-VALUES ('agnes', 'Agnes AI', 'openai-compatible', 'https://apihub.agnes-ai.com/v1',
-        'sk-cTvTokWxT64boEgofyrgQf8QedwZNvlW5Dcbe1fz6JXsYtQE', 'image', 1, 1)
+INSERT INTO $DB.ai_providers (id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default)
+VALUES ('agnes', 'Agnes AI', 'openai-compatible', 'agnes', 'openai-compatible', 'https://apihub.agnes-ai.com/v1',
+        '', 'image', 1, 1)
 ON DUPLICATE KEY UPDATE name=VALUES(name), provider_type=VALUES(provider_type),
-    base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1;
-
-INSERT INTO $DB.ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
-VALUES ('mock', 'Mock 本地占位', 'mock', '', '', 'image', 1, 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), provider_type=VALUES(provider_type);
+    vendor=VALUES(vendor), protocol=VALUES(protocol),
+    base_url=VALUES(base_url), api_key=COALESCE(NULLIF(VALUES(api_key),''), api_key), enabled=1;
 
 INSERT INTO $DB.ai_models (id, provider_id, model_name, display_name, model_type, enabled, is_default, min_plan_level, pricing_json, params_schema_json, description, sort_order) VALUES
 ('agnes-image-2.0-flash', 'agnes', 'agnes-image-2.0-flash', 'Agnes 图像 2.0 Flash', 'image', 1, 1, 0,
@@ -307,15 +315,6 @@ ON DUPLICATE KEY UPDATE model_name=VALUES(model_name), display_name=VALUES(displ
     params_schema_json=VALUES(params_schema_json), min_plan_level=VALUES(min_plan_level),
     description=VALUES(description);
 
--- 离线占位文本模型 (mock provider): 无真实 key 时文本节点聊天也能跑通整条 SSE 链路 (非默认)。
-INSERT INTO $DB.ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
-VALUES ('mock-text', 'Mock 文本', 'mock', '', '', 'text', 1, 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), provider_type=VALUES(provider_type), enabled=1;
-INSERT INTO $DB.ai_models (id, provider_id, model_name, display_name, model_type, enabled, is_default, min_plan_level, pricing_json, params_schema_json, description, sort_order)
-VALUES ('mock-text-1', 'mock-text', 'mock-text-1', 'Mock 文本对话', 'text', 1, 0, 0,
-  JSON_OBJECT('base', 1, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(), '离线占位文本模型', 5)
-ON DUPLICATE KEY UPDATE model_name=VALUES(model_name), display_name=VALUES(display_name), is_default=0;
-
 INSERT INTO $DB.billing_plans (id, name, plan_level, price_cents, tapies, duration_days, enabled, sort_order, features_json) VALUES
 ('free',  '免费体验', 0,    0,  1000,  0,  1, 0, JSON_ARRAY('注册即送 1000 Tapies', '可用免费级模型')),
 ('basic', '基础套餐', 1, 1990,  5000, 30,  1, 1, JSON_ARRAY('到账 5000 Tapies', '解锁 2.1 Flash 高质量图像', '有效期 30 天')),
@@ -324,6 +323,15 @@ ON DUPLICATE KEY UPDATE name=VALUES(name), plan_level=VALUES(plan_level), price_
     tapies=VALUES(tapies), duration_days=VALUES(duration_days), features_json=VALUES(features_json);
 "
 echo "[assert-migrated] commercialization base ready."
+
+# 断言: 拓宽模型类型枚举以容纳 audio(音乐/语音) 与 3d (火山方舟 3D 生成)。
+# 上面 189 起的大段 CREATE TABLE IF NOT EXISTS 对已存在的表是空操作, 不会修改枚举;
+# 故此处显式 ALTER MODIFY, 让存量部署也能接纳 audio/3d 类型的模型与生成任务。
+# 幂等: 重复执行对已是目标枚举的列无害 (MySQL 视为空操作/仅提示)。
+$MYSQL_BIN -e "ALTER TABLE $DB.ai_providers MODIFY COLUMN kind ENUM('image','video','text','audio','3d') NOT NULL DEFAULT 'image';" 2>&1 | sed 's/^/  /'
+$MYSQL_BIN -e "ALTER TABLE $DB.ai_models MODIFY COLUMN model_type ENUM('image','video','text','audio','3d') NOT NULL DEFAULT 'image';" 2>&1 | sed 's/^/  /'
+$MYSQL_BIN -e "ALTER TABLE $DB.provider_remote_models MODIFY COLUMN model_type ENUM('image','video','text','audio','embedding','3d') NOT NULL DEFAULT 'text';" 2>&1 | sed 's/^/  /'
+$MYSQL_BIN -e "ALTER TABLE $DB.generation_jobs MODIFY COLUMN type ENUM('image','video','text','audio','3d') NOT NULL;" 2>&1 | sed 's/^/  /'
 
 # -----------------------------------------------------------------------------
 # 断言 7: 节点聊天 Agent 所需 schema (Phase2 提示词构造层 / Phase3 token 计量)
@@ -568,36 +576,32 @@ fi
 echo "[assert-migrated] payment domain schema ready."
 
 # -----------------------------------------------------------------------------
-# 断言 11: MiniMax 全模型接入 (原生协议 + Anthropic 兼容协议)
+# 断言 11: MiniMax 全模型接入 (仅原生协议一条配置)
 #
 # ⚠️ 必须排在【断言 9】之后 —— 本段 seed 写 completion_mode / accepts_callback,
 #    这些列由断言 9 补齐; 顺序颠倒会在旧库上报 1054 Unknown column。
 #
-# 两个 provider 指向同一家上游、同一把密钥, 差别只在协议:
-#   minimax            原生协议, 视频(v2 MiniMax-H3 / v1 Hailuo)+图像+文本+音乐+语音
-#   minimax-anthropic  Anthropic Messages 协议, 仅文本(含视觉输入)
+#   minimax  协议=vendor-native, 厂商=minimax (原生 v2/v1)
 #
 # base_url 刻意不带 /v1: MiniMax 端点横跨 /v1/* 与 /v2/*, 由适配器按模型拼版本号。
 # 参数档位均按上游报错原文实测校准 (H3 仅 2K / duration 4~15s / t2v 必填 ratio;
 # Hailuo 仅 512P·768P·1080P)。
 # -----------------------------------------------------------------------------
 echo "[assert-migrated] seeding MiniMax providers & models (idempotent)..."
-MM_KEY='sk-api-mELFQR0n6C3YXNK17vIh7V8SjSdrvwtuBvHXi0jHgLQvJBYvV2ECk4aU0FUOjHQGZXOSnXhD25QiiljSxDQj8rwAasiT3b_pOVb8L0JjPZsdUy649CAJVi0'
+MM_KEY=''
 $MYSQL_BIN -e "
 INSERT INTO $DB.ai_providers
-  (id, name, provider_type, base_url, api_key, kind, enabled, is_default, completion_mode, accepts_callback)
-VALUES ('minimax', 'MiniMax 海螺', 'minimax', 'https://api.minimaxi.com', '$MM_KEY', 'video', 1, 0, 'poll', 0)
+  (id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default, completion_mode, accepts_callback)
+VALUES ('minimax', 'MiniMax 海螺', 'vendor-native', 'minimax', 'vendor-native', 'https://api.minimaxi.com', '$MM_KEY', 'video', 1, 0, 'poll', 0)
 ON DUPLICATE KEY UPDATE name=VALUES(name), provider_type=VALUES(provider_type),
-    base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1,
+    vendor=VALUES(vendor), protocol=VALUES(protocol),
+    base_url=VALUES(base_url), api_key=COALESCE(NULLIF(VALUES(api_key),''), api_key), enabled=1,
     completion_mode=VALUES(completion_mode);
 
-INSERT INTO $DB.ai_providers
-  (id, name, provider_type, base_url, api_key, kind, enabled, is_default, completion_mode, accepts_callback)
-VALUES ('minimax-anthropic', 'MiniMax (Anthropic 兼容)', 'anthropic-compatible',
-        'https://api.minimaxi.com/anthropic', '$MM_KEY', 'text', 1, 0, 'sync', 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), provider_type=VALUES(provider_type),
-    base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1,
-    completion_mode=VALUES(completion_mode);
+# 清理已废弃的 MiniMax Anthropic 兼容入口 (单一厂商仅保留原生协议一条配置)。
+# 先删子表模型, 再删父表 provider (避免外键约束报错)。
+DELETE FROM $DB.ai_models WHERE provider_id='minimax-anthropic';
+DELETE FROM $DB.ai_providers WHERE id='minimax-anthropic';
 
 INSERT INTO $DB.ai_models (id, provider_id, model_name, display_name, model_type, enabled, is_default, min_plan_level, pricing_json, params_schema_json, description, sort_order) VALUES
 ('minimax-h3', 'minimax', 'MiniMax-H3', 'MiniMax 视频 H3 (2K)', 'video', 1, 0, 2,
@@ -617,15 +621,55 @@ INSERT INTO $DB.ai_models (id, provider_id, model_name, display_name, model_type
   '推理型文本模型, 思维链自动剥离', 14),
 ('minimax-m2-5', 'minimax', 'MiniMax-M2.5', 'MiniMax M2.5 (推理)', 'text', 1, 0, 1,
   JSON_OBJECT('base', 3, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
-  '更强推理型文本模型, 需基础套餐', 15),
-('minimax-anthropic-m2', 'minimax-anthropic', 'MiniMax-M2', 'MiniMax M2 (Anthropic 协议)', 'text', 1, 0, 0,
-  JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
-  '走 Anthropic Messages 协议, 支持图文多模态输入', 16)
+  '更强推理型文本模型, 需基础套餐', 15)
 ON DUPLICATE KEY UPDATE model_name=VALUES(model_name), display_name=VALUES(display_name),
     model_type=VALUES(model_type), pricing_json=VALUES(pricing_json),
     params_schema_json=VALUES(params_schema_json), min_plan_level=VALUES(min_plan_level),
     description=VALUES(description);
 "
 echo "[assert-migrated] MiniMax providers & models ready."
+
+# -----------------------------------------------------------------------------
+# 断言 12: ai_providers 新增 vendor / protocol 列 + 存量数据回填 (方案 A: 协议与厂商解耦)
+#
+# 背景: 原 provider_type 字段身兼两职 (协议族 + 厂商身份), 导致同一家厂商
+#       支持多协议时要建多条 provider 记录 (如 minimax + minimax-anthropic)。
+#       现拆分为正交的两个维度:
+#         protocol = 协议族 (openai-compatible / anthropic-compatible / vendor-native)
+#         vendor   = 厂商   (minimax / agnes / openai / anthropic / ''自定义)
+#       provider_type 保留作向后兼容, 值始终与 protocol 同步写入。
+#
+# 存量迁移规则 (幂等):
+#   provider_type='minimax'             -> protocol='vendor-native', vendor='minimax'
+#   provider_type='openai-compatible'   -> protocol='openai-compatible', vendor 不变(通常为空或 agnes)
+#   provider_type='anthropic-compatible'-> protocol='anthropic-compatible', vendor 不变
+#   protocol 已非空的不动 (已在新库或历史上手动修正过)。
+# -----------------------------------------------------------------------------
+echo "[assert-migrated] backfilling vendor/protocol from legacy provider_type (idempotent)..."
+$MYSQL_BIN -e "
+  -- 原生厂商协议: 旧 'minimax' 类型 -> 拆为 protocol=vendor-native + vendor=minimax
+  UPDATE $DB.ai_providers
+     SET provider_type='vendor-native', protocol='vendor-native', vendor='minimax'
+   WHERE provider_type='minimax' AND protocol='';
+  -- 通用协议: protocol 直接取 provider_type 原值 (vendor 保持原状或为空)
+  UPDATE $DB.ai_providers
+     SET protocol=provider_type
+   WHERE provider_type IN ('openai-compatible','anthropic-compatible')
+     AND (protocol='' OR protocol IS NULL);
+  -- Volcengine 火山方舟: 改为厂商原生协议 (vendor-native), 图像/视频走专用适配器
+  -- (之前曾按 openai-compatible 注册, 但火山图像/视频端点非 OpenAI 兼容, 必须由
+  --  @register_provider("vendor-native","volcengine") 驱动)。文本 chat 仍兼容 OpenAI。
+  UPDATE $DB.ai_providers
+     SET provider_type='vendor-native', protocol='vendor-native', vendor='volcengine'
+   WHERE id='volcengine';
+  -- 兜底: 任何残留空 protocol 归一到 openai-compatible (与 build_adapter 回退一致)
+  UPDATE $DB.ai_providers
+     SET protocol='openai-compatible'
+   WHERE protocol='' OR protocol IS NULL;
+  -- 彻底删除 mock provider (用户确认不再需要本地占位): 清掉其 provider 与模型
+  DELETE FROM $DB.ai_models WHERE provider_id IN ('mock','mock-text');
+  DELETE FROM $DB.ai_providers WHERE provider_type='mock' OR protocol='mock' OR id IN ('mock','mock-text');
+"
+echo "[assert-migrated] vendor/protocol backfill done."
 
 echo "[assert-migrated] all assertions passed."

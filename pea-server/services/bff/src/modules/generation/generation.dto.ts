@@ -8,8 +8,8 @@ import {
 } from 'class-validator';
 
 export class AcceptGenerationDto {
-  @IsIn(['image', 'video', 'text'])
-  type: 'image' | 'video' | 'text';
+  @IsIn(['image', 'video', 'text', 'audio', '3d'])
+  type: 'image' | 'video' | 'text' | 'audio' | '3d';
 
   @IsString()
   @MinLength(1)

@@ -92,25 +92,30 @@ class BaseProviderAdapter(abc.ABC):
 
 
 # ---- Provider 注册表: 加新模型 = 实现类 + 一行 @register_provider ----
-PROVIDER_REGISTRY: dict[str, type["BaseProviderAdapter"]] = {}
+# 注册键为 (protocol, vendor) 元组 (方案 A: 协议与厂商解耦):
+#   - 协议无关适配器 (OpenAI/Anthropic/mock) 注册为 (protocol, None)
+#   - 厂商原生协议注册为 (protocol, vendor), 如 MiniMax 原生 -> ("vendor-native", "minimax")
+PROVIDER_REGISTRY: dict[tuple[str, str | None], type["BaseProviderAdapter"]] = {}
 
 
-def register_provider(provider_type: str):
+def register_provider(protocol: str, vendor: str | None = None):
     """类装饰器: 把适配器登记进 PROVIDER_REGISTRY。
 
-    用法::
+    注册键是 ``(protocol, vendor)`` 二元组, 与「协议族 / 厂商」两个正交维度一一对应::
 
-        @register_provider("replicate")
-        class ReplicateAdapter(BaseProviderAdapter):
-            ...
+        @register_provider("openai-compatible")
+        class AgnesAdapter(BaseProviderAdapter): ...
 
-    之后 ``build_adapter({"provider_type": "replicate", ...})`` 即返回该适配器,
-    无需修改工厂分支。
+        @register_provider("vendor-native", "minimax")
+        class MiniMaxAdapter(BaseProviderAdapter): ...
+
+    ``build_adapter`` 路由时先按 (protocol, vendor) 精确匹配, 再按 (protocol, None) 模糊匹配,
+    最后回退 openai-compatible。无需修改工厂分支。
     """
     def _deco(cls: type["BaseProviderAdapter"]) -> type["BaseProviderAdapter"]:
         if not (isinstance(cls, type) and issubclass(cls, BaseProviderAdapter)):
             raise TypeError(f"{cls!r} 必须继承 BaseProviderAdapter")
-        PROVIDER_REGISTRY[provider_type] = cls
+        PROVIDER_REGISTRY[(protocol, vendor)] = cls
         return cls
 
     return _deco
@@ -203,94 +208,6 @@ class WebhookCapableMixin:
         return payload
 
 
-class MockProvider:
-    """本地可跑通的占位 provider: 不调外部, 直接返回确定性占位媒体 URL.
-
-    占位图改为自包含 data-URI SVG, 浏览器可直接渲染, 不依赖对象存储里是否存在该文件。
-    (原实现返回 cdn_base_url/mock/<id>.png, 该文件在 minio 中不存在 -> 画廊/画布显示裂图。)
-    """
-
-    name = "mock"
-
-    def generate(self, req: dict) -> GenerationResult:
-        # 模拟出图耗时
-        time.sleep(0.3)
-        job_id = req.get("job_id", uuid.uuid4().hex)
-        kind = req.get("type")
-        # 从参数中获取出图数量
-        n = 1
-        try:
-            n = max(1, min(4, int(req.get("params", {}).get("n", 1))))
-        except (TypeError, ValueError):
-            n = 1
-        # mock 模式也产出占位 usage, 便于无密钥联调时验证 token 计量链路
-        usage = {
-            "input_tokens": max(1, len(req.get("prompt", "")) // 4),
-            "output_tokens": 0,
-            "total_tokens": max(1, len(req.get("prompt", "")) // 4),
-        }
-        if kind == "video":
-            url = f"{settings.cdn_base_url}/mock/{job_id}.mp4"
-            return GenerationResult(url=url, provider=self.name, usage=usage)
-        elif kind == "text":
-            return GenerationResult(
-                url="", provider=self.name, text=f"[mock] {req.get('prompt', '')[:200]}",
-                usage=usage,
-            )
-        else:
-            # 图片生成：支持多张
-            urls = [self._placeholder_image(f"{job_id}_{i}", req.get("prompt", "")) for i in range(n)]
-            return GenerationResult(
-                url=urls[0],
-                urls=urls,
-                provider=self.name,
-                usage=usage,
-            )
-
-    @staticmethod
-    def _placeholder_image(job_id: str, prompt: str) -> str:
-        from urllib.parse import quote
-
-        safe = (prompt or "pea mock").replace("\n", " ")[:48]
-        svg = (
-            "<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'>"
-            "<defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>"
-            "<stop offset='0' stop-color='#1fa2dc'/>"
-            "<stop offset='1' stop-color='#8b5cf6'/>"
-            "</linearGradient></defs>"
-            "<rect width='512' height='512' rx='28' fill='url(#g)'/>"
-            "<text x='50%' y='46%' fill='white' font-size='30' font-family='sans-serif' "
-            "text-anchor='middle' font-weight='700'>pea 生成预览</text>"
-            f"<text x='50%' y='55%' fill='white' font-size='17' font-family='sans-serif' "
-            f"text-anchor='middle' opacity='0.9'>{safe}</text>"
-            f"<text x='50%' y='92%' fill='white' font-size='13' font-family='sans-serif' "
-            f"text-anchor='middle' opacity='0.6'>{job_id[:8]}</text>"
-            "</svg>"
-        )
-        return "data:image/svg+xml;utf8," + quote(svg)
-
-
-_mock = MockProvider()
-
-
-@register_provider("mock")
-class MockAdapter(BaseProviderAdapter):
-    """本地占位 provider: 同步返回一个确定性结果 (联调用的极速路径)."""
-
-    def __init__(self, cfg: dict | None = None) -> None:
-        super().__init__(cfg or {"provider_name": "mock"})
-        self._mock = _mock
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(completion_mode=CompletionMode.SYNC, accepts_callback=False)
-
-    async def submit(self, req: dict) -> "SubmitOutcome":
-        res = self._mock.generate(req)
-        return SubmitOutcome(sync=True, result=res)
-
-    def query_status(self, handle: AsyncHandle) -> PollStatus:
-        raise NotImplementedError("mock provider is always synchronous")
 
 
 _builtin_loaded = False
@@ -317,18 +234,53 @@ def _ensure_builtin_providers() -> None:
 
 
 def build_adapter(cfg: dict) -> BaseProviderAdapter:
-    """工厂: 按 provider_type 从 PROVIDER_REGISTRY 解析适配器; 未知类型回退 OpenAI 兼容。
+    """工厂: 按 (protocol, vendor) 从 PROVIDER_REGISTRY 解析适配器 (方案 A 多维路由)。
 
-    加新模型无需改动本函数 —— 只需在其适配器类上加 ``@register_provider("xxx")``,
-    并在 ``app/providers/__init__.py`` import 一行。
+    匹配顺序 (优先级从高到低):
+      1. 精确匹配 (protocol, vendor)  —— 如 ("vendor-native", "minimax") -> MiniMaxAdapter
+      2. 仅 protocol 匹配 (protocol, None) —— 如 ("openai-compatible", None) -> AgnesAdapter
+      3. 回退 openai-compatible (仅通用协议族未知时; vendor-native 缺失实现会直接报错而非回退)
+
+    protocol 字段缺失时回退读 provider_type (向后兼容老数据/老调用方);
+    vendor 字段缺失视为 None (仅 vendor-native 协议需要它)。
     """
     _ensure_builtin_providers()
-    ptype = (cfg.get("provider_type") or "openai-compatible").strip()
-    cls = PROVIDER_REGISTRY.get(ptype)
-    if cls is None:
-        logger.warning(
-            "[provider] 未知 provider_type=%r, 回退 openai-compatible (已注册: %s)",
-            ptype, sorted(PROVIDER_REGISTRY),
-        )
-        cls = PROVIDER_REGISTRY.get("openai-compatible", AgnesAdapter)
-    return cls(cfg)
+    protocol = (cfg.get("protocol") or cfg.get("provider_type") or "openai-compatible").strip().lower()
+    vendor = (cfg.get("vendor") or "").strip().lower() or None
+
+    # 向后兼容: 历史数据里 provider_type 可能直接写成厂商名 (如 'minimax'),
+    # 此时规整到 vendor-native + vendor=minimax, 避免静默回退到 openai-compatible。
+    if protocol == "minimax":
+        protocol, vendor = "vendor-native", "minimax"
+
+    # 厂商原生协议: 必须有该 (vendor) 的专用实现, 否则明确报错, 不允许静默回退。
+    if protocol == "vendor-native":
+        if not vendor:
+            raise ValueError(
+                "厂商原生协议(vendor-native)必须指定 vendor (如 minimax); "
+                "请在下拉中选择厂商, 或在编排器实现该厂商的原生适配器并 "
+                "@register_provider('vendor-native', <vendor>)。"
+            )
+        cls = PROVIDER_REGISTRY.get((protocol, vendor))
+        if cls is None:
+            raise ValueError(
+                f"厂商 {vendor!r} 的原生协议尚未实现: 未在 PROVIDER_REGISTRY 注册 "
+                f"('vendor-native', {vendor!r})。请选择 OpenAI 兼容 / Anthropic 兼容, "
+                f"或先为该厂商实现原生适配器。"
+            )
+        return cls(cfg)
+
+    # 1. 精确匹配 (protocol, vendor)
+    cls = PROVIDER_REGISTRY.get((protocol, vendor))
+    if cls is not None:
+        return cls(cfg)
+    # 2. 仅 protocol 匹配 (vendor 不敏感, 如 openai-compatible / anthropic-compatible)
+    cls = PROVIDER_REGISTRY.get((protocol, None))
+    if cls is not None:
+        return cls(cfg)
+    # 3. 未知协议族, 回退 openai-compatible
+    logger.warning(
+        "[provider] 未知 (protocol=%r, vendor=%r), 回退 openai-compatible (已注册: %s)",
+        protocol, vendor, sorted(f"{p}+{v}" for (p, v) in PROVIDER_REGISTRY),
+    )
+    return PROVIDER_REGISTRY.get(("openai-compatible", None), AgnesAdapter)(cfg)

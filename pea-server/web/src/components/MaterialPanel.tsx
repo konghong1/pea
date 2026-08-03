@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   LeftOutlined,
   UserOutlined,
@@ -11,6 +11,7 @@ import {
   FolderOutlined,
   FolderOpenOutlined,
   RightOutlined,
+  DownOutlined,
   MoreOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -39,6 +40,7 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   const [folders, setFolders] = useState<AssetFolder[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [loading, setLoading] = useState(false);
+  const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refreshFolders = useCallback(async () => {
@@ -59,6 +61,10 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
         setAssets(data.filter((a) => a.is_favorite));
       } else if (view === 'folder' && folderId != null) {
         const { data } = await assetsApi.listAssets(scope, folderId, query);
+        setAssets(data);
+      } else if (view === 'root') {
+        // 文件库根目录：拉取当前 scope 全部素材，按文件夹分组展示
+        const { data } = await assetsApi.listAssets(scope, null, query);
         setAssets(data);
       } else {
         setAssets([]);
@@ -242,6 +248,138 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   });
 
   const isImage = (a: Asset) => /^image\//.test(a.content_type);
+  const isVideo = (a: Asset) => /^video\//.test(a.content_type);
+
+  const folderMap = useMemo(() => {
+    const map = new Map<number, AssetFolder>();
+    folders.forEach((f) => map.set(f.id, f));
+    return map;
+  }, [folders]);
+
+  const rootFolders = useMemo(
+    () => folders.filter((f) => f.parent_id == null),
+    [folders]
+  );
+
+  const assetsByFolder = useMemo(() => {
+    const map = new Map<number | null, Asset[]>();
+    assets.forEach((a) => {
+      const key = a.folder_id ?? null;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(a);
+    });
+    return map;
+  }, [assets]);
+
+  const childFoldersOf = useCallback(
+    (parentId: number) => folders.filter((f) => f.parent_id === parentId),
+    [folders]
+  );
+
+  const toggleFolder = (id: number) => {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const expandFolder = (id: number) => {
+    setExpandedFolders((prev) => new Set(prev).add(id));
+  };
+
+  const favoriteGroups = useMemo(() => {
+    const groups = new Map<string, Asset[]>();
+    assets.forEach((a) => {
+      const day = a.created_at.slice(0, 10);
+      if (!groups.has(day)) groups.set(day, []);
+      groups.get(day)!.push(a);
+    });
+    return Array.from(groups.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [assets]);
+
+  const renderAssetThumb = (a: Asset, size: 'sm' | 'md' = 'sm') => (
+    <div
+      key={a.id}
+      className={`pea-material-thumb ${size}`}
+      title={a.name}
+      onClick={() => { /* 未来可预览 */ }}
+    >
+      <div className="pea-material-thumb-img">
+        {isImage(a) ? (
+          <img src={a.url} alt={a.name} loading="lazy" />
+        ) : isVideo(a) ? (
+          <video src={a.url} muted preload="metadata" />
+        ) : (
+          <PictureOutlined />
+        )}
+      </div>
+      <div className="pea-material-thumb-label">{a.name}</div>
+    </div>
+  );
+
+  const renderFolderTree = (f: AssetFolder, depth = 0) => {
+    const isExpanded = expandedFolders.has(f.id);
+    const children = childFoldersOf(f.id);
+    const folderAssets = assetsByFolder.get(f.id) ?? [];
+
+    return (
+      <div key={f.id} className="pea-material-folder-branch">
+        <div className="pea-material-folder-row-wrap">
+          <button
+            type="button"
+            className={`pea-material-folder-row ${isExpanded ? 'expanded' : ''}`}
+            style={{ paddingLeft: `${10 + depth * 14}px` }}
+            onClick={() => {
+              toggleFolder(f.id);
+              expandFolder(f.id);
+            }}
+          >
+            <span
+              className="pea-material-folder-toggle"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFolder(f.id);
+              }}
+            >
+              {children.length > 0 || folderAssets.length > 0 ? (
+                isExpanded ? <DownOutlined /> : <RightOutlined />
+              ) : (
+                <span className="pea-material-folder-toggle-placeholder" />
+              )}
+            </span>
+            <span className="pea-material-folder-icon">
+              {isExpanded ? <FolderOpenOutlined /> : <FolderOutlined />}
+            </span>
+            <span className="pea-material-folder-name">{f.name}</span>
+            {folderAssets.length > 0 && (
+              <span className="pea-material-folder-count">{folderAssets.length}</span>
+            )}
+          </button>
+          <Dropdown menu={folderMenu(f)} placement="bottomRight" arrow>
+            <button type="button" className="pea-material-more" aria-label="更多">
+              <MoreOutlined />
+            </button>
+          </Dropdown>
+        </div>
+
+        {isExpanded && (
+          <div className="pea-material-folder-children">
+            {children.map((child) => renderFolderTree(child, depth + 1))}
+            {folderAssets.length > 0 && (
+              <div className="pea-material-folder-assets">
+                {folderAssets.map((a) => renderAssetThumb(a, 'sm'))}
+              </div>
+            )}
+            {folderAssets.length === 0 && children.length === 0 && (
+              <div className="pea-material-folder-empty">该文件夹暂无素材</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="pea-material-panel">
@@ -340,35 +478,40 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
             {folders.length === 0 && !loading && (
               <div className="pea-material-empty">暂无文件夹</div>
             )}
-            {folders.map((f) => (
-              <div key={f.id} className="pea-material-row-wrap">
-                <button
-                  type="button"
-                  className="pea-material-row"
-                  onClick={() => openFolder(f)}
-                >
-                  <span className="pea-material-row-icon">
-                    <FolderOutlined />
-                  </span>
-                  <span className="pea-material-row-label">{f.name}</span>
-                  <RightOutlined className="pea-material-row-arrow" />
-                </button>
-                <Dropdown menu={folderMenu(f)} placement="bottomRight" arrow>
-                  <button type="button" className="pea-material-more" aria-label="更多">
-                    <MoreOutlined />
-                  </button>
-                </Dropdown>
+            {rootFolders.map((f) => renderFolderTree(f))}
+
+            {/* 根目录下未归入文件夹的素材 */}
+            {(assetsByFolder.get(null)?.length ?? 0) > 0 && (
+              <>
+                <div className="pea-material-section">未分类</div>
+                <div className="pea-material-folder-assets root">
+                  {assetsByFolder.get(null)?.map((a) => renderAssetThumb(a, 'sm'))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {view === 'favorites' && (
+          <>
+            {favoriteGroups.length === 0 && !loading && (
+              <div className="pea-material-empty">还没有收藏素材</div>
+            )}
+            {favoriteGroups.map(([day, items]) => (
+              <div key={day} className="pea-material-fav-group">
+                <div className="pea-material-fav-date">{day}</div>
+                <div className="pea-material-fav-grid">
+                  {items.map((a) => renderAssetThumb(a, 'md'))}
+                </div>
               </div>
             ))}
           </>
         )}
 
-        {(view === 'folder' || view === 'favorites') && (
+        {view === 'folder' && (
           <>
             {assets.length === 0 && !loading && (
-              <div className="pea-material-empty">
-                {view === 'favorites' ? '还没有收藏素材' : '文件夹为空，点击 + 上传'}
-              </div>
+              <div className="pea-material-empty">文件夹为空，点击 + 上传</div>
             )}
             {assets.map((a) => (
               <div key={a.id} className="pea-material-asset">

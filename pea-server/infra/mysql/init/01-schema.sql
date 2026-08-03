@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS canvas_versions (
 CREATE TABLE IF NOT EXISTS generation_jobs (
     id              VARCHAR(36) NOT NULL,             -- jobId (uuid)
     user_id         BIGINT UNSIGNED NOT NULL,
-    type            ENUM('image','video','text') NOT NULL,
+    type            ENUM('image','video','text','audio','3d') NOT NULL,
     status          ENUM('queued','running','done','failed','refunded') NOT NULL DEFAULT 'queued',
     payload_json    JSON NULL,
     result_json     JSON NULL,
@@ -351,17 +351,24 @@ CREATE TABLE IF NOT EXISTS work_comments (
 CREATE TABLE IF NOT EXISTS ai_providers (
     id            VARCHAR(64)  NOT NULL,
     name          VARCHAR(120) NOT NULL,
-    -- 适配器类型 (与 app/providers 下 @register_provider 注册名一一对应):
-    --   openai-compatible    Agnes / OpenAI 兼容
-    --   minimax              MiniMax 原生 (视频 v2+v1 / 图像 / 文本 / 音乐 / 语音)
+    -- 协议族 (决定 HTTP body 格式, 与"厂商"正交):
+    --   openai-compatible    OpenAI Chat Completions 兼容协议 (Agnes / OpenAI / 任何 OpenAI 兼容层)
     --   anthropic-compatible Anthropic Messages 协议 (官方或第三方兼容层)
     --   mock                 本地占位, 不出网
+    --   vendor-native        厂商自有协议 (如 MiniMax 原生 v2 多模态 + v1 扁平 body, 通用格式盖不住)
+    -- 注意: protocol 与 provider_type 同步写入同值; provider_type 仅作向后兼容保留。
     provider_type VARCHAR(40)  NOT NULL DEFAULT 'openai-compatible',
+    -- 厂商标识 (与"协议"正交; 同一家厂商可能同时支持多种协议):
+    --   minimax / agnes / openai / anthropic / '' (自定义)
+    -- 仅当 protocol='vendor-native' 时必填, 用于路由到具体厂商适配器。
+    vendor       VARCHAR(40)  NOT NULL DEFAULT '',
+    -- 协议 (权威字段, 应用层应优先读此; 缺失时回退 provider_type 等价处理)
+    protocol     VARCHAR(40)  NOT NULL DEFAULT '',
     base_url      VARCHAR(500) NOT NULL DEFAULT '',
     -- 密钥: 明文存储于内网库, 仅内部服务读取; 对前端返回时必须脱敏 (见 providers.service)。
     api_key       VARCHAR(500) NOT NULL DEFAULT '',
     -- 主类目提示 (真实类型以 ai_models.model_type 为准)
-    kind          ENUM('image','video','text','audio') NOT NULL DEFAULT 'image',
+    kind          ENUM('image','video','text','audio','3d') NOT NULL DEFAULT 'image',
     enabled       TINYINT NOT NULL DEFAULT 1,
     is_default    TINYINT NOT NULL DEFAULT 0,
     config_json   JSON NULL,
@@ -391,7 +398,7 @@ CREATE TABLE IF NOT EXISTS ai_models (
     provider_id    VARCHAR(64)  NOT NULL,
     model_name     VARCHAR(200) NOT NULL,                 -- 传给 provider 的真实模型名
     display_name   VARCHAR(200) NOT NULL DEFAULT '',      -- 前端展示名
-    model_type     ENUM('image','video','text') NOT NULL DEFAULT 'image',
+    model_type     ENUM('image','video','text','audio','3d') NOT NULL DEFAULT 'image',
     enabled        TINYINT NOT NULL DEFAULT 1,
     is_default     TINYINT NOT NULL DEFAULT 0,            -- 同类型唯一默认
     pricing_json   JSON NULL,                             -- 动态计价 (见上)
@@ -415,7 +422,7 @@ CREATE TABLE IF NOT EXISTS provider_remote_models (
     provider_id      VARCHAR(64)  NOT NULL,
     remote_model_id  VARCHAR(255) NOT NULL,                 -- 传给 provider 的真实模型名
     owned_by         VARCHAR(255) NULL,
-    model_type       ENUM('image','video','text','audio','embedding') NOT NULL DEFAULT 'text',
+    model_type       ENUM('image','video','text','audio','embedding','3d') NOT NULL DEFAULT 'text',
     created_at       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at       DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     PRIMARY KEY (id),
@@ -550,18 +557,14 @@ FROM users u
 WHERE u.email='admin@pea.ai'
   AND NOT EXISTS (SELECT 1 FROM ledger_entries l WHERE l.txn_id = CONCAT('grant:', u.id));
 
--- Agnes AI 提供商 (真实调用)。
-INSERT INTO ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
-VALUES ('agnes', 'Agnes AI', 'openai-compatible', 'https://apihub.agnes-ai.com/v1',
-        'sk-cTvTokWxT64boEgofyrgQf8QedwZNvlW5Dcbe1fz6JXsYtQE', 'image', 1, 1)
+-- Agnes AI 提供商 (真实调用)。协议=OpenAI 兼容, 厂商=agnes。
+INSERT INTO ai_providers (id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default)
+VALUES ('agnes', 'Agnes AI', 'openai-compatible', 'agnes', 'openai-compatible', 'https://apihub.agnes-ai.com/v1',
+        '', 'image', 1, 1)
 ON DUPLICATE KEY UPDATE
-    name=VALUES(name), provider_type=VALUES(provider_type),
+    name=VALUES(name), provider_type=VALUES(provider_type), vendor=VALUES(vendor),
+    protocol=VALUES(protocol),
     base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1;
-
--- 本地 Mock 提供商 (离线/联调兜底, 不出网)。
-INSERT INTO ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
-VALUES ('mock', 'Mock 本地占位', 'mock', '', '', 'image', 1, 0)
-ON DUPLICATE KEY UPDATE name=VALUES(name), provider_type=VALUES(provider_type);
 
 -- Agnes 模型 (真实模型名, 已联网核对)。定价示例可在管理后台调整。
 INSERT INTO ai_models (id, provider_id, model_name, display_name, model_type, enabled, is_default, min_plan_level, pricing_json, params_schema_json, description, sort_order) VALUES
@@ -588,31 +591,62 @@ ON DUPLICATE KEY UPDATE
     description=VALUES(description);
 
 -- ---------------------------------------------------------------------------
--- MiniMax 提供商 (全模型: 视频 v2/v1 + 图像 + 文本) 与 Anthropic 兼容层。
+-- MiniMax 提供商: 仅保留原生协议一条配置 (厂商=vendor-native 走私有端点)。
 --
--- 两个 provider 指向同一家上游、同一把密钥, 差别只在协议:
---   minimax            原生协议 —— 视频/图像/文本/音乐/语音全覆盖 (适配器 app/providers/minimax.py)
---   minimax-anthropic  Anthropic Messages 协议 —— 仅文本, 供需要 Anthropic 格式的
---                      调用方复用同一份额度 (适配器 app/providers/anthropic_compat.py)
+--   minimax  协议=vendor-native, 厂商=minimax —— 视频/图像/文本全覆盖
+--           (适配器 app/providers/minimax.py, 注册 @register_provider("vendor-native","minimax"))
 --
 -- ⚠️ base_url 不带 /v1: MiniMax 端点分散在 /v1/* 与 /v2/* 两个版本下,
 --    适配器按模型自行拼版本号。写死 /v1 会让 v2 视频 (MiniMax-H3) 拼错地址。
 -- ---------------------------------------------------------------------------
-INSERT INTO ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
-VALUES ('minimax', 'MiniMax 海螺', 'minimax', 'https://api.minimaxi.com',
-        'sk-api-mELFQR0n6C3YXNK17vIh7V8SjSdrvwtuBvHXi0jHgLQvJBYvV2ECk4aU0FUOjHQGZXOSnXhD25QiiljSxDQj8rwAasiT3b_pOVb8L0JjPZsdUy649CAJVi0',
+INSERT INTO ai_providers (id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default)
+VALUES ('minimax', 'MiniMax 海螺', 'vendor-native', 'minimax', 'vendor-native', 'https://api.minimaxi.com',
+        '',
         'video', 1, 0)
 ON DUPLICATE KEY UPDATE
-    name=VALUES(name), provider_type=VALUES(provider_type),
+    name=VALUES(name), provider_type=VALUES(provider_type), vendor=VALUES(vendor),
+    protocol=VALUES(protocol),
     base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1;
 
-INSERT INTO ai_providers (id, name, provider_type, base_url, api_key, kind, enabled, is_default)
-VALUES ('minimax-anthropic', 'MiniMax (Anthropic 兼容)', 'anthropic-compatible',
-        'https://api.minimaxi.com/anthropic',
-        'sk-api-mELFQR0n6C3YXNK17vIh7V8SjSdrvwtuBvHXi0jHgLQvJBYvV2ECk4aU0FUOjHQGZXOSnXhD25QiiljSxDQj8rwAasiT3b_pOVb8L0JjPZsdUy649CAJVi0',
+-- ---------------------------------------------------------------------------
+-- Volcengine 火山方舟 提供商: 厂商原生协议 (vendor-native), 厂商=volcengine。
+--   图像(Seedream/SeedEdit)与视频(Seedance/Seaweed)走专用适配器
+--   @register_provider("vendor-native","volcengine") (app/providers/volcengine.py),
+--   与 MiniMax 同款模式; 文本 chat 走 /api/v3/chat/completions (OpenAI 兼容, 由该适配器一并覆盖)。
+--   base_url 必须带 /api/v3: 火山方舟所有接口的版本前缀是 /api/v3
+--   (chat/completions 在 /api/v3/chat/completions, 模型列表在 /api/v3/models,
+--    图像在 /api/v3/images/generations, 视频在 /api/v3/contents/generations/tasks)。
+--   编排器 _api_base 与 BFF normalizeModelsUrl / buildOpenAIChatUrl 已对该前缀做特殊处理,
+--   原生适配器内部 _url() 也显式剥离/拼回 /api/v3, 写错前缀会 404。
+-- ---------------------------------------------------------------------------
+INSERT INTO ai_providers (id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default)
+VALUES ('volcengine', '火山方舟 Volcengine', 'vendor-native', 'volcengine', 'vendor-native', 'https://ark.cn-beijing.volces.com/api/v3',
+        '',
         'text', 1, 0)
 ON DUPLICATE KEY UPDATE
-    name=VALUES(name), provider_type=VALUES(provider_type),
+    name=VALUES(name), provider_type=VALUES(provider_type), vendor=VALUES(vendor),
+    protocol=VALUES(protocol),
+    base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1;
+
+-- ---------------------------------------------------------------------------
+-- Google Gemini 提供商: 厂商原生协议 (vendor-native), 厂商=gemini。
+--   文本(gemini-*)走 generateContent, 图像(gemini-*-image / nano-banana)走 generateContent
+--   带 responseModalities=["IMAGE"], 视频(Veo)走 predictLongRunning, 均为 Google 自有协议,
+--   非 OpenAI 兼容, 故用 vendor-native + 适配器 app/providers/gemini.py
+--   @register_provider("vendor-native","gemini") 覆盖。
+--
+--   认证: 仅用 x-goog-api-key 头, **绝不能**再叠加 Authorization: Bearer —— 双头会 401
+--   ("Expected OAuth 2 access token")。BFF authHeaders() 已为该厂商 return 单头。
+--   base_url 可带或不带 /v1beta (适配器 _root() 与 BFF normalizeModelsUrl 都做了兜底)。
+--   ⚠️ 该 key 初始无配额, 仅完成集成配置; 用户采购配额后 image/video 调用即可生效。
+-- ---------------------------------------------------------------------------
+INSERT INTO ai_providers (id, name, provider_type, vendor, protocol, base_url, api_key, kind, enabled, is_default)
+VALUES ('gemini', 'Google Gemini', 'vendor-native', 'gemini', 'vendor-native', 'https://generativelanguage.googleapis.com/v1beta',
+        '',
+        'image', 1, 0)
+ON DUPLICATE KEY UPDATE
+    name=VALUES(name), provider_type=VALUES(provider_type), vendor=VALUES(vendor),
+    protocol=VALUES(protocol),
     base_url=VALUES(base_url), api_key=VALUES(api_key), enabled=1;
 
 -- MiniMax 模型 (参数档位均已按上游报错原文逐一实测校准, 见适配器注释)。
@@ -636,11 +670,8 @@ INSERT INTO ai_models (id, provider_id, model_name, display_name, model_type, en
  JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
  '推理型文本模型, 思维链自动剥离', 14),
 ('minimax-m2-5', 'minimax', 'MiniMax-M2.5', 'MiniMax M2.5 (推理)', 'text', 1, 0, 1,
- JSON_OBJECT('base', 3, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
- '更强推理型文本模型, 需基础套餐', 15),
-('minimax-anthropic-m2', 'minimax-anthropic', 'MiniMax-M2', 'MiniMax M2 (Anthropic 协议)', 'text', 1, 0, 0,
- JSON_OBJECT('base', 2, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
- '走 Anthropic Messages 协议, 支持图文多模态输入', 16)
+  JSON_OBJECT('base', 3, 'tiers', JSON_OBJECT(), 'multiplier', 'n'), JSON_OBJECT(),
+  '更强推理型文本模型, 需基础套餐', 15)
 ON DUPLICATE KEY UPDATE
     model_name=VALUES(model_name), display_name=VALUES(display_name),
     model_type=VALUES(model_type), pricing_json=VALUES(pricing_json),

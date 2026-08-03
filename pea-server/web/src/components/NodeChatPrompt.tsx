@@ -50,6 +50,7 @@ const RESOLUTIONS = [
   { label: '1K', value: '1k', scale: 1024 },
   { label: '2K', value: '2k', scale: 2048 },
   { label: '3K', value: '3k', scale: 3072 },
+  { label: '4K', value: '4k', scale: 4096 },
 ];
 
 /** 倍率选项 */

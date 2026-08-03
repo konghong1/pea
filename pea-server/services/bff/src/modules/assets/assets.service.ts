@@ -12,6 +12,7 @@ import type {
   UpdateAssetFolderDto,
   ListAssetsQueryDto,
   UpdateAssetDto,
+  ImportAssetDto,
 } from './assets.dto';
 
 type Row = any;
@@ -148,6 +149,101 @@ export class AssetsService {
       scope,
       url,
     };
+  }
+
+  /**
+   * 把已有对象（生成结果 / 用户上传文件）注册为素材库条目。
+   * 来源对象若是公开 gen/ 前缀，按路径中的 owner 段校验归属；
+   * 若是用户命名空间 u:{userId}/ 则直接校验前缀；
+   * 最终复制到 u:{userId}/assets/ 命名空间，保证素材生命周期独立。
+   */
+  async importFromObject(userId: number, dto: ImportAssetDto) {
+    await this.ensureFolderOwner(userId, dto.folder_id);
+
+    let objectKey = this.extractKeyFromUrl(dto.object_key);
+    if (!objectKey) throw new BadRequestException('invalid object_key');
+
+    const userPrefix = `u:${userId}/`;
+    // gen/images/{owner}/... gen/videos/{owner}/...
+    const genOwnerMatch = objectKey.match(/^gen\/[^/]+\/(\d+)\//);
+    const isUserObject = objectKey.startsWith(userPrefix);
+    const isGenObject = genOwnerMatch && Number(genOwnerMatch[1]) === userId;
+
+    if (!isUserObject && !isGenObject) {
+      throw new ForbiddenException('object does not belong to user');
+    }
+
+    let stat: { size: number; metaData: Record<string, string | undefined> };
+    try {
+      stat = await this.files.statObject(objectKey);
+    } catch {
+      throw new NotFoundException('source object not found');
+    }
+
+    const suffix = objectKey.split('/').pop() || 'untitled';
+    const destKey = `u:${userId}/assets/${randomUUID()}-${suffix}`;
+    await this.files.copyObject(destKey, objectKey);
+
+    const contentType =
+      stat.metaData['content-type'] ||
+      stat.metaData['Content-Type'] ||
+      'application/octet-stream';
+    const name = dto.name?.trim() || suffix;
+    const scope = dto.scope ?? 'personal';
+    const source = isGenObject ? 'generated' : 'upload';
+
+    const r = await this.db.query<any>(
+      `INSERT INTO assets
+       (owner_id, folder_id, name, object_key, content_type, size, scope, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId,
+        dto.folder_id ?? null,
+        name,
+        destKey,
+        contentType,
+        stat.size ?? 0,
+        scope,
+        source,
+      ],
+    );
+
+    const url = await this.files.presignGet(destKey, userId, 3600);
+    return {
+      id: (r as any).insertId,
+      folder_id: dto.folder_id ?? null,
+      name,
+      object_key: destKey,
+      content_type: contentType,
+      size: stat.size ?? 0,
+      scope,
+      source,
+      url,
+    };
+  }
+
+  private extractKeyFromUrl(value: string): string | null {
+    if (!value) return null;
+    const trimmed = value.trim();
+    // 本站 CDN 相对路径 /media/<key>
+    if (trimmed.startsWith('/media/')) {
+      return decodeURIComponent(trimmed.slice(7).split('?')[0]);
+    }
+    // 完整 URL（含预签名 URL）
+    try {
+      const u = new URL(trimmed, 'http://localhost');
+      if (u.pathname.startsWith('/media/')) {
+        return decodeURIComponent(u.pathname.slice(7).split('?')[0]);
+      }
+      // 某些预签名 URL 的 path 是 /bucket/key
+      const parts = u.pathname.split('/').filter(Boolean);
+      if (parts.length >= 2 && parts[0] === 'pea-media') {
+        return decodeURIComponent(parts.slice(1).join('/'));
+      }
+    } catch {
+      // 不是 URL，直接当 key 处理
+    }
+    return trimmed;
   }
 
   async update(userId: number, assetId: number, dto: UpdateAssetDto) {

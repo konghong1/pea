@@ -1,1 +1,0 @@
-2026-07-27: Fixed text node drag bug in PeaNode.tsx - Modified onMouseDown handler on contentEditable div to allow drag start recording while preventing browser auto-focus. Single-click now correctly selects text nodes for dragging; double-click still enters edit mode.

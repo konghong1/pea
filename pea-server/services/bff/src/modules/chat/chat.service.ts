@@ -84,7 +84,7 @@ export class ChatService {
     try {
       let full = '';
       let usageCaptured: any = undefined;
-      const isMock = provider.provider_type === 'mock' || !provider.base_url;
+      const isMock = !provider.base_url;
 
       for await (const chunk of this.llm.stream({
         baseUrl: provider.base_url,

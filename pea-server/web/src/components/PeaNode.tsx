@@ -9,7 +9,10 @@ import { getFileUrl } from '../api/files';
 import { NODE_DEF_OF, PeaNodeKind } from '../constants/nodeTypes';
 import NodeIcon, { GeneratingBadge, UploadBadge, kindColor } from './NodeIcon';
 import TextNodeToolbar from './TextNodeToolbar';
+import TextNodeEditorModal from './TextNodeEditorModal';
+import SaveToLibraryModal from './SaveToLibraryModal';
 import TechLoader from './TechLoader';
+import { assetsApi, type AssetScope } from '../api/assets';
 import { retryNodeGeneration } from '../lib/nodeGeneration';
 import {
   acceptsUpstreamInput,
@@ -49,10 +52,11 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const [hovered, setHovered] = useState(false);
   // 文本节点的编辑态：与 selected 解耦。
   // - 单击节点 → 只选中（可拖动，不会进编辑）
-  // - 双击文本节点 → 进入编辑态（contentEditable=true + 聚焦）
+  // - 双击文本节点 → 弹出全屏编辑弹窗 (TextNodeEditorModal)
   // - 双击其他节点 → 无反应
   // - 失焦 / 取消选中 → 自动退出编辑态
   const [editing, setEditing] = useState(false);
+  const [editorModalOpen, setEditorModalOpen] = useState(false);
   const editRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const chromeRef = useRef<HTMLDivElement>(null);
@@ -154,26 +158,35 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
     if (!selected && editing) setEditing(false);
   }, [selected, editing]);
 
-  // 双击文本节点进入编辑态；其他节点不响应。
+  // 进入编辑态时聚焦编辑区，并把光标放到内容末尾（避免后续输入插到最前面）。
+  // 同时保证功能条 execCommand 操作的是一个真正可编辑的区域。
+  useEffect(() => {
+    if (editing && editRef.current) {
+      const el = editRef.current;
+      el.focus();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
+  }, [editing]);
+
+  // 双击文本节点弹出全屏编辑弹窗；其他节点不响应。
   const onNodeDoubleClick = (e: React.MouseEvent) => {
     if (!isText) return;
     e.stopPropagation();
     e.preventDefault();
-    setEditing(true);
-    // 下一帧聚焦，确保 contentEditable 已切到 true
-    requestAnimationFrame(() => {
-      if (!editRef.current) return;
-      editRef.current.focus();
-      // 光标放到末尾（直觉更好）
-      const sel = window.getSelection();
-      if (sel) {
-        const range = document.createRange();
-        range.selectNodeContents(editRef.current);
-        range.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(range);
-      }
-    });
+    setEditorModalOpen(true);
+  };
+
+  // 弹窗保存回调
+  const onEditorModalSave = (html: string) => {
+    update(id, { html });
+    setEditorModalOpen(false);
   };
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -386,13 +399,16 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
               onInput={() => update(id, { html: editRef.current?.innerHTML })}
               onBlur={onEditBlur}
               onMouseDown={(e) => {
-                // 编辑态下：阻止冒泡，避免触发节点拖动
-                // 非编辑态下：preventDefault() 阻止 contentEditable 自动获取焦点，
-                // 但不阻止事件冒泡，这样 ReactFlow 和父节点的 onMouseDown 都能收到事件；
-                // 同时本 div 不带 nodrag，ReactFlow 才能正常发起节点拖动。
                 if (editing) {
+                  // 编辑态：阻止冒泡，避免触发节点拖动
                   e.stopPropagation();
+                } else if (isText) {
+                  // 文本节点：单击文本区直接进编辑态（而非发起拖动），
+                  // 这样功能条(H1/粗体等)和直接输入都能用；节点拖动改由标题徽章发起。
+                  e.stopPropagation();
+                  if (!editing) setEditing(true);
                 } else {
+                  // 非文本节点非编辑态：阻止 contentEditable 自动获取焦点，但允许冒泡给 ReactFlow 拖动
                   e.preventDefault();
                 }
               }}
@@ -409,6 +425,14 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
           （data-pea-anchor 用于按选中节点精确匹配）。该元素缺失会导致点击节点后
           输入栏（边框框）永不弹出——这是反复回归的根因，务必保留。 */}
       <div className="pea-node-editor-anchor" data-pea-anchor={id} />
+
+      {/* 文本节点全屏编辑弹窗（双击触发） */}
+      <TextNodeEditorModal
+        open={editorModalOpen}
+        initialHtml={data.html ?? ''}
+        onSave={onEditorModalSave}
+        onCancel={() => setEditorModalOpen(false)}
+      />
     </div>
   );
 }
@@ -480,7 +504,7 @@ function MediaNodeBody({
             <NodeIcon kind={kind} size={12} /> {tagLabel}
           </span>
         )}
-        <NodeGenFailure id={id} error={data.error} prompt={data.prompt} meta={data.meta} />
+        <NodeGenFailure id={id} error={data.error} />
       </div>
     );
   }
@@ -590,6 +614,7 @@ function ResultMediaView({
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [mediaError, setMediaError] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
   // 兼容性兜底：历史节点可能保存了外部模型视角的公网 CDN URL（如花生壳域名），
   // 当浏览器无法访问该域名时，fallback 到同域 /media/<key> 重试。
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
@@ -603,8 +628,32 @@ function ResultMediaView({
 
   const handleSaveToLibrary = (e: React.MouseEvent) => {
     e.stopPropagation();
-    update(id, { savedToLibrary: true });
-    toast.success('已保存到素材库');
+    if (data.savedToLibrary) {
+      toast.info('该素材已保存到素材库');
+      return;
+    }
+    setSaveModalOpen(true);
+  };
+
+  const objectKeyForImport = useMemo(() => extractObjectKey(data, currentUrl), [data, currentUrl]);
+  const defaultAssetName = useMemo(() => {
+    const fileName = (data.meta?.fileName as string) || data.label || '未命名';
+    return fileName;
+  }, [data]);
+
+  const doImportAsset = async (payload: { scope: AssetScope; folderId: number | null }) => {
+    if (!objectKeyForImport) {
+      toast.error('无法识别素材来源，保存失败');
+      throw new Error('no object key');
+    }
+    try {
+      await assetsApi.importAsset(objectKeyForImport, defaultAssetName, payload.scope, payload.folderId ?? undefined);
+      update(id, { savedToLibrary: true });
+      toast.success('已保存到素材库');
+    } catch {
+      toast.error('保存到素材库失败');
+      throw new Error('import failed');
+    }
   };
 
   const handleFullscreen = (e: React.MouseEvent) => {
@@ -776,9 +825,17 @@ function ResultMediaView({
           data={data}
           onClose={() => setLightboxOpen(false)}
           onIndexChange={onIndexChange}
-          onSave={() => update(id, { savedToLibrary: true })}
+          onSave={() => setSaveModalOpen(true)}
         />
       )}
+
+      {/* 保存到素材库弹窗 */}
+      <SaveToLibraryModal
+        open={saveModalOpen}
+        onClose={() => setSaveModalOpen(false)}
+        defaultName={defaultAssetName}
+        onSave={doImportAsset}
+      />
     </>
   );
 }
@@ -1073,6 +1130,49 @@ function formatBytes(n: number) {
   return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+/**
+ * 从节点数据中提取可导入素材库的 MinIO 对象 key。
+ * 优先使用持久化的 fileKey；否则从 /media/<key> 或预签名 URL 中解析。
+ */
+function extractObjectKey(data: PeaNodeData, currentUrl: string): string | null {
+  if (data.fileKey) return data.fileKey;
+
+  const candidates = [
+    data.resultUrl,
+    ...(data.resultUrls ?? []),
+    data.url,
+    currentUrl,
+  ].filter(Boolean) as string[];
+
+  for (const raw of candidates) {
+    const key = urlToObjectKey(raw);
+    if (key) return key;
+  }
+  return null;
+}
+
+function urlToObjectKey(url: string): string | null {
+  if (!url) return null;
+  // 本站 CDN 相对路径 /media/<key>
+  if (url.startsWith('/media/')) {
+    return decodeURIComponent(url.slice(7).split('?')[0]);
+  }
+  try {
+    const u = new URL(url, window.location.href);
+    if (u.pathname.startsWith('/media/')) {
+      return decodeURIComponent(u.pathname.slice(7).split('?')[0]);
+    }
+    // 预签名 URL 中 bucket 路径格式 /pea-media/<key>
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (parts.length >= 2 && parts[0] === 'pea-media') {
+      return decodeURIComponent(parts.slice(1).join('/'));
+    }
+  } catch {
+    // ignore malformed URL
+  }
+  return null;
+}
+
 /* ═════════════════════════════════════════════════════════════════════════════
  * 节点生成失败卡：科技风任务终端状态卡
  *
@@ -1090,6 +1190,7 @@ const REF_FALLBACK_CLEAN_RE = /@(image|video)#([^\s]+):([^\s\u200B]*)/g;
 function sanitizePromptForDisplay(raw?: string): string {
   if (!raw?.trim()) return '';
   return raw
+    .replace(/<[^>]+>/g, '')
     .replace(REF_FALLBACK_CLEAN_RE, (_m, kind) => kind === 'video' ? '🎬 视频' : '🖼 图片')
     .replace(/\s{2,}/g, ' ')
     .trim();
@@ -1180,26 +1281,13 @@ function NodePromptEcho({ data }: { data: PeaNodeData }) {
   );
 }
 
-function NodeGenFailure({ id, error, prompt, meta }: { id: string; error: string; prompt?: string; meta?: Record<string, unknown> }) {
+function NodeGenFailure({ id, error }: { id: string; error: string }) {
   const update = useCanvas((s) => s.updateNodeData);
   const [dialogOpen, setDialogOpen] = useState(false);
   const parsed = useMemo(() => parseGenError(error), [error]);
 
-  // 优先显示用户原始输入（editorText），避免合并后的机器 prompt（含参考图说明、@image 标记）泄露
-  const displayPrompt = useMemo(() => {
-    const userText = (meta?.editorText as string)?.trim();
-    if (userText) return sanitizePromptForDisplay(userText);
-    return sanitizePromptForDisplay(prompt);
-  }, [prompt, meta]);
-
   return (
     <div className="pea-node-failure" role="alert">
-      {displayPrompt && (
-        <div className="pea-node-failure-prompt" title={displayPrompt}>
-          <span className="pea-node-failure-prompt-label">当时提示词</span>
-          <p className="pea-node-failure-prompt-text">{displayPrompt}</p>
-        </div>
-      )}
       <div className="pea-node-failure-head">
         <div className="pea-node-failure-mark" aria-hidden title="任务异常">
           {/* 科技风状态指示：角括号 + 脉冲琥珀点，替代传统警告圆圈 */}
@@ -1348,7 +1436,7 @@ function GenericNodeBody({
               <TechLoader label="生成中…" />
             </div>
           ) : data.error && !data.resultUrl ? (
-            <NodeGenFailure id={id} error={data.error} prompt={data.prompt} meta={data.meta} />
+            <NodeGenFailure id={id} error={data.error} />
           ) : data.resultUrl ? (
             <div className="pea-node-result-image-wrap">
               <img src={data.resultUrl} alt={data.prompt || tagLabel} className="pea-node-media-preview pea-node-result-preview" />

@@ -1,166 +1,119 @@
-"""Reproduce + verify group error. Captures full pageerror stack."""
-import os, re, json, time, urllib.request, urllib.error
+import time, json
 from playwright.sync_api import sync_playwright
 
-BASE = "http://localhost:5180"
-SHOTS = os.path.join(os.path.dirname(__file__), "shots")
-os.makedirs(SHOTS, exist_ok=True)
-STAMP = time.strftime("%Y%m%d%H%M%S")
-EMAIL = "grpf_%s@pea.ai" % STAMP
-PW = "Password123"
-errors = []
-log = []
+WEB = "http://localhost:5173"
+EMAIL = "test@example.com"
+PASSWORD = "password123"
 
-def ls_set(page, key, value):
-    # 用 JSON.stringify 写入，避免把 JS 对象 toString 成 "[object Object]" 导致 app 解析崩溃
-    page.evaluate("localStorage.setItem(%s, JSON.stringify(%s));" % (json.dumps(key), json.dumps(value)))
-
-def shot(page, name):
-    p = os.path.join(SHOTS, "grpf_%s_%s.png" % (name, STAMP))
-    page.screenshot(path=p)
-    log.append("[shot] %s -> %s" % (name, p))
-
-def apipost(method, path, token=None, body=None):
-    req = urllib.request.Request(BASE + path, method=method,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json",
-                 **({"Authorization": "Bearer %s" % token} if token else {})})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return r.status, json.loads(r.read().decode())
-    except urllib.error.HTTPError as e:
+def nav_to_canvas(page):
+    if "/canvas" not in page.url:
         try:
-            return e.code, json.loads(e.read().decode())
+            page.locator("text=未命名画布").first.click(timeout=6000)
         except Exception:
-            return e.code, {}
+            page.locator("a[href*='/canvas']").first.click(timeout=6000)
+    page.wait_for_selector(".react-flow__pane", timeout=30000)
+    time.sleep(1)
 
-with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True,
-        args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"])
-    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
-    page = ctx.new_page()
-    def on_console(m):
-        if m.type == "error":
-            errors.append("console.error: %s" % m.text)
-    def on_pageerror(e):
-        stack = getattr(e, "stack", "") or ""
-        errors.append("pageerror: %s\nSTACK:\n%s" % (e, stack))
-    page.on("console", on_console)
-    page.on("pageerror", on_pageerror)
-    page.on("response", lambda r: log.append("[http] %s -> %s" % (r.url, r.status)) if r.status >= 400 else None)
+def main():
+    results = {}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_context(viewport={"width": 1440, "height": 900}).new_page()
+        page.goto(f"{WEB}/login")
+        page.fill("input#email, input[type='email']", EMAIL)
+        page.fill("input#password, input[type='password']", PASSWORD)
+        page.click("button:has-text('登 录')")
+        page.wait_for_load_state("networkidle")
+        time.sleep(1)
+        if "/login" in page.url:
+            raise RuntimeError("login failed: still on /login")
+        nav_to_canvas(page)
 
-    st, _ = apipost("POST", "/auth/register", body={"email": EMAIL, "password": PW})
-    tok = None
-    try:
-        tok = json.loads(urllib.request.urlopen(
-            urllib.request.Request(BASE + "/auth/login", method="POST",
-                data=json.dumps({"email": EMAIL, "password": PW}).encode(),
-                headers={"Content-Type": "application/json"}), timeout=15).read().decode())["token"]
-    except Exception as ex:
-        log.append("[warn] login failed: %s" % ex)
-    cvs = None
-    if tok:
-        try:
-            cvs = json.loads(urllib.request.urlopen(
-                urllib.request.Request(BASE + "/canvases", method="POST",
-                    data=json.dumps({"title": "group repro", "type": "personal"}).encode(),
-                    headers={"Content-Type": "application/json",
-                             "Authorization": "Bearer %s" % tok}), timeout=15).read().decode())
-        except Exception as ex:
-            log.append("[warn] create canvas failed: %s" % ex)
+        # fresh two nodes
+        ids = page.evaluate("""() => {
+            const s = window.__canvas.getState();
+            return [s.addNode({ kind: 'image', label: '图片' }, { x: 400, y: 300 }),
+                    s.addNode({ kind: 'text', label: '文本' }, { x: 800, y: 300 })];
+        }""")
+        time.sleep(0.5)
+        gid = page.evaluate("""(ids) => window.__canvas.getState().groupNodes(ids)""", ids)
+        time.sleep(1)
+        # group is selected here (user flow: 新建组后)
 
-    page.goto(BASE + "/login", wait_until="domcontentloaded")
-    ls_set(page, "pea_token", tok or "x")
-    ls_set(page, "pea_user", {"id": 1, "email": EMAIL})
-    # 让 App 启动即切到 canvas 视图，确保 CanvasEditor 挂载（否则 window.__canvas 不存在）
-    ls_set(page, "pea_ui_route", {"active": "canvas", "canvasId": None})
-    # mock 后端：Workspace 启动会 refreshMe/refreshToken；若 401 会触发登出跳转。
-    # 这里直接 mock 成 200，避免测试被无关的后端状态带偏。
-    page.route("**/users/me", lambda route, request: route.fulfill(
-        status=200, content_type="application/json",
-        body=json.dumps({"id": 1, "email": EMAIL, "displayName": "Tester",
-                         "balance": 0, "isAdmin": False, "planLevel": 0,
-                         "effectivePlanLevel": 0, "planExpiresAt": None})))
-    page.route("**/auth/refresh", lambda route, request: route.fulfill(
-        status=200, content_type="application/json",
-        body=json.dumps({"token": tok or "x"})))
-    # 用正则匹配所有可能 401 的 API，全部 mock 成 200，避免测试被后端状态带偏
-    def mock_json(payload):
-        return lambda route, request: route.fulfill(
-            status=200, content_type="application/json", body=json.dumps(payload))
-    page.route(re.compile(r"http://[^/]+/canvases.*"), mock_json({"ok": True, "data": []}))
-    page.route(re.compile(r"http://[^/]+/models/.*"), mock_json([]))
-    page.route(re.compile(r"http://[^/]+/files/.*"), mock_json({"ok": True}))
-    page.route(re.compile(r"http://[^/]+/providers/.*"), mock_json({"ok": True}))
-    page.route(re.compile(r"http://[^/]+/generation/.*"), mock_json({"ok": True}))
+        # --- Scenario 1: group selected, hover inner node ---
+        pre = page.evaluate("""(a) => {
+            const g = document.querySelector(`.react-flow__node[data-id="${a.gid}"]`);
+            const c = document.querySelector(`.react-flow__node[data-id="${a.cid}"]`);
+            const cr = c.getBoundingClientRect();
+            const top = document.elementFromPoint(cr.x+cr.width/2, cr.y+cr.height/2);
+            return {
+                groupZ: getComputedStyle(g).zIndex,
+                childZ: getComputedStyle(c).zIndex,
+                groupSelected: g.classList.contains('selected'),
+                topNodeAtChildCenter: top ? top.closest('.react-flow__node')?.getAttribute('data-id') : null,
+            };
+        }""", {"gid": gid, "cid": ids[0]})
+        results["scenario1_before_hover"] = pre
 
-    page.goto(BASE + "/", wait_until="domcontentloaded")
-    try:
-        page.wait_for_function("() => window.__canvas && window.__ui", timeout=15000)
-    except Exception as ex:
-        log.append("[warn] window.__canvas never appeared: %s" % ex)
-    page.wait_for_timeout(800)
+        bbox = page.locator(f"[data-id='{ids[0]}']").bounding_box()
+        page.mouse.move(bbox["x"]+bbox["width"]/2, bbox["y"]+bbox["height"]/2)
+        time.sleep(0.6)
+        s1 = page.evaluate("""(cid) => {
+            const c = document.querySelector(`.react-flow__node[data-id="${cid}"]`);
+            const pea = c.querySelector('.pea-node');
+            const h = c.querySelector('.pea-handle');
+            return { hoverClass: pea?.classList.contains('hover'), handleOpacity: h ? getComputedStyle(h).opacity : null };
+        }""", ids[0])
+        results["scenario1_hover"] = s1
+        page.screenshot(path="D:/workspace/pea/verify/fix_group_hover.png")
 
-    canvas_id = cvs["id"] if cvs else 1
-    canvas_ver = cvs["version"] if cvs else 1
-    canvas_title = cvs["title"] if cvs else "group repro"
-    setup_js = (
-        "const ui = window.__ui.getState();"
-        "const cs = window.__canvas.getState();"
-        "ui.setActive('canvas');"
-        "cs.setCanvasMeta(%s, %s, %s);"
-        "cs.loadGraph(["
-        "{id:'n1', type:'pea', position:{x:300,y:300}, data:{kind:'text', label:'Text', html:'文本节点'}},"
-        "{id:'n2', type:'pea', position:{x:700,y:300}, data:{kind:'image', label:'Image', resultUrl:'https://placehold.co/300x400/png?text=Image'}}"
-        "], [], %s);"
-        "cs.setSelection(['n1','n2']);"
-    ) % (json.dumps(canvas_id), json.dumps(canvas_ver), json.dumps(canvas_title), json.dumps(canvas_ver))
-    page.evaluate(setup_js)
-    page.wait_for_timeout(1200)
-    sel = page.evaluate("() => window.__canvas.getState().selectedIds")
-    log.append("[state] selectedIds = %s" % sel)
-    ncount = page.evaluate("() => window.__canvas.getState().nodes.length")
-    log.append("[state] before group node count = %s" % ncount)
-    shot(page, "before_group")
+        # --- Scenario 2: click inner node to select it (should select CHILD not group) ---
+        page.mouse.click(bbox["x"]+bbox["width"]/2, bbox["y"]+bbox["height"]/2)
+        time.sleep(0.5)
+        s2 = page.evaluate("""(a) => {
+            const g = document.querySelector(`.react-flow__node[data-id="${a.gid}"]`);
+            const c = document.querySelector(`.react-flow__node[data-id="${a.cid}"]`);
+            return { groupSelected: g.classList.contains('selected'), childSelected: c.classList.contains('selected') };
+        }""", {"gid": gid, "cid": ids[0]})
+        results["scenario2_click_select"] = s2
 
-    # 验证：点击选区外部（画布空白处）能取消选择
-    page.mouse.click(1200, 700)
-    page.wait_for_timeout(400)
-    sel_out = page.evaluate("() => window.__canvas.getState().selectedIds")
-    log.append("[state] selectedIds after click outside = %s" % sel_out)
-    # 重新选中，准备打组
-    page.evaluate("() => window.__canvas.getState().setSelection(['n1','n2'])")
-    page.wait_for_timeout(400)
+        # --- Scenario 3: functional connection drag from child1 handle to child2 handle ---
+        # hover child1 to reveal handles, grab its right handle, drop on child2 left handle
+        b1 = page.locator(f"[data-id='{ids[0]}']").bounding_box()
+        page.mouse.move(b1["x"]+b1["width"]/2, b1["y"]+b1["height"]/2)
+        time.sleep(0.4)
+        # right handle is at right edge, translated out by ~9.5px at hover size; sample via DOM
+        hpos = page.evaluate("""(cid) => {
+            const c = document.querySelector(`.react-flow__node[data-id="${cid}"]`);
+            const h = c.querySelector('.react-flow__handle-right, .pea-handle-right, .react-flow__handle[data-handlepos="right"]');
+            if(!h) return null;
+            const r = h.getBoundingClientRect();
+            return {x: r.x+r.width/2, y: r.y+r.height/2};
+        }""", ids[0])
+        b2 = page.locator(f"[data-id='{ids[1]}']").bounding_box()
+        tpos = page.evaluate("""(cid) => {
+            const c = document.querySelector(`.react-flow__node[data-id="${cid}"]`);
+            const h = c.querySelector('.react-flow__handle-left, .pea-handle-left, .react-flow__handle[data-handlepos="left"]');
+            if(!h) return null;
+            const r = h.getBoundingClientRect();
+            return {x: r.x+r.width/2, y: r.y+r.height/2};
+        }""", ids[1])
+        conn_ok = None
+        if hpos and tpos:
+            page.mouse.move(hpos["x"], hpos["y"])
+            time.sleep(0.2)
+            page.mouse.down()
+            page.mouse.move((hpos["x"]+tpos["x"])/2, (hpos["y"]+tpos["y"])/2, steps=8)
+            page.mouse.move(tpos["x"], tpos["y"], steps=8)
+            time.sleep(0.2)
+            page.mouse.up()
+            time.sleep(0.5)
+            edges = page.evaluate("""() => window.__canvas.getState().edges.length""")
+            conn_ok = edges > 0
+        results["scenario3_connection"] = {"handlePosFound": bool(hpos and tpos), "edgeCreated": conn_ok}
 
-    gid = page.evaluate("() => window.__canvas.getState().groupNodes(['n1','n2'])")
-    log.append("[state] groupNodes returned gid = %s" % gid)
-    page.wait_for_timeout(1200)
-    shot(page, "after_group")
+        print(json.dumps(results, ensure_ascii=False, indent=2))
+        browser.close()
 
-    nodes = page.evaluate("() => window.__canvas.getState().nodes.map(n => ({id:n.id, type:n.type, parentNode:n.parentNode, extent:n.extent, selected:n.selected}))")
-    log.append("[state] nodes after group: %s" % json.dumps(nodes, ensure_ascii=False))
-    sel2 = page.evaluate("() => window.__canvas.getState().selectedIds")
-    log.append("[state] selectedIds after group = %s" % sel2)
-
-    page.mouse.click(200, 700)
-    page.wait_for_timeout(500)
-    shot(page, "click_outside")
-
-    dom_js = (
-        "() => {"
-        "var all = Array.from(document.querySelectorAll('.react-flow__node')).map(function(el){return el.getAttribute('data-id');});"
-        "var grp = document.querySelector('.pea-group-node') ? 'present' : 'absent';"
-        "return JSON.stringify({all: all, grp: grp});"
-        "}"
-    )
-    dom = page.evaluate(dom_js)
-    try:
-        dom_obj = json.loads(dom)
-    except Exception:
-        dom_obj = dom
-    log.append("[dom] react-flow nodes: %s" % json.dumps(dom_obj, ensure_ascii=False))
-
-    print("\n".join(log))
-    print("\n===== ERRORS =====")
-    print("\n".join(errors) if errors else "NO ERRORS")
-    browser.close()
+if __name__ == "__main__":
+    main()

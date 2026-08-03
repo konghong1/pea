@@ -13,7 +13,7 @@ export interface ModelView {
   providerId: string;
   modelName: string;
   displayName: string;
-  modelType: 'image' | 'video' | 'text';
+  modelType: 'image' | 'video' | 'text' | 'audio' | '3d';
   enabled: boolean;
   isDefault: boolean;
   minPlanLevel: number;
@@ -182,7 +182,7 @@ export class ModelsService {
   async resolveForGeneration(
     userId: number,
     modelId: string | undefined,
-    type: 'image' | 'video' | 'text',
+    type: 'image' | 'video' | 'text' | 'audio' | '3d',
   ): Promise<ResolvedModel> {
     const ctx = await this.users.getAuthzContext(userId);
 

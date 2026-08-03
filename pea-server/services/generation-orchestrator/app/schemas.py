@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 class AcceptJobRequest(BaseModel):
     user_id: int
-    type: str = Field(pattern="^(image|video|text)$")
+    type: str = Field(pattern="^(image|video|text|audio|3d)$")
     prompt: str = Field(min_length=1, max_length=4000)
     # 模型标识: 对应 ai_models.id。编排器据此从 DB 解析真实模型名 + 提供商密钥。
     model: str | None = None

@@ -19,8 +19,7 @@ import sys
 import time
 import traceback
 
-KEY = ("sk-api-mELFQR0n6C3YXNK17vIh7V8SjSdrvwtuBvHXi0jHgLQvJBYvV2ECk4aU0FUOjHQGZXOS"
-       "nXhD25QiiljSxDQj8rwAasiT3b_pOVb8L0JjPZsdUy649CAJVi0")
+KEY = ""
 BASE = "https://api.minimaxi.com"
 
 # 1x1 红点 PNG, 用于验证 data URI 内联参考图路径

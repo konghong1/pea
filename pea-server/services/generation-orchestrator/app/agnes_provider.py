@@ -42,7 +42,19 @@ _VIDEO_FAIL = ("failed", "error", "cancelled", "canceled", "rejected")
 
 
 def _api_base(base_url: str, path: str) -> str:
+    """把相对路径拼到 base_url 之下 (版本前缀自适应, 关键修复: 接入 Volcengine 方舟)。
+
+    - base 以 /api/v3 结尾 (Volcengine 方舟实际前缀): 去掉路径开头的 /v1 再拼回 /api/v3,
+      因为火山方舟的 OpenAI 兼容接口是 /api/v3/chat/completions, 而非 /api/v3/v1/chat/completions。
+    - base 以 /v1 结尾 (Agnes): 维持原行为, 剥 /v1 后拼 /v1/...。
+    - 其它 (MiniMax 裸域名): 原样拼接 —— 路径里的 /v1、/v2 是 MiniMax 真实路由前缀,
+      绝不能当"版本段"剥离 (否则 MiniMax-H3 的 /v2/video_generation 会被错误改写)。
+    """
     base = (base_url or "").rstrip("/")
+    if base.endswith("/api/v3"):
+        root = base[: -len("/api/v3")]
+        rel = path[len("/v1"):] if path.startswith("/v1") else path
+        return f"{root}/api/v3{rel}"
     if base.endswith("/v1"):
         base = base[:-3]
     return f"{base}{path}"
@@ -421,6 +433,24 @@ class OpenAICompatibleProvider:
             backoff_cap=60,
             fallback_url=submit_fb,
         )
+        # 视频端点 404/405 = 该提供商根本没有 /v1/videos 这条路由。
+        #
+        # 背景: "OpenAI 兼容"只在 chat/completions 那一层是业界事实标准。图像层各家
+        # 参数方言不同(靠 param_adapters 消化), 视频层则**根本没有 OpenAI 标准**——
+        # /v1/videos + /agnesapi?video_id= 是 Agnes 自己设计的。火山方舟用
+        # /api/v3/contents/generations/tasks, MiniMax 用 /v2/video_generation, 各不相同。
+        #
+        # 这里不做厂商白名单(会误伤 one-api 这类确实转发 /v1/videos 的中转网关),
+        # 而是在上游明确回 404/405 时把裸状态码翻译成可操作的结论, 避免使用者
+        # 对着 "video-submit HTTP 404" 猜半天。
+        if resp.status_code in (404, 405):
+            raise RuntimeError(
+                f"video-submit HTTP {resp.status_code}: 提供商 {self.provider_name} 的 "
+                f"{submit_url} 不存在。视频生成没有 OpenAI 标准协议, 该厂商用的是自有端点, "
+                f"需要为其实现专用适配器 (参考 app/providers/minimax.py, "
+                f"用 @register_provider('vendor-native', '<vendor>') 注册)。"
+                f"该提供商的文本/图像能力不受影响。"
+            )
         _raise_for_provider(resp, "video-submit")
         sub = resp.json()
         direct = _extract_video_url(sub)

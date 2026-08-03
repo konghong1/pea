@@ -7,11 +7,16 @@ import type { ModelType, PlanView, PricingRule } from './catalog';
 export interface ProviderView {
   id: string;
   name: string;
+  /** 向后兼容保留: 始终与 protocol 同值。前端优先读 protocol/vendor。 */
   providerType: string;
+  /** 协议族 (openai-compatible / anthropic-compatible / vendor-native)。 */
+  protocol: string;
+  /** 厂商 (minimax / agnes / openai / anthropic / 自定义); vendor-native 时必填。 */
+  vendor: string;
   baseUrl: string;
   apiKeyMasked: string;
   hasApiKey: boolean;
-  kind: 'image' | 'video' | 'text' | 'audio';
+  kind: 'image' | 'video' | 'text' | 'audio' | '3d';
   enabled: boolean;
   isDefault: boolean;
   config: unknown;
@@ -20,6 +25,11 @@ export interface ProviderView {
 export interface UpsertProviderInput {
   id?: string;
   name?: string;
+  /** 协议族 (优先字段)。 */
+  protocol?: string;
+  /** 厂商 (vendor-native 时必填)。 */
+  vendor?: string;
+  /** 向后兼容保留, 缺省时后端用 protocol 兜底。 */
   providerType?: string;
   baseUrl?: string;
   /** 传空/不传时后端保留原密钥 (避免编辑其他字段误清空)。 */
@@ -73,7 +83,7 @@ export interface UpsertPlanInput {
   features?: string[];
 }
 
-export type RemoteModelType = 'image' | 'video' | 'text' | 'audio' | 'embedding';
+export type RemoteModelType = 'image' | 'video' | 'text' | 'audio' | 'embedding' | '3d';
 
 export interface RemoteModel {
   id: string;

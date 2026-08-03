@@ -8,7 +8,7 @@
  *   Generation Orchestrator --publish--> Redis(pea:events) --subscribe--> BFF --WS--> Web
  */
 
-export type JobType = 'image' | 'video' | 'text';
+export type JobType = 'image' | 'video' | 'text' | 'audio' | '3d';
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'refunded';
 
 export interface JobUpdatedEvent {

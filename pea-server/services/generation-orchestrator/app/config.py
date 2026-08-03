@@ -41,9 +41,9 @@ class Settings(BaseSettings):
     per_user_concurrency: int = 12  # 决策④: 每用户同时进行任务上限 (原 3)
     per_user_concurrency_ttl_s: int = 3600  # 并发计数兜底 TTL, 防异常未释放永久泄漏
     default_cost_tapies: int = 10
-    # 主/备 provider (LiteLLM 路由, 失败自动回退)
-    provider_primary: str = "mock"
-    provider_fallback: str = "mock"
+    # 主/备 provider (LiteLLM 路由, 失败自动回退)。默认空 = 不指定, 由模型显式挂载的 provider 决定。
+    provider_primary: str = ""
+    provider_fallback: str = ""
 
     # 外部提供商调用 (Agnes 等 OpenAI 兼容)
     # 图像同步出图较慢, 用较长超时; 视频提交后异步轮询。
@@ -64,10 +64,6 @@ class Settings(BaseSettings):
     # 原 300s 会把正常长任务误杀成 failed。与 submit 超时对齐放宽到 900s (15min)。
     video_poll_interval_s: int = 5
     video_poll_max_s: int = 900
-    # 真实提供商失败时是否回退到 Mock。
-    # 生产必须为 False: 回退会给已扣费的用户返回假图并掩盖真实故障。
-    # 仅离线联调 (无外网) 时可临时置 True。
-    allow_mock_fallback: bool = False
     # 生成结果在对象存储中的公开前缀 (浏览器可直接读取 CDN URL)。
     media_public_prefix: str = "gen"
 
@@ -98,19 +94,9 @@ class Settings(BaseSettings):
     failure_alert_window_s: int = 300
     failure_alert_threshold: int = 5
 
-    # 开发/联调极速开关: 逗号分隔的 type 列表 (如 "image,video") 强制走 MockAdapter。
-    # 真实图像/视频提供商 (Agnes 等) 单张出图 18~77s, 物理上无法达到 1~3s; 联调/演示期
-    # 用 mock 可在 ~0.5s 内返回占位图。生产务必留空以走真实提供商。
-    # 取值示例: "" (关闭, 走真实) | "image,video" (图像/视频走 mock) | "image,video,text"
-    force_mock_types: str = ""
-
     # Worker
     worker_enabled: bool = True
     worker_poll_ms: int = 500
-
-    @property
-    def force_mock_types_set(self) -> set[str]:
-        return {s.strip() for s in self.force_mock_types.split(",") if s.strip()}
 
 
 settings = Settings()

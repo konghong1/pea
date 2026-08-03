@@ -11,6 +11,6 @@
 """
 from __future__ import annotations
 
-from app.providers import anthropic_compat, minimax  # noqa: F401
+from app.providers import anthropic_compat, gemini, minimax, volcengine  # noqa: F401
 
-__all__ = ["minimax", "anthropic_compat"]
+__all__ = ["minimax", "anthropic_compat", "volcengine", "gemini"]

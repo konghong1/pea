@@ -22,8 +22,8 @@ export class CreateModelDto {
   @IsOptional() @IsString() @MaxLength(200)
   displayName?: string;
 
-  @IsOptional() @IsIn(['image', 'video', 'text'])
-  modelType?: 'image' | 'video' | 'text';
+  @IsOptional() @IsIn(['image', 'video', 'text', 'audio', '3d'])
+  modelType?: 'image' | 'video' | 'text' | 'audio' | '3d';
 
   @IsOptional() @IsBoolean()
   enabled?: boolean;
@@ -57,8 +57,8 @@ export class UpdateModelDto {
   @IsOptional() @IsString() @MaxLength(200)
   displayName?: string;
 
-  @IsOptional() @IsIn(['image', 'video', 'text'])
-  modelType?: 'image' | 'video' | 'text';
+  @IsOptional() @IsIn(['image', 'video', 'text', 'audio', '3d'])
+  modelType?: 'image' | 'video' | 'text' | 'audio' | '3d';
 
   @IsOptional() @IsBoolean()
   enabled?: boolean;

@@ -80,7 +80,7 @@ def _expand_with_llm(chat: str, platform_config: dict) -> str | None:
         cfg = db.get_model_with_provider(expand_model)
     except Exception:  # noqa: BLE001
         return None
-    if not cfg or (cfg.get("provider_type") in (None, "mock")):
+    if not cfg or not cfg.get("provider_type"):
         return None
     base = (cfg.get("base_url") or "").rstrip("/")
     if base.endswith("/v1"):

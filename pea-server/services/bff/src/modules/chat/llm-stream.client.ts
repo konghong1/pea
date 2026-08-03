@@ -19,11 +19,16 @@ export interface UsageInfo {
 /**
  * 归一化 OpenAI 兼容 chat 端点 URL。
  * 与 orchestrator 的 _api_base / providers.normalizeModelsUrl 保持同一约定:
- * provider.base_url 可能已含 /v1 (本项目 OpenAI 兼容网关的存储约定),
- * 这里做归一化, 避免出现 /v1/v1/chat/completions 导致上游 404。
+ * provider.base_url 可能已含 /v1 (本项目 OpenAI 兼容网关的存储约定) 或 /api/v3
+ * (火山方舟等厂商的 OpenAI 兼容前缀), 这里做归一化, 避免出现
+ * /v1/v1/chat/completions 或 /api/v3/v1/chat/completions 导致上游 404。
  */
 export function buildOpenAIChatUrl(baseUrl: string): string {
   let base = (baseUrl || '').replace(/\/+$/, '');
+  // 火山方舟: chat/completions 在 /api/v3/chat/completions (版本前缀即 /api/v3)。
+  if (base.endsWith('/api/v3')) {
+    return `${base}/chat/completions`;
+  }
   if (base.endsWith('/v1')) base = base.slice(0, -3);
   return `${base}/v1/chat/completions`;
 }

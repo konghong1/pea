@@ -137,6 +137,8 @@ def load_model_provider_cfg(model_id: Optional[str]) -> Optional[dict]:
                        p.id            AS provider_id,
                        p.name          AS provider_name,
                        p.provider_type AS provider_type,
+                       p.protocol      AS protocol,
+                       p.vendor        AS vendor,
                        p.base_url      AS base_url,
                        p.api_key       AS api_key,
                        p.enabled       AS provider_enabled,
@@ -163,7 +165,7 @@ def load_provider_cfg(key: Optional[str]) -> Optional[dict]:
     with db.get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT base_url, api_key, provider_type, name AS provider_name,
+                """SELECT base_url, api_key, provider_type, protocol, vendor, name AS provider_name,
                           completion_mode, accepts_callback, webhook_secret,
                           external_ref_base_url
                    FROM ai_providers
@@ -178,6 +180,8 @@ def load_provider_cfg(key: Optional[str]) -> Optional[dict]:
         "base_url": row["base_url"],
         "api_key": row["api_key"],
         "provider_type": row.get("provider_type"),
+        "protocol": row.get("protocol") or row.get("provider_type"),
+        "vendor": row.get("vendor") or "",
         "provider_name": row["provider_name"],
         "completion_mode": row.get("completion_mode") or "poll",
         "accepts_callback": bool(row.get("accepts_callback")),

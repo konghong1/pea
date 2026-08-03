@@ -20,7 +20,7 @@ export class ModelsController {
   @Get('available')
   available(
     @CurrentUser() u: { sub: number },
-    @Query('type') type?: 'image' | 'video' | 'text',
+    @Query('type') type?: 'image' | 'video' | 'text' | 'audio' | '3d',
   ) {
     return this.models.listAvailable(u.sub, type);
   }
