@@ -13,6 +13,7 @@ import { FilesModule } from './modules/files/files.module';
 import { AssetsModule } from './modules/assets/assets.module';
 import { CanvasesModule } from './modules/canvases/canvases.module';
 import { ProvidersModule } from './modules/providers/providers.module';
+import { RateLimitsModule } from './modules/rate-limits/rate-limits.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { CommunityModule } from './modules/community/community.module';
@@ -35,6 +36,7 @@ import { RateLimitMiddleware } from './common/rate-limit.middleware';
     AssetsModule,
     CanvasesModule,
     ProvidersModule,
+    RateLimitsModule,
     PlansModule,
     OrdersModule,
     CommunityModule,

@@ -32,7 +32,7 @@ export class AssetsService {
     return this.db.query<Row[]>(
       `SELECT id, name, scope, parent_id, created_at, updated_at
        FROM asset_folders WHERE owner_id = ? AND scope = ?
-       ORDER BY updated_at DESC`,
+       ORDER BY created_at ASC, id ASC`,
       [userId, scope],
     );
   }

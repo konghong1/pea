@@ -699,11 +699,11 @@ function LeftToolbar({
           <SearchOutlined aria-hidden />
         </button>
       </Tooltip>
-      <Tooltip title="文件" placement="right">
+      <Tooltip title="收藏夹" placement="right">
         <button
           type="button"
           className={`pea-tlb-btn${filesOpen ? ' active' : ''}`}
-          aria-label="文件"
+          aria-label="收藏夹"
           onClick={onFiles}
         >
           <FolderOutlined aria-hidden />
@@ -773,6 +773,7 @@ function CanvasControls({
   setShowGrid: (v: boolean) => void;
 }) {
   const { fitView, getZoom, setViewport, getViewport } = useReactFlow();
+  const rfStoreApi = useStoreApi();
   const [zoom, setZoom] = useState(() => getZoom());
 
   useEffect(() => {
@@ -791,7 +792,24 @@ function CanvasControls({
     const r = Math.max(0, Math.min(1, v / 100));
     const next = Math.exp(logMin + r * (logMax - logMin));
     const vp = getViewport();
-    setViewport({ ...vp, zoom: next }, { duration: 0 });
+    const { width, height } = rfStoreApi.getState();
+    const w2 = width / 2;
+    const h2 = height / 2;
+    // 关键修复：以当前可视窗口中心为锚点缩放。
+    // ReactFlow 视口变换：screen = flow * zoom + translate，
+    // 因此窗口中心对应的 flow 坐标为 center = (size/2 - translate) / zoom。
+    // 缩放后保持 center 不变：translate' = size/2 - center * zoom'。
+    // 原实现把 x 的符号弄反，导致点击缩放条画布向反方向跳飞。
+    const cx = (w2 - vp.x) / vp.zoom;
+    const cy = (h2 - vp.y) / vp.zoom;
+    setViewport(
+      {
+        x: w2 - cx * next,
+        y: h2 - cy * next,
+        zoom: next,
+      },
+      { duration: 0 },
+    );
   };
 
   return (
@@ -1342,7 +1360,14 @@ function Flow() {
     }
     if (!didFit.current && nodes.length > 0) {
       didFit.current = true;
-      const t2 = window.setTimeout(() => fitView({ duration: 0, padding: 0.2, maxZoom: 1 }), 100);
+      // 默认 fitView 后把画布整体向下偏移一点，让节点内容在视口中显示在中间偏上位置
+      const t2 = window.setTimeout(() => {
+        fitView({ duration: 0, padding: 0.2, maxZoom: 1 });
+        requestAnimationFrame(() => {
+          const vp = getViewport();
+          setViewport({ ...vp, y: vp.y + 80 }, { duration: 0 });
+        });
+      }, 100);
       return () => window.clearTimeout(t2);
     }
   }, [canvasId, nodes.length, fitView, setViewport]);
@@ -1623,7 +1648,7 @@ function Flow() {
 
   return (
     <div
-      className="pea-canvas-host"
+      className={`pea-canvas-host${materialOpen ? ' pea-material-open' : ''}`}
       onContextMenu={(e) => e.preventDefault()}
       onDoubleClick={(e) => {
         const t = e.target as HTMLElement;

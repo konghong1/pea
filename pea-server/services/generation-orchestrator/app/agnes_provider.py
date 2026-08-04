@@ -40,6 +40,39 @@ logger = logging.getLogger(__name__)
 _VIDEO_DONE = ("completed", "succeeded", "success", "done", "finished", "ready")
 _VIDEO_FAIL = ("failed", "error", "cancelled", "canceled", "rejected")
 
+# ── 速率限制(429)与瞬时 5xx 拆分 (RC-2 修复) ──
+# 429 = 限流(上游配额窗口), 必须按真实窗口整段等待后最多重试 1 次; 不能当秒级 5xx 退避。
+#   把限流当 4s 退避重试, 在 60s 窗口内必败且白烧额度(每个逻辑请求实际打 2 个 POST 全失败)。
+# 真正的瞬时服务端错误(5xx / Cloudflare)才走指数退避。
+_TRANSIENT_5XX = frozenset({
+    500, 502, 503, 504,
+    520, 521, 522, 523, 524, 525, 526, 527, 530,
+})
+_RATE_LIMIT_RE_MIN = re.compile(r"per\s+(\d+)\s+minute", re.I)
+_RATE_LIMIT_RE_SEC = re.compile(r"per\s+(\d+)\s+second", re.I)
+
+
+def _parse_rate_limit_wait_s(resp, default_s: int) -> int:
+    """从 429 响应解析应等待的秒数: 优先 Retry-After 头, 否则报文里的 'per N minute(s)'/'per N second(s)'。"""
+    try:
+        ra = getattr(resp, "headers", {}).get("Retry-After")
+        if ra:
+            return max(1, int(float(ra)))
+    except (TypeError, ValueError):
+        pass
+    body = ""
+    try:
+        body = (resp.text or "")[:200]
+    except Exception:  # noqa: BLE001
+        pass
+    m = _RATE_LIMIT_RE_SEC.search(body)
+    if m:
+        return max(1, int(m.group(1)))
+    m = _RATE_LIMIT_RE_MIN.search(body)
+    if m:
+        return max(1, int(m.group(1)) * 60)
+    return default_s
+
 
 def _api_base(base_url: str, path: str) -> str:
     """把相对路径拼到 base_url 之下 (版本前缀自适应, 关键修复: 接入 Volcengine 方舟)。
@@ -87,10 +120,6 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
     #  - 429/500/502/503/504: 标准 HTTP 语义 (限流 / 服务端错 / 网关超时)
     #  - 520/521/522/523/524/525/526/527/530: Cloudflare 5xx (Web server unknown error /
     #    connection timeout / origin unreachable 等), 这些基本是源站暂时抽风, 重试常可恢复.
-    transient_5xx = frozenset({
-        429, 500, 502, 503, 504,
-        520, 521, 522, 523, 524, 525, 526, 527, 530,
-    })
     last_err: Exception | None = None
     target = url
     for attempt in range(1, max_attempts + 1):
@@ -114,7 +143,17 @@ def _post_with_retry(url: str, payload: dict, headers: dict, timeout,
                 time.sleep(wait)
                 continue
             raise
-        if resp.status_code in transient_5xx:  # 瞬时过载 / Cloudflare 源站异常 -> 重试
+        # 429 = 限流(上游配额窗口): 按真实窗口整段等待, 最多重试 1 次, 绝不烧额度。
+        if resp.status_code == 429:
+            if attempt < 2:
+                wait = _parse_rate_limit_wait_s(resp, settings.provider_rate_limit_default_window_s)
+                wait = min(wait, settings.rate_limit_max_wait_s)
+                print(f"[agnes] attempt {attempt} got 429 rate limit, wait {wait}s then retry once")
+                time.sleep(wait)
+                continue
+            # 重试后仍 429 -> 返回, 交由 _raise_for_provider 抛错(干净失败 + 退款)
+            return resp
+        if resp.status_code in _TRANSIENT_5XX:  # 真正瞬时过载 / Cloudflare 源站异常 -> 退避重试
             last_err = RuntimeError(f"provider HTTP {resp.status_code}")
             if attempt < max_attempts:
                 wait = min(backoff_base * (2 ** (attempt - 1)), 20)
@@ -135,10 +174,6 @@ async def _apost_with_retry(client, url, payload, headers, timeout,
     语义与 _post_with_retry 完全一致, 区别仅在用 ``await client.post(...)`` ——
     等待外部响应期间让出事件循环, 不占 OS 线程 (见 async_core/engine.py)。
     """
-    transient_5xx = frozenset({
-        429, 500, 502, 503, 504,
-        520, 521, 522, 523, 524, 525, 526, 527, 530,
-    })
     last_err: Exception | None = None
     target = url
     for attempt in range(1, max_attempts + 1):
@@ -166,7 +201,17 @@ async def _apost_with_retry(client, url, payload, headers, timeout,
             raise RuntimeError(
                 f"provider timeout failed ({type(e).__name__}): {url}"
             ) from e
-        if resp.status_code in transient_5xx:  # 瞬时过载 / Cloudflare 源站异常 -> 重试
+        # 429 = 限流(上游配额窗口): 按真实窗口整段等待, 最多重试 1 次, 绝不烧额度。
+        if resp.status_code == 429:
+            if attempt < 2:
+                wait = _parse_rate_limit_wait_s(resp, settings.provider_rate_limit_default_window_s)
+                wait = min(wait, settings.rate_limit_max_wait_s)
+                print(f"[agnes] attempt {attempt} got 429 rate limit, wait {wait}s then retry once")
+                await asyncio.sleep(wait)
+                continue
+            # 重试后仍 429 -> 返回, 交由 _raise_for_provider 抛错(干净失败 + 退款)
+            return resp
+        if resp.status_code in _TRANSIENT_5XX:  # 真正瞬时过载 / Cloudflare 源站异常 -> 退避重试
             last_err = RuntimeError(f"provider HTTP {resp.status_code}")
             if attempt < max_attempts:
                 await asyncio.sleep(min(backoff_base * (2 ** (attempt - 1)), backoff_cap))

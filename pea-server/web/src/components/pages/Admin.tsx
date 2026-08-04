@@ -44,6 +44,11 @@ import {
   adminListPlans,
   adminUpsertPlan,
   adminDeletePlan,
+  RateLimitRule,
+  adminListRateLimits,
+  adminCreateRateLimit,
+  adminUpdateRateLimit,
+  adminDeleteRateLimit,
 } from '../../api/admin';
 import type { PlanView, PricingRule } from '../../api/catalog';
 import { AdminOrdersPane, AdminQrcodesPane } from './AdminPaymentsPane';
@@ -81,13 +86,14 @@ export default function Admin() {
       <div className="pea-page-pad" style={{ maxWidth: 1180, margin: '0 auto', width: '100%' }}>
         <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>管理员控制台</h2>
         <p style={{ color: 'var(--pea-text-3, #888)', marginBottom: 18 }}>
-          统一配置 AI 提供商、模型与定价、售卖套餐。密钥仅存内网库，对外一律脱敏。
+          统一配置 AI 提供商、模型与定价、上游速率限制、售卖套餐。密钥仅存内网库，对外一律脱敏。
         </p>
         <Tabs
           defaultActiveKey="providers"
           items={[
             { key: 'providers', label: 'AI 提供商', children: <ProvidersPane /> },
             { key: 'models', label: '模型 & 定价', children: <ModelsPane /> },
+            { key: 'ratelimits', label: '速率限制', children: <RateLimitsPane /> },
             { key: 'plans', label: '套餐', children: <PlansPane /> },
             { key: 'orders', label: '支付订单', children: <AdminOrdersPane /> },
             { key: 'qrcodes', label: '收款码', children: <AdminQrcodesPane /> },
@@ -1216,6 +1222,349 @@ function PlanModal({
         <Form.Item label="权益点（每行一条）" name="featuresText">
           <Input.TextArea rows={4} placeholder={'解锁高清 4K\n视频生成\n优先队列'} />
         </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
+/* ══════════════════════════ 速率限制 ══════════════════════════ */
+
+/** 图像分辨率档位 —— 与编排器 param_adapters._TIER_TO_PIXELS 保持一致。 */
+const SIZE_TIERS = ['1K', '2K', '3K', '4K'] as const;
+
+/** 常用窗口预设，避免手输秒数出错。 */
+const WINDOW_PRESETS = [
+  { value: 60, label: '每 1 分钟' },
+  { value: 300, label: '每 5 分钟' },
+  { value: 3600, label: '每 1 小时' },
+  { value: 86400, label: '每 1 天' },
+];
+
+function windowLabel(s: number): string {
+  const hit = WINDOW_PRESETS.find((p) => p.value === s);
+  if (hit) return hit.label;
+  if (s % 3600 === 0) return `每 ${s / 3600} 小时`;
+  if (s % 60 === 0) return `每 ${s / 60} 分钟`;
+  return `每 ${s} 秒`;
+}
+
+/**
+ * 上游厂商配额的可视化配置。
+ *
+ * 这些规则是编排器分布式令牌桶（Redis 固定窗口）的唯一数据源：改完 30s 内自动生效，
+ * 无需重启编排器。作用是把 429 挡在请求发出之前，而不是撞上去再退避重试烧额度。
+ */
+function RateLimitsPane() {
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<RateLimitRule[]>([]);
+  const [providers, setProviders] = useState<ProviderView[]>([]);
+  const [models, setModels] = useState<ModelView[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<RateLimitRule | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [r, p, m] = await Promise.all([
+        adminListRateLimits(),
+        adminListProviders(),
+        adminListModels(),
+      ]);
+      setRows(r);
+      setProviders(p);
+      setModels(m);
+    } catch {
+      message.error('加载速率限制规则失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [message]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const providerName = useCallback(
+    (id: string) => providers.find((p) => p.id === id)?.name ?? id,
+    [providers],
+  );
+
+  const onDelete = async (r: RateLimitRule) => {
+    try {
+      await adminDeleteRateLimit(r.id);
+      message.success('已删除');
+      void load();
+    } catch (e: any) {
+      message.error(e?.response?.data?.message ?? '删除失败');
+    }
+  };
+
+  const onToggle = async (r: RateLimitRule, enabled: boolean) => {
+    try {
+      await adminUpdateRateLimit(r.id, { enabled });
+      void load();
+    } catch (e: any) {
+      message.error(e?.response?.data?.message ?? '更新失败');
+    }
+  };
+
+  const columns: ColumnsType<RateLimitRule> = [
+    {
+      title: '提供商',
+      dataIndex: 'provider_id',
+      render: (v) => <b>{providerName(v)}</b>,
+    },
+    {
+      title: '模型',
+      dataIndex: 'model_id',
+      render: (v) =>
+        v ? <code>{v}</code> : <Tag color="blue">全部模型</Tag>,
+    },
+    {
+      title: '档位',
+      dataIndex: 'tier',
+      width: 110,
+      render: (v) => (v ? <Tag color="purple">{v}</Tag> : <Tag color="default">全部档位</Tag>),
+    },
+    {
+      title: '配额',
+      key: 'quota',
+      width: 190,
+      render: (_, r) => (
+        <span>
+          <b>{r.limit_n}</b> 次 / {windowLabel(r.window_s)}
+        </span>
+      ),
+    },
+    {
+      title: '生效',
+      dataIndex: 'enabled',
+      width: 80,
+      render: (v, r) => <Switch size="small" checked={v} onChange={(c) => void onToggle(r, c)} />,
+    },
+    {
+      title: '操作',
+      key: 'act',
+      width: 150,
+      render: (_, r) => (
+        <Space size={4}>
+          <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(r)}>
+            编辑
+          </Button>
+          <Popconfirm
+            title={`删除 ${providerName(r.provider_id)} 的这条限流规则?`}
+            onConfirm={() => onDelete(r)}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <>
+      <div
+        style={{
+          marginBottom: 12,
+          padding: '10px 14px',
+          borderRadius: 10,
+          background: 'var(--pea-bg-2, rgba(0,0,0,0.03))',
+          border: '1px solid var(--pea-border, rgba(0,0,0,0.06))',
+          fontSize: 13,
+          lineHeight: 1.7,
+          color: 'var(--pea-text-2, #555)',
+        }}
+      >
+        按上游厂商公布的配额建规则，编排器会在<b>发请求前</b>用令牌桶拦住超额请求（多副本共享同一配额），
+        而不是撞出 429 再重试烧额度。匹配优先级：
+        <code>（厂商+模型+档位）&gt;（厂商+模型）&gt;（厂商+档位）&gt;（厂商）</code>，命中即用，不叠加。
+        改完 <b>30 秒内自动生效</b>，无需重启服务。
+      </div>
+      <Space style={{ marginBottom: 12 }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
+          新建规则
+        </Button>
+        <Button icon={<ReloadOutlined />} onClick={() => void load()}>
+          刷新
+        </Button>
+      </Space>
+      <Table<RateLimitRule>
+        rowKey="id"
+        size="middle"
+        loading={loading}
+        dataSource={rows}
+        columns={columns}
+        pagination={false}
+        locale={{
+          emptyText: (
+            <Empty description="暂无限流规则（当前不限速，可能撞上游 429）" />
+          ),
+        }}
+      />
+      {(creating || editing) && (
+        <RateLimitModal
+          record={editing}
+          providers={providers}
+          models={models}
+          onClose={() => {
+            setCreating(false);
+            setEditing(null);
+          }}
+          onSaved={() => {
+            setCreating(false);
+            setEditing(null);
+            void load();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function RateLimitModal({
+  record,
+  providers,
+  models,
+  onClose,
+  onSaved,
+}: {
+  record: RateLimitRule | null;
+  providers: ProviderView[];
+  models: ModelView[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { message } = App.useApp();
+  const [form] = Form.useForm();
+  const [saving, setSaving] = useState(false);
+  const [providerId, setProviderId] = useState<string | undefined>(record?.provider_id);
+  const isEdit = !!record;
+
+  useEffect(() => {
+    form.setFieldsValue({
+      provider_id: record?.provider_id,
+      model_id: record?.model_id ?? undefined,
+      tier: record?.tier ?? undefined,
+      limit_n: record?.limit_n ?? 1,
+      window_s: record?.window_s ?? 60,
+      enabled: record?.enabled ?? true,
+    });
+    setProviderId(record?.provider_id);
+  }, [record, form]);
+
+  // 模型下拉随所选提供商联动，避免跨厂商错配。
+  const modelOptions = useMemo(
+    () =>
+      models
+        .filter((m) => !providerId || m.providerId === providerId)
+        .map((m) => ({ value: m.id, label: `${m.displayName || m.id}（${m.modelType}）` })),
+    [models, providerId],
+  );
+
+  const submit = async () => {
+    let v: any;
+    try {
+      v = await form.validateFields();
+    } catch {
+      return;
+    }
+    setSaving(true);
+    try {
+      const dto = {
+        provider_id: v.provider_id,
+        model_id: v.model_id || null,
+        tier: v.tier || null,
+        limit_n: v.limit_n,
+        window_s: v.window_s,
+        enabled: v.enabled,
+      };
+      if (isEdit) await adminUpdateRateLimit(record!.id, dto);
+      else await adminCreateRateLimit(dto);
+      message.success('已保存，30 秒内生效');
+      onSaved();
+    } catch (e: any) {
+      message.error(e?.response?.data?.message ?? '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      title={isEdit ? '编辑限流规则' : '新建限流规则'}
+      onCancel={onClose}
+      onOk={submit}
+      confirmLoading={saving}
+      okText="保存"
+      cancelText="取消"
+      destroyOnClose
+    >
+      <Form form={form} layout="vertical" style={{ marginTop: 12 }}>
+        <Form.Item
+          label="提供商"
+          name="provider_id"
+          rules={[{ required: true, message: '请选择提供商' }]}
+        >
+          <Select
+            placeholder="选择提供商"
+            options={providers.map((p) => ({ value: p.id, label: `${p.name}（${p.kind}）` }))}
+            onChange={(v) => {
+              setProviderId(v);
+              form.setFieldValue('model_id', undefined);
+            }}
+          />
+        </Form.Item>
+        <Form.Item
+          label="模型"
+          name="model_id"
+          tooltip="留空 = 该提供商下所有模型共享同一个桶；选定 = 只约束这个模型"
+        >
+          <Select allowClear placeholder="（留空 = 全部模型）" options={modelOptions} />
+        </Form.Item>
+        <Form.Item
+          label="分辨率档位"
+          name="tier"
+          tooltip="仅图像有效。留空 = 所有档位共享一个桶；选 4K = 只约束 4K 请求"
+        >
+          <Select
+            allowClear
+            placeholder="（留空 = 全部档位）"
+            options={SIZE_TIERS.map((t) => ({ value: t, label: t }))}
+          />
+        </Form.Item>
+        <Space style={{ display: 'flex' }} align="start" size={12}>
+          <Form.Item
+            label="允许次数"
+            name="limit_n"
+            style={{ width: 130 }}
+            rules={[{ required: true, message: '必填' }]}
+          >
+            <InputNumber min={1} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item
+            label="时间窗口"
+            name="window_s"
+            style={{ flex: 1, minWidth: 190 }}
+            rules={[{ required: true, message: '必填' }]}
+            tooltip="必须对齐上游公布的窗口，否则拦不住"
+          >
+            <Select
+              options={WINDOW_PRESETS}
+              popupMatchSelectWidth={false}
+              showSearch={false}
+            />
+          </Form.Item>
+        </Space>
+        <Form.Item label="启用" name="enabled" valuePropName="checked">
+          <Switch />
+        </Form.Item>
+        <div style={{ fontSize: 12, color: 'var(--pea-text-3, #888)', lineHeight: 1.7 }}>
+          例：Agnes 4K 档限 1 次/分钟 → 提供商选 Agnes、模型留空、档位选 <code>4K</code>、
+          允许次数 <code>1</code>、窗口 <code>每 1 分钟</code>。
+        </div>
       </Form>
     </Modal>
   );

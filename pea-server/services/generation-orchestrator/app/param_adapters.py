@@ -40,6 +40,15 @@ _TIER_TO_PIXELS = {
 # Agnes 官方白名单 ratio (其它值丢弃并告警, 避免 400)
 _AGNES_RATIOS = {"1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"}
 
+# 参考图单图字节上限（解码后原始字节数）。
+# 上游（Agnes / 火山方舟 图像 API）硬限制单张输入图 ≤ 10MB（10485760 bytes）；
+# 此处取 8MB 留 2MB headroom，避免 JPEG 元信息/边界抖动触发上游 10MB 上限。
+# ★ 单一真相源：UI / 客户端 / 后端三处应共用此值（前端 EcommerceGallery 文案 10MB、
+# galleryApi MAX_FILE_BYTES=8MB 后续应与此对齐，避免数字分裂）。
+MAX_REF_IMAGE_BYTES = 8 * 1024 * 1024
+# 降采样目标：比上限再小一档，确保 re-encode 后稳稳低于上限。
+_REF_DOWNSAMPLE_TARGET_BYTES = int(MAX_REF_IMAGE_BYTES * 0.8)
+
 
 # 匹配内部/不可达 URL 的主机名模式: localhost, 私有 IP, 容器短名, 非标准端口
 _INTERNAL_HOST_RE = re.compile(
@@ -261,18 +270,109 @@ class ReferenceResolutionStrategy(abc.ABC):
         ...
 
 
+def _split_data_uri(ref: str) -> tuple[str, str]:
+    """从 data: URI 拆出 (mime, base64_body)；非标准 data URI 抛 ValueError。"""
+    m = re.match(r"data:([^;]+);base64,(.+)", ref, re.DOTALL)
+    if not m:
+        raise ValueError("not a data URI")
+    return m.group(1), m.group(2)
+
+
+def _data_uri_of(raw: bytes, mime: str = "image/jpeg") -> str:
+    """字节 -> data: URI。"""
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+def _downsample_image_bytes(raw: bytes, max_bytes: int) -> bytes:
+    """把图片原始字节降采样/重编码到 ≤ max_bytes（输出 JPEG）。
+
+    用于参考图超过上游大小上限前的边界护栏：先尽量保留内联（保隐私），
+    仅当降采样后仍超限才退化为公网 URL 投递（见 Base64InlineStrategy）。
+    依赖 Pillow；缺失时抛 ImportError，由调用方降级到 URL 兜底。
+    """
+    from io import BytesIO
+
+    from PIL import Image
+
+    img = Image.open(BytesIO(raw)).convert("RGB")
+    quality = 85
+    scale = 1.0
+    last: bytes | None = None
+    for _ in range(8):
+        w = max(1, int(img.width * scale))
+        h = max(1, int(img.height * scale))
+        tmp = img.resize((w, h), Image.LANCZOS)
+        buf = BytesIO()
+        tmp.save(buf, format="JPEG", quality=quality, optimize=True)
+        out = buf.getvalue()
+        if len(out) <= max_bytes:
+            return out
+        last = out
+        scale *= 0.75
+        if quality > 60:
+            quality -= 10
+    # 尽力而为：返回最小的一版（仍可能超上限，调用方再走 URL 兜底）
+    return last or out
+
+
 class Base64InlineStrategy(ReferenceResolutionStrategy):
     """策略 A: 内联 base64 (图片类模型适用, 如 Agnes 图像 API).
 
-    - data: URI 原样保留;
+    - data: URI 未超上限时原样保留;
     - 内部/相对 URL (localhost / 私有 IP / /media/<key>) 经编排器自有 MinIO 客户端
       直下, 转 base64 data URI; 外部模型直接消费内联 base64;
-    - 公网 http(s) URL 原样保留 (模型自行拉取)。
-    全程**不**调用 storage.store_bytes 上传公开存储, 不依赖公网可达性。
+    - 公网 http(s) URL 原样保留 (模型自行拉取);
+    - ★ 边界护栏（2026-08-04 新增）: 单张解码后字节 > MAX_REF_IMAGE_BYTES 时,
+      先用 Pillow 降采样到 ≤ 上限（仍内联, 保隐私, 真正打穿上游 10MB 上限）；
+      若降采样后仍超限（极端长图）或 Pillow 不可用, 则退化为公网 URL 投递
+      （provider.resolve_refs —— 复用视频链路的 store_bytes 上传 + 可达性预检）,
+      即用户要的「照片大于阈值就走连接兜底」。
+    仅触发 URL 兜底分支时才调用 storage.store_bytes 上传公开存储。
     """
 
     def resolve(self, refs: Any, provider: Any = None) -> list[str]:
-        return _normalize_refs(refs)
+        out: list[str] = []
+        for r in _normalize_refs(refs):
+            if not r.startswith("data:"):
+                # 公网 URL: 直接透传, 由模型自行拉取（不在此下载做大小预检）。
+                out.append(r)
+                continue
+            # data: URI: 解析解码后字节数
+            try:
+                _mime, b64 = _split_data_uri(r)
+                raw = base64.b64decode(b64)
+            except Exception:
+                # 非标准 data URI 原样保留, 交给上游判错。
+                out.append(r)
+                continue
+            if len(raw) <= MAX_REF_IMAGE_BYTES:
+                out.append(r)
+                continue
+            # 超阈值: 先降采样（尽量保内联）
+            smaller: bytes | None = None
+            try:
+                smaller = _downsample_image_bytes(raw, _REF_DOWNSAMPLE_TARGET_BYTES)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[refs] 参考图降采样失败 (将退化为公网 URL 兜底): %s", exc)
+            if smaller and len(smaller) <= MAX_REF_IMAGE_BYTES:
+                out.append(_data_uri_of(smaller, "image/jpeg"))
+                continue
+            # 降采样后仍超限 或 不可用 -> 走连接兜底: 上传公开存储, 返回公网 URL
+            if provider is not None:
+                try:
+                    src = _data_uri_of(smaller, "image/jpeg") if smaller else r
+                    url = provider.resolve_refs([src])[0]
+                    out.append(url)
+                    logger.info(
+                        "[refs] 参考图超阈值已走公网 URL 兜底 (%d bytes -> %s)",
+                        len(raw), url[:120],
+                    )
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[refs] 公网 URL 兜底失败, 仍内联原图: %s", exc)
+            # 兜底也失败: 保留原内联（上游若仍超限会返回明确错误, 不再静默泛化）
+            out.append(r)
+        return out
 
 
 class PublicUrlStrategy(ReferenceResolutionStrategy):

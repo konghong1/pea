@@ -6,6 +6,7 @@
 - PublicUrlStrategy (视频): 把 data:/内部 URL 转存为外部模型可下载的公网 URL。
 - 各 ImageParamAdapter 默认声明 Base64InlineStrategy (不经公网)。
 """
+import base64
 import sys
 
 sys.path.insert(0, "/app")
@@ -100,6 +101,47 @@ def test_normalize_image_params_stores_raw_refs():
     assert norm.reference_images == ["/media/a.png", "https://c/b.png"], norm.reference_images
 
 
+def test_base64_inline_over_threshold_url_fallback():
+    """超阈值 + 降采样不可用 -> 走连接兜底（上传公开存储返回公网 URL）。"""
+    import app.param_adapters as pa
+
+    saved = pa.MAX_REF_IMAGE_BYTES
+    pa.MAX_REF_IMAGE_BYTES = 2  # 任意 >2 字节的 data URI 都算超阈值
+    try:
+        class FakeProvider:
+            def resolve_refs(self, refs):
+                return ["https://cdn.example.com/gen/fallback.png"]
+
+        with mock.patch.object(pa, "_downsample_image_bytes", side_effect=ImportError("no PIL")):
+            s = Base64InlineStrategy()
+            out = s.resolve(["data:image/png;base64,AAAA"], provider=FakeProvider())
+        assert out == ["https://cdn.example.com/gen/fallback.png"], out
+    finally:
+        pa.MAX_REF_IMAGE_BYTES = saved
+
+
+def test_base64_inline_over_threshold_downsamples_inline():
+    """超阈值 + 有 Pillow -> 降采样后仍以 data: 内联（保隐私, 字节 ≤ 上限）。"""
+    import app.param_adapters as pa
+
+    try:
+        from PIL import Image
+        from io import BytesIO
+    except ImportError:
+        return  # 无 Pillow 环境跳过（容器已装 Pillow 时生效）
+
+    buf = BytesIO()
+    Image.new("RGB", (4000, 4000), (255, 255, 255)).save(buf, format="PNG")
+    big = buf.getvalue()
+    data_uri = "data:image/png;base64," + base64.b64encode(big).decode()
+    s = Base64InlineStrategy()
+    # 无 provider -> 不能 URL 兜底, 只能内联降采样
+    out = s.resolve([data_uri], provider=None)
+    assert out and out[0].startswith("data:"), out
+    _m, b = pa._split_data_uri(out[0])
+    assert len(base64.b64decode(b)) <= pa.MAX_REF_IMAGE_BYTES, "应降采样到上限内"
+
+
 if __name__ == "__main__":
     tests = [
         test_base64_inline_keeps_data_uri_and_public_url,
@@ -110,6 +152,8 @@ if __name__ == "__main__":
         test_public_url_strategy_requires_provider,
         test_adapters_declare_inline_strategy,
         test_normalize_image_params_stores_raw_refs,
+        test_base64_inline_over_threshold_url_fallback,
+        test_base64_inline_over_threshold_downsamples_inline,
     ]
     failed = 0
     for t in tests:

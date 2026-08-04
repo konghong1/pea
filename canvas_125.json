@@ -1,0 +1,90 @@
+{
+    "id": 125,
+    "title": "\u672a\u547d\u540d\u753b\u5e03",
+    "scope": "personal",
+    "folder_id": null,
+    "share_token": null,
+    "thumbnail_url": null,
+    "graph_json": {
+        "edges": [],
+        "nodes": [
+            {
+                "id": "n1",
+                "data": {
+                    "kind": "text",
+                    "meta": {
+                        "error": false
+                    },
+                    "label": "\u6587\u672c"
+                },
+                "type": "pea",
+                "width": 340,
+                "height": 340,
+                "position": {
+                    "x": 640,
+                    "y": 360
+                },
+                "selected": false
+            },
+            {
+                "id": "n2",
+                "data": {
+                    "url": "blob:http://localhost:5173/fa48e516-1567-4577-917c-f58f0e02ccfd",
+                    "kind": "image",
+                    "label": "\u9a8c\u8bc1\u56fe\u7247",
+                    "isFavorite": false,
+                    "savedToLibrary": false
+                },
+                "type": "pea",
+                "width": 191,
+                "height": 340,
+                "position": {
+                    "x": 500,
+                    "y": 300
+                },
+                "selected": false
+            },
+            {
+                "id": "n3",
+                "data": {
+                    "url": "blob:http://localhost:5173/8738561d-0f0f-4110-a97f-48ba5fac1ccf",
+                    "kind": "image",
+                    "label": "\u9a8c\u8bc1\u56fe\u7247",
+                    "isFavorite": false,
+                    "savedToLibrary": false
+                },
+                "type": "pea",
+                "width": 191,
+                "height": 340,
+                "position": {
+                    "x": 500,
+                    "y": 300
+                },
+                "selected": false
+            },
+            {
+                "id": "n4",
+                "data": {
+                    "url": "",
+                    "kind": "image",
+                    "label": "\u9a8c\u8bc1\u56fe\u7247",
+                    "fileKey": "u:1/uploads/1785826236839-verify_test_image.png",
+                    "isFavorite": true,
+                    "savedToLibrary": false
+                },
+                "type": "pea",
+                "width": 191,
+                "height": 340,
+                "position": {
+                    "x": 500,
+                    "y": 300
+                },
+                "selected": false
+            }
+        ]
+    },
+    "version": 19,
+    "created_at": "2026-08-04T06:16:07.503Z",
+    "updated_at": "2026-08-04T08:46:20.962Z",
+    "deleted_at": null
+}

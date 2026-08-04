@@ -205,7 +205,9 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
     const n = name.trim();
     if (!n) return;
     try {
-      await assetsApi.createFolder(n, scope);
+      // 在 folder 视图下新建时，自动作为当前目录的子文件夹；根目录视图下创建到根目录
+      const parentId = view === 'folder' ? folderId : undefined;
+      await assetsApi.createFolder(n, scope, parentId);
       refreshFolders();
       message.success('文件夹已创建');
     } catch {
@@ -562,10 +564,7 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
             type="button"
             className={`pea-material-folder-row ${isExpanded ? 'expanded' : ''}`}
             style={{ paddingLeft: `${10 + depth * 14}px` }}
-            onClick={() => {
-              toggleFolder(f.id);
-              expandFolder(f.id);
-            }}
+            onClick={() => openFolder(f)}
           >
             <span
               className="pea-material-folder-toggle"

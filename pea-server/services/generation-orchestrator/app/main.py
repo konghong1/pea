@@ -124,8 +124,15 @@ if settings.worker_enabled:
 
 @app.on_event("startup")
 def _startup() -> None:
-    # worker + completer 已在 import 时 daemon 启动; 此处可挂健康检查/指标
-    pass
+    # 速率限制: 自建规则表(幂等) + 预热规则缓存, 失败不影响主流程。
+    try:
+        from app import db
+        from app import rate_limit
+
+        db.ensure_provider_rate_limits_table()
+        rate_limit.load_rules(force=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[startup] rate-limit bootstrap skipped: %s", e)
 
 
 if __name__ == "__main__":

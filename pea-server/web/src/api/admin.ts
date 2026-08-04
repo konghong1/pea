@@ -143,3 +143,51 @@ export const adminUpsertPlan = (dto: UpsertPlanInput) =>
 
 export const adminDeletePlan = (id: string) =>
   api.delete<{ ok: true }>(`/admin/plans/${id}`).then((r) => r.data);
+
+/* ═══════════════════════ 速率限制规则 CRUD ═══════════════════════ */
+
+/**
+ * 上游厂商配额的客户端建模 (编排器分布式令牌桶的数据源)。
+ * 维度 (provider_id[, model_id][, tier])，编排器按
+ * (厂商,模型,档位) > (厂商,模型) > (厂商,档位) > (厂商) 优先级匹配。
+ * 字段用 snake_case —— 与 BFF DTO / DB 列一致，避免多一层映射出错。
+ */
+export interface RateLimitRule {
+  id: number;
+  provider_id: string;
+  model_id: string | null;
+  /** 图像档位 1K/2K/3K/4K；null = 该 provider/model 的任意档共享一个桶。 */
+  tier: string | null;
+  /** 每窗口允许的请求数。 */
+  limit_n: number;
+  /** 窗口秒数。Agnes 4K = 1 次 / 60s。 */
+  window_s: number;
+  enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface UpsertRateLimitInput {
+  provider_id?: string;
+  model_id?: string | null;
+  tier?: string | null;
+  limit_n?: number;
+  window_s?: number;
+  enabled?: boolean;
+}
+
+export const adminListRateLimits = (filter?: { providerId?: string; modelId?: string }) =>
+  api
+    .get<RateLimitRule[]>('/admin/rate-limits', {
+      params: filter?.providerId || filter?.modelId ? filter : undefined,
+    })
+    .then((r) => r.data ?? []);
+
+export const adminCreateRateLimit = (dto: UpsertRateLimitInput) =>
+  api.post<RateLimitRule>('/admin/rate-limits', dto).then((r) => r.data);
+
+export const adminUpdateRateLimit = (id: number, dto: UpsertRateLimitInput) =>
+  api.patch<RateLimitRule>(`/admin/rate-limits/${id}`, dto).then((r) => r.data);
+
+export const adminDeleteRateLimit = (id: number) =>
+  api.delete<{ ok: true }>(`/admin/rate-limits/${id}`).then((r) => r.data);

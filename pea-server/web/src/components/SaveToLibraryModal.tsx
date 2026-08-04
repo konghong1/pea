@@ -9,7 +9,12 @@ import {
   DownOutlined,
   CloseOutlined,
 } from '@ant-design/icons';
-import { assetsApi, type AssetFolder, type AssetScope } from '../api/assets';
+import {
+  assetsApi,
+  ASSET_FOLDERS_CHANGED_EVENT,
+  type AssetFolder,
+  type AssetScope,
+} from '../api/assets';
 import { toast } from '../store/toast';
 
 interface SaveToLibraryModalProps {
@@ -17,6 +22,8 @@ interface SaveToLibraryModalProps {
   onClose: () => void;
   defaultName?: string;
   onSave: (payload: { scope: AssetScope; folderId: number | null }) => Promise<void>;
+  /** 弹窗内新建/修改文件夹后，通知外部刷新文件夹列表 */
+  onFoldersChange?: () => void;
 }
 
 /**
@@ -33,6 +40,7 @@ export default function SaveToLibraryModal({
   onClose,
   defaultName,
   onSave,
+  onFoldersChange,
 }: SaveToLibraryModalProps) {
   const [scope, setScope] = useState<AssetScope>('personal');
   const [folders, setFolders] = useState<AssetFolder[]>([]);
@@ -102,12 +110,16 @@ export default function SaveToLibraryModal({
       return;
     }
     try {
-      await assetsApi.createFolder(name, scope, creatingUnder ?? undefined);
+      const { data: newFolder } = await assetsApi.createFolder(name, scope, creatingUnder ?? undefined);
       toast.success('文件夹已创建');
       setNewName('');
       setIsCreating(false);
       setCreatingUnder(null);
+      // 创建后自动选中新文件夹，确保保存目标就是该新目录
+      setSelectedId(newFolder.id);
       loadFolders();
+      onFoldersChange?.();
+      window.dispatchEvent(new CustomEvent(ASSET_FOLDERS_CHANGED_EVENT));
     } catch {
       toast.error('创建文件夹失败');
     }

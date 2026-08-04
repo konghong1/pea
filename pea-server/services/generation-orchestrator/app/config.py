@@ -94,6 +94,13 @@ class Settings(BaseSettings):
     failure_alert_window_s: int = 300
     failure_alert_threshold: int = 5
 
+    # ── 速率限制(分档/分模型令牌桶, RC-1 治本) ──
+    # 规则主来源: provider_rate_limits 表(BFF 后台可配), 编排器 TTL 缓存加载。
+    provider_rate_limit_ttl_s: int = 30            # 规则重载缓存 TTL(改配置后最多 30s 生效, 无需重启)
+    rate_limit_max_wait_s: int = 120              # 单任务因限流最多排队等待秒数(超过则干净失败+退款)
+    rate_limit_max_retries: int = 2               # 限流后最多重试获取令牌次数
+    provider_rate_limit_default_window_s: int = 60  # 429 报文中解析不到窗口时的兜底等待秒数
+
     # Worker
     worker_enabled: bool = True
     worker_poll_ms: int = 500

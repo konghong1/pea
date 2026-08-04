@@ -14,6 +14,7 @@ finalize_job (Dispatcher / Completer / Webhook 共用):
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
@@ -27,6 +28,7 @@ from app.async_core.engine import schedule, run_finalize
 from app.config import settings
 from app.redis_conn import publish_event
 from app.compensation import refund_on_failure
+from app import rate_limit
 from services.shared.events import job_updated, notification
 
 logger = logging.getLogger(__name__)
@@ -162,6 +164,13 @@ def _persist_handle_sync(job_id: str, user_id: int, jtype: str, h) -> None:
     ))
 
 
+def _derive_tier(req: dict) -> Optional[str]:
+    """从请求推导图像档位(4K/2K/...); 非图像或未知返回 None。用于限流桶的 tier 维度。"""
+    p = (req or {}).get("params") or {}
+    tier = p.get("resolution") or p.get("size")
+    return tier.upper() if tier else None
+
+
 async def _execute_async(job_id: str, user_id: int, jtype: str, req: dict, cfg: dict, adapter) -> None:
     """在事件循环协程中执行真实提交 (异步出图 / 异步提交).
 
@@ -169,6 +178,23 @@ async def _execute_async(job_id: str, user_id: int, jtype: str, req: dict, cfg: 
     收尾(转存下载 + 写库 + 发事件)交给收尾线程池, 不卡事件循环.
     """
     try:
+        # 决策⑤: 分档/分模型速率限制闸门(治本 RC-1) —— 发请求前先拿令牌,
+        #   不在上游限流窗口内硬撞。拿不到则按窗口等待后重试(受 max_wait/max_retries 约束),
+        #   仍拿不到 -> 抛 RateLimitExceeded -> 干净失败 + 退款(见下方 except)。
+        tier = _derive_tier(req)
+        provider_id = cfg.get("provider_id")
+        model_id = req.get("model")
+        allowed, wait = rate_limit.acquire(provider_id, model_id, tier)
+        retries = 0
+        while not allowed and retries < settings.rate_limit_max_retries:
+            await asyncio.sleep(min(wait, settings.rate_limit_max_wait_s))
+            allowed, wait = rate_limit.acquire(provider_id, model_id, tier)
+            retries += 1
+        if not allowed:
+            raise rate_limit.RateLimitExceeded(
+                f"rate limit exceeded (provider={provider_id} model={model_id} tier={tier}); "
+                f"please retry after {wait:.0f}s"
+            )
         outcome = await adapter.submit(req)
         if outcome.sync:
             res = outcome.result
@@ -189,6 +215,9 @@ async def _execute_async(job_id: str, user_id: int, jtype: str, req: dict, cfg: 
         h.user_id = user_id
         h.provider = cfg.get("provider_name") or adapter.name
         await run_finalize(_persist_handle_sync, job_id, user_id, jtype, h)
+    except rate_limit.RateLimitExceeded as e:
+        logger.warning("[dispatcher] rate-limited job=%s: %s", job_id, e)
+        await run_finalize(_finalize_sync, job_id, user_id, jtype, False, None, str(e))
     except Exception as e:  # noqa: BLE001
         logger.warning("[dispatcher] submit failed job=%s: %s", job_id, f"{type(e).__name__}: {e}")
         await run_finalize(_finalize_sync, job_id, user_id, jtype, False, None,

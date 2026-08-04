@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import queue
 
+import logging
 import pymysql
 from pymysql.cursors import DictCursor
 
 from app.config import settings
 from app import models
+
+logger = logging.getLogger(__name__)
 
 _POOL_SIZE = 10
 
@@ -217,3 +220,34 @@ def insert_usage_record(*, user_id: int, job_id: str | None, node_type: str,
                 ],
             )
         conn.commit()
+
+
+def ensure_provider_rate_limits_table() -> None:
+    """自建 provider_rate_limits 表(idempotent)。编排器启动时调用; 与 BFF 共用 MySQL。
+
+    该表由 BFF 后台写入、编排器读取。编排器自建可保证无论 BFF/编排器谁先部署,
+    表都存在; CREATE TABLE IF NOT EXISTS 保证幂等(重复启动不报错)。
+    """
+    sql = """
+    CREATE TABLE IF NOT EXISTS provider_rate_limits (
+      id          BIGINT       AUTO_INCREMENT PRIMARY KEY,
+      provider_id VARCHAR(64)  NOT NULL,
+      model_id    VARCHAR(64)  NULL,
+      tier        VARCHAR(16)  NULL,
+      limit_n     INT          NOT NULL,
+      window_s    INT          NOT NULL,
+      enabled     TINYINT      NOT NULL DEFAULT 1,
+      created_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at  DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+      KEY idx_provider (provider_id),
+      KEY idx_model (provider_id, model_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+            conn.commit()
+        logger.info("[db] ensured provider_rate_limits table")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[db] ensure_provider_rate_limits_table failed: %s", e)
