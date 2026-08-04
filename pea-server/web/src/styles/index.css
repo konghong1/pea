@@ -9508,3 +9508,248 @@ html:not(.dark) .tne-color-dot {
   border-color: rgba(0, 0, 0, 0.15);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * pea-search-popover — 画布内统一搜索弹层
+ * 设计要点：
+ * - Portal 渲染，fixed 居中浮层；全屏透明 backdrop（点击外区域关闭）
+ * - 大圆角 + 毛玻璃 + 厚重投影，区分于画布与节点
+ * - 输入框无边框以融入浮层；类别标签栏横向滑动；结果列表虚拟高度
+ * - active 项配 brand-soft 背景 + 4px 左边线，匹配 SidePanel 选中风格
+ * - dark mode 自动反色；高对比度 / 可访问 focus ring
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.pea-search-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  animation: pea-search-fade 0.18s ease-out;
+}
+@keyframes pea-search-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.pea-search-popover {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(70vh, 680px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  background: var(--pea-bg-panel);
+  border: 1px solid var(--pea-border);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.35),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  animation: pea-search-pop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pea-search-pop {
+  from { transform: translateY(-8px) scale(0.985); opacity: 0; }
+  to   { transform: translateY(0)    scale(1);     opacity: 1; }
+}
+.pea-search-input-wrap {
+  padding: 14px 16px 10px 16px;
+  border-bottom: 1px solid var(--pea-border);
+}
+.pea-search-input-wrap .ant-input-affix-wrapper {
+  background: var(--pea-bg-elevated);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.pea-search-input-wrap .ant-input-affix-wrapper:focus-within {
+  box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.25);
+}
+.pea-search-input-icon {
+  color: var(--pea-text-muted);
+}
+
+/* 类别标签栏：自然换行，无横向滚动条；active 用 brand 描边 + 浅 brand 背景 */
+.pea-search-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 4px;
+  padding: 10px 14px 8px 14px;
+  border-bottom: 1px solid var(--pea-border);
+}
+.pea-search-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--pea-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+.pea-search-tab:hover {
+  background: var(--pea-bg-elevated);
+  color: var(--pea-text-primary);
+}
+.pea-search-tab.active {
+  background: rgba(31, 162, 220, 0.12);
+  border-color: rgba(31, 162, 220, 0.45);
+  color: var(--pea-brand);
+  font-weight: 600;
+}
+.pea-search-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+}
+.pea-search-tab-label {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+/* 结果 meta 行 */
+.pea-search-result-meta {
+  padding: 8px 16px 4px 16px;
+  font-size: 11px;
+  color: var(--pea-text-muted);
+  letter-spacing: 0.02em;
+}
+
+/* 结果列表 */
+.pea-search-result-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 4px 8px 10px 8px;
+  scrollbar-width: thin;
+}
+.pea-search-result-list::-webkit-scrollbar {
+  width: 6px;
+}
+.pea-search-result-list::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.3);
+  border-radius: 3px;
+}
+.pea-search-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  margin: 2px 0;
+  border-radius: 10px;
+  background: transparent;
+  border: none;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pea-search-item:hover {
+  background: var(--pea-bg-elevated);
+}
+.pea-search-item.active {
+  background: rgba(31, 162, 220, 0.14);
+  border-left-color: var(--pea-brand);
+}
+.pea-search-item-thumb {
+  position: relative;
+  flex: 0 0 auto;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  background: var(--pea-bg-elevated);
+  border: 1px solid var(--pea-border);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pea-search-item-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.pea-search-item-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.pea-search-item-thumb-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 18px;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+  background: linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0) 50%,
+    rgba(0, 0, 0, 0.28) 100%
+  );
+  pointer-events: none;
+}
+.pea-search-item-icon-fallback {
+  color: var(--pea-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+.pea-search-item-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pea-search-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pea-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+.pea-search-item-sub {
+  font-size: 12px;
+  color: var(--pea-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+.pea-search-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--pea-text-muted);
+}
+
+/* 当 result/meta 配色与暗色对比度不足时强化边框，仅在暗色主题下启用更柔和的高光 */
+html.dark .pea-search-popover {
+  background: rgba(28, 28, 36, 0.96);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+}
+html.dark .pea-search-input-wrap .ant-input-affix-wrapper {
+  background: rgba(255, 255, 255, 0.04);
+}
+html.dark .pea-search-input-wrap .ant-input,
+html.dark .pea-search-input-wrap .ant-input-affix-wrapper > input {
+  color: #f5f5f5;
+}
+html.dark .pea-search-input-wrap .ant-input::placeholder {
+  color: rgba(255, 255, 255, 0.35) !important;
+}

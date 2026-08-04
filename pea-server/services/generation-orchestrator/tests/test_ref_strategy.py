@@ -14,11 +14,18 @@ sys.path.insert(0, "/app")
 from unittest import mock
 
 from app.param_adapters import (
+    AGNES_REF_BUDGET,
+    UNLIMITED_REF_BUDGET,
     AgnesImageAdapter,
     Base64InlineStrategy,
+    FixedRefBudget,
     GenericOpenAIImageAdapter,
     PublicUrlStrategy,
+    RefImageBudget,
+    UnlimitedRefBudget,
     _normalize_refs,
+    get_ref_budget,
+    register_ref_budget,
 )
 
 
@@ -105,23 +112,20 @@ def test_base64_inline_over_threshold_url_fallback():
     """超阈值 + 降采样不可用 -> 走连接兜底（上传公开存储返回公网 URL）。"""
     import app.param_adapters as pa
 
-    saved = pa.MAX_REF_IMAGE_BYTES
-    pa.MAX_REF_IMAGE_BYTES = 2  # 任意 >2 字节的 data URI 都算超阈值
-    try:
-        class FakeProvider:
-            def resolve_refs(self, refs):
-                return ["https://cdn.example.com/gen/fallback.png"]
+    class FakeProvider:
+        def resolve_refs(self, refs):
+            return ["https://cdn.example.com/gen/fallback.png"]
 
-        with mock.patch.object(pa, "_downsample_image_bytes", side_effect=ImportError("no PIL")):
-            s = Base64InlineStrategy()
-            out = s.resolve(["data:image/png;base64,AAAA"], provider=FakeProvider())
-        assert out == ["https://cdn.example.com/gen/fallback.png"], out
-    finally:
-        pa.MAX_REF_IMAGE_BYTES = saved
+    # "AAAA" -> 3 字节原图, 线上 4 字节; 预算 inline = 4-1 = 3 -> 必超阈值
+    tiny = FixedRefBudget("tiny", upstream_limit_bytes=4, headroom_bytes=1)
+    with mock.patch.object(pa, "_downsample_image_bytes", side_effect=ImportError("no PIL")):
+        s = Base64InlineStrategy(tiny)
+        out = s.resolve(["data:image/png;base64,AAAA"], provider=FakeProvider())
+    assert out == ["https://cdn.example.com/gen/fallback.png"], out
 
 
 def test_base64_inline_over_threshold_downsamples_inline():
-    """超阈值 + 有 Pillow -> 降采样后仍以 data: 内联（保隐私, 字节 ≤ 上限）。"""
+    """超阈值 + 有 Pillow -> 降采样后仍以 data: 内联（保隐私, 线上字节 ≤ 预算）。"""
     import app.param_adapters as pa
 
     try:
@@ -134,12 +138,123 @@ def test_base64_inline_over_threshold_downsamples_inline():
     Image.new("RGB", (4000, 4000), (255, 255, 255)).save(buf, format="PNG")
     big = buf.getvalue()
     data_uri = "data:image/png;base64," + base64.b64encode(big).decode()
-    s = Base64InlineStrategy()
+    budget = FixedRefBudget("small", upstream_limit_bytes=64 * 1024, headroom_bytes=8 * 1024)
+    assert not budget.accepts_inline(len(big)), "用例前提: 原图应超预算"
+    s = Base64InlineStrategy(budget)
     # 无 provider -> 不能 URL 兜底, 只能内联降采样
     out = s.resolve([data_uri], provider=None)
     assert out and out[0].startswith("data:"), out
     _m, b = pa._split_data_uri(out[0])
-    assert len(base64.b64decode(b)) <= pa.MAX_REF_IMAGE_BYTES, "应降采样到上限内"
+    assert budget.accepts_inline(len(base64.b64decode(b))), "应降采样到预算内"
+
+
+# ── 参考图预算适配层 (RefImageBudget) ────────────────────────────────────────
+def test_default_strategy_is_unlimited():
+    """默认策略不设限: 超大图原样内联, 不降采样、不改一个字节。"""
+    huge = "data:image/png;base64," + "A" * (12 * 1024 * 1024)
+    s = Base64InlineStrategy()
+    assert isinstance(s.budget, UnlimitedRefBudget), s.budget
+    assert s.resolve([huge], provider=None) == [huge], "无上限时必须原样透传"
+
+
+def test_unlimited_budget_contract():
+    b = UNLIMITED_REF_BUDGET
+    assert b.inline_wire_limit() is None
+    assert b.source_bytes_limit() is None
+    assert b.enforced is False
+    assert b.downsample_target_bytes() is None
+    assert b.accepts_inline(999 * 1024 * 1024) and b.accepts_source(999 * 1024 * 1024)
+
+
+def test_agnes_budget_contract():
+    """预置 10MB 预算的契约（**当前未接线**, 仅备用）: 内联按线上字节留 1MB headroom -> 9MB。
+
+    保留此用例是为了锁住 FixedRefBudget 的换算语义 —— 将来某家确认有硬限、把这个预算接上去时,
+    base64 膨胀不会再被漏算。
+    """
+    b = AGNES_REF_BUDGET
+    assert b.enforced is True
+    assert b.inline_wire_limit() == 9 * 1024 * 1024
+    assert b.source_bytes_limit() == 10 * 1024 * 1024
+    assert b.downsample_target_bytes() == int(9 * 1024 * 1024 * 3 / 4)
+    # 回归护栏: 7.7MB 原图 base64 后 10.27MB, 旧实现按解码字节会误放行
+    assert not b.accepts_inline(int(7.7 * 1024 * 1024)), "base64 膨胀必须计入"
+    assert b.accepts_inline(6 * 1024 * 1024)
+    # URL 投递不经 base64 膨胀, 按原始字节判
+    assert b.accepts_source(int(9.5 * 1024 * 1024))
+    assert not b.accepts_source(int(10.5 * 1024 * 1024))
+
+
+def test_fixed_budget_rejects_bad_headroom():
+    for bad in (1024, 2048):
+        try:
+            FixedRefBudget("bad", upstream_limit_bytes=1024, headroom_bytes=bad)
+            assert False, "headroom >= upstream 应该抛 ValueError"
+        except ValueError:
+            pass
+
+
+def test_fixed_budget_source_opt_out():
+    """某些家只限制请求体大小 -> applies_to_source=False 时 URL 投递不受限。"""
+    b = FixedRefBudget("inline-only", upstream_limit_bytes=4 * 1024 * 1024,
+                       applies_to_source=False)
+    assert b.source_bytes_limit() is None
+    assert b.accepts_source(100 * 1024 * 1024)
+    assert b.inline_wire_limit() == 3 * 1024 * 1024
+
+
+def test_strategy_rejects_non_budget():
+    try:
+        Base64InlineStrategy(budget=9 * 1024 * 1024)  # type: ignore[arg-type]
+        assert False, "应拒绝非 RefImageBudget 实现"
+    except TypeError:
+        pass
+
+
+def test_no_provider_declares_limit():
+    """★ 核心断言: 当前**没有任何**适配器启用字节护栏（含 Agnes —— 实测无 10MB 硬限）。"""
+    assert AgnesImageAdapter().ref_strategy.budget.enforced is False, \
+        "Agnes 实测无 10MB 硬限, 不应启用护栏"
+    assert GenericOpenAIImageAdapter().ref_strategy.budget.enforced is False
+
+
+def test_budget_registry():
+    assert get_ref_budget("agnes") is UNLIMITED_REF_BUDGET, "Agnes 已撤下护栏"
+    assert get_ref_budget("gemini") is UNLIMITED_REF_BUDGET, "未注册者不限"
+    assert get_ref_budget(None) is UNLIMITED_REF_BUDGET
+
+    # 注册表本身仍可用（大小写不敏感）, 将来实测确认某家有硬限时一行登记即可。
+    register_ref_budget("Case-Test", AGNES_REF_BUDGET)
+    assert get_ref_budget("case-test") is AGNES_REF_BUDGET
+    assert get_ref_budget("CASE-TEST") is AGNES_REF_BUDGET, "key 应大小写不敏感"
+
+    custom = FixedRefBudget("demo", upstream_limit_bytes=5 * 1024 * 1024)
+    register_ref_budget("demo-provider", custom)
+    assert get_ref_budget("demo-provider") is custom
+    try:
+        register_ref_budget("nope", object())  # type: ignore[arg-type]
+        assert False, "应拒绝非 RefImageBudget 实现"
+    except TypeError:
+        pass
+
+
+def test_budget_is_an_interface():
+    """RefImageBudget 是抽象接口: 不实现全部抽象方法不能实例化。"""
+    try:
+        RefImageBudget()  # type: ignore[abstract]
+        assert False, "抽象接口不应可直接实例化"
+    except TypeError:
+        pass
+
+    class Partial(RefImageBudget):
+        def inline_wire_limit(self):
+            return 1
+
+    try:
+        Partial()  # type: ignore[abstract]
+        assert False, "缺少 source_bytes_limit 实现不应可实例化"
+    except TypeError:
+        pass
 
 
 if __name__ == "__main__":
@@ -154,6 +269,15 @@ if __name__ == "__main__":
         test_normalize_image_params_stores_raw_refs,
         test_base64_inline_over_threshold_url_fallback,
         test_base64_inline_over_threshold_downsamples_inline,
+        test_default_strategy_is_unlimited,
+        test_unlimited_budget_contract,
+        test_agnes_budget_contract,
+        test_fixed_budget_rejects_bad_headroom,
+        test_fixed_budget_source_opt_out,
+        test_strategy_rejects_non_budget,
+        test_no_provider_declares_limit,
+        test_budget_registry,
+        test_budget_is_an_interface,
     ]
     failed = 0
     for t in tests:

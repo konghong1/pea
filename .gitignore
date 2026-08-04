@@ -59,7 +59,25 @@ verify/**/__pycache__/
 
 # ===== WorkBuddy / agent working artifacts (NEVER commit) =====
 # 记忆、技能、运行产物、变更概览等均不进版本管理；只保留项目本身的源码与文档
+# ★ 约定：agent 产出的报告/概览/排查记录一律写入 .workbuddy/artifacts/，禁止落在仓库根目录。
 .workbuddy/
 docs/overviews/
 overview_*.md
 pea-server/*_overview.md
+
+# 兜底：仓库根目录下的一切报告类产物（前导 / 表示仅匹配根目录，不影响子目录同名源码）
+/overview.md
+/*-overview.md
+/*_overview.md
+/*-report.md
+/*_report.md
+/*-rootcause.md
+/*_rootcause.md
+/*-analysis.md
+/*_analysis.md
+/*-summary.md
+/*_summary.md
+# 调试期导出的画布数据 dump
+/canvas_*.json
+# 说明：一次性生成/调试脚本请放 verify/（验证脚本）或 .workbuddy/artifacts/（临时产物），
+#      不要留在仓库根目录。

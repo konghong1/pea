@@ -434,7 +434,11 @@ export default function EcommerceGallery() {
       const res = await uploadImages(project.id, files)
       if (Array.isArray(res) && res[0]) setProject(res[0])
       message.success(`已上传 ${files.length} 张产品图`)
-    } catch (e) { /* 已提示 */ }
+    } catch (e: any) {
+      // 超出 10MB / 本地存储配额不足等均由 uploadImages 抛出明确文案，
+      // 旧实现在这里静默吞掉（注释写"已提示"但实际无人提示），用户只看到什么都没发生。
+      message.error(e?.message || '产品图上传失败，请重试')
+    }
   }
 
   const handleDeleteImage = async (imageId: number) => {
@@ -1068,7 +1072,7 @@ export default function EcommerceGallery() {
                 </svg>
               </div>
               <h4>拖拽或点击上传</h4>
-              <p>支持 JPG / PNG / WEBP，单张 ≤ 10MB</p>
+              <p>支持 JPG / PNG / WEBP，单张 ≤ 10MB（大图自动压缩）</p>
               <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => handleFiles(e.target.files)} />
             </div>
             {!warnClosed && (

@@ -1,9 +1,9 @@
 # Generation Orchestrator (FastAPI) 镜像
 FROM python:3.12-slim
 
-# 构建参数: 默认用国内 PyPI 镜像 (海外部署可覆盖:
+# 构建参数: 默认用国内 PyPI 镜像 (清华源偶发 403, 改用阿里云; 海外部署可覆盖:
 #   docker compose build --build-arg PIP_INDEX_URL=https://pypi.org/simple)
-ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 ENV PIP_INDEX_URL=$PIP_INDEX_URL \
     PIP_TIMEOUT=120 \
     PIP_RETRIES=10

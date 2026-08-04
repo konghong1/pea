@@ -21,6 +21,7 @@ import abc
 import base64
 import logging
 import re
+import requests
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse, unquote
@@ -40,14 +41,27 @@ _TIER_TO_PIXELS = {
 # Agnes 官方白名单 ratio (其它值丢弃并告警, 避免 400)
 _AGNES_RATIOS = {"1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"}
 
-# 参考图单图字节上限（解码后原始字节数）。
-# 上游（Agnes / 火山方舟 图像 API）硬限制单张输入图 ≤ 10MB（10485760 bytes）；
-# 此处取 8MB 留 2MB headroom，避免 JPEG 元信息/边界抖动触发上游 10MB 上限。
-# ★ 单一真相源：UI / 客户端 / 后端三处应共用此值（前端 EcommerceGallery 文案 10MB、
-# galleryApi MAX_FILE_BYTES=8MB 后续应与此对齐，避免数字分裂）。
-MAX_REF_IMAGE_BYTES = 8 * 1024 * 1024
-# 降采样目标：比上限再小一档，确保 re-encode 后稳稳低于上限。
-_REF_DOWNSAMPLE_TARGET_BYTES = int(MAX_REF_IMAGE_BYTES * 0.8)
+# ─────────────────────────────────────────────────────────────────────────────
+# 参考图字节预算：预置常量（当前**全部提供商均不启用**，仅备用）
+# ─────────────────────────────────────────────────────────────────────────────
+# ★ 现状（2026-08-04 实测复核）：**没有任何提供商启用字节护栏**，包括 Agnes。
+#   曾据「图片超过10m」报错推断 Agnes 硬限单图 ≤ 10MB，后经实测：>10MB 的图同样能正常出图，
+#   该报错并非稳定的尺寸硬限。既然限制不成立，就不替上游猜规矩 —— 全部走
+#   UNLIMITED_REF_BUDGET，由各家上游自行判定并返回真实错误。
+#
+#   下面的数字**仅作为预置参数保留**，供将来某家确认存在硬限制时一行接线启用：
+#       ref_strategy = Base64InlineStrategy(AGNES_REF_BUDGET)        # 适配器上声明
+#       register_ref_budget("some-provider", FixedRefBudget(...))    # 或注册表登记
+#
+#   若将来真要启用，务必记住这条教训：护栏必须按「线上字节数」判断（见 _base64_len），
+#   不能用解码字节 —— 内联参考图以 base64 data URI 放在 JSON 体里发送，base64 会把原始
+#   字节膨胀约 33%（线上 = 原图 × 4/3）。历史实现按解码字节卡 8MB，而 8MB 原图 → 线上
+#   ~10.67MB，反而打穿了当时以为存在的 10MB 上限。
+AGNES_UPSTREAM_REF_IMAGE_LIMIT_BYTES = 10 * 1024 * 1024
+AGNES_REF_IMAGE_HEADROOM_BYTES = 1 * 1024 * 1024
+
+# 向后兼容别名（历史代码/测试可能引用；新代码请改用 adapter.ref_strategy.budget）。
+UPSTREAM_REF_IMAGE_LIMIT_BYTES = AGNES_UPSTREAM_REF_IMAGE_LIMIT_BYTES
 
 
 # 匹配内部/不可达 URL 的主机名模式: localhost, 私有 IP, 容器短名, 非标准端口
@@ -283,6 +297,204 @@ def _data_uri_of(raw: bytes, mime: str = "image/jpeg") -> str:
     return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
+def _base64_len(n: int) -> int:
+    """base64 编码后（含 padding）的字节数：原图 n 字节 → 线上 (n+2)//3*4 字节。
+
+    内联参考图以 data: URI 发送，上游实际收到的就是这串 base64 文本，故护栏必须按它判断，
+    否则会漏算 33% 膨胀（旧实现 8MB 原图 → 10.67MB 线上 → 打穿上游 10MB 上限）。
+    """
+    return ((n + 2) // 3) * 4
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 参考图字节预算适配层 (SPI)
+# ─────────────────────────────────────────────────────────────────────────────
+class RefImageBudget(abc.ABC):
+    """接口: 单张参考图的字节预算契约（每家提供商各自实现, 互不影响）。
+
+    为什么要这层:
+      各家上游对「单张输入图多大」的规矩完全不同, 而且**计量口径也不同**:
+        - 内联 base64 投递: 上游数的是请求体里那串 base64 文本 → 「线上字节」(= 原图 × 4/3);
+        - 公网 URL 投递:    上游自己去下载 → 数的是「原始文件字节」(无膨胀)。
+      早期把 Agnes 的 10MB 写成模块级常量, 被所有 provider 共用, 等于「一把尺子量五家」:
+      对上限更宽的家白白降采样掉画质, 对上限更严的家又拦不住。
+      故把「预算」抽象成接口, 由适配器在类上显式声明 —— 谁的规矩谁负责, 新接提供商时
+      有明确的填空位, 不会默认继承别家的数字。
+
+    契约 (对应 Java interface 的抽象方法):
+      - inline_wire_limit():   内联 base64 的线上字节上限; None = 不限
+      - source_bytes_limit():  URL 投递时的原始文件字节上限; None = 不限
+    其余方法是带默认实现的便利方法 (对应 Java 8 default method), 通常无需覆写。
+    """
+
+    #: 用于日志/诊断的可读名称
+    name: str = "unnamed"
+
+    @abc.abstractmethod
+    def inline_wire_limit(self) -> int | None:
+        """内联 base64 data URI 的**线上字节**上限; 返回 None 表示不限。"""
+        ...
+
+    @abc.abstractmethod
+    def source_bytes_limit(self) -> int | None:
+        """公网 URL 投递时上游按**原始文件字节**判定的上限; 返回 None 表示不限。"""
+        ...
+
+    # ── default methods ──────────────────────────────────────────────────────
+    @property
+    def enforced(self) -> bool:
+        """是否需要执行护栏。两个上限都为 None 时可整条跳过, 省掉降采样/HEAD 预检开销。"""
+        return self.inline_wire_limit() is not None or self.source_bytes_limit() is not None
+
+    def accepts_inline(self, raw_bytes_len: int) -> bool:
+        """给定原图解码字节数, 判断内联投递是否在预算内（内部换算 base64 膨胀）。"""
+        limit = self.inline_wire_limit()
+        return limit is None or _base64_len(raw_bytes_len) <= limit
+
+    def accepts_source(self, source_bytes_len: int) -> bool:
+        """给定原始文件字节数, 判断 URL 投递是否在预算内。"""
+        limit = self.source_bytes_limit()
+        return limit is None or source_bytes_len <= limit
+
+    def downsample_target_bytes(self) -> int | None:
+        """降采样目标（原图像素字节上限）。按 base64 膨胀反推, 保证重编码后线上 ≤ 预算。
+
+        无内联上限时返回 None —— 调用方据此跳过降采样, 保留原始画质。
+        """
+        limit = self.inline_wire_limit()
+        return None if limit is None else int(limit * 3 / 4)
+
+    def __repr__(self) -> str:  # pragma: no cover - 诊断用
+        return f"<{type(self).__name__} name={self.name} inline={self.inline_wire_limit()} src={self.source_bytes_limit()}>"
+
+
+class UnlimitedRefBudget(RefImageBudget):
+    """实现 A（默认 / NullObject）: 不设限, 由上游自行判定。
+
+    ★ 除 Agnes 外的所有提供商都用它 —— 我们不替上游猜它的规矩:
+      猜松了拦不住（照样报错, 还多绕一圈）, 猜紧了白降画质（更糟, 且用户无感知）。
+      让上游返回明确错误, 远好过我们静默压缩。
+    """
+
+    name = "unlimited"
+
+    def inline_wire_limit(self) -> int | None:
+        return None
+
+    def source_bytes_limit(self) -> int | None:
+        return None
+
+
+class FixedRefBudget(RefImageBudget):
+    """实现 B: 固定上限（用于确有硬限制、且已实测确认的提供商）。
+
+    Args:
+        name: 诊断用名称, 建议用提供商 key。
+        upstream_limit_bytes: 上游文档/实测的硬上限。
+        headroom_bytes: 预留余量, 避免 JPEG 元信息/边界抖动刚好踩线; 默认 1MB。
+        applies_to_source: 上游对「URL 投递」是否同样按此上限判定。
+            Agnes 两种投递都判, 故为 True; 某些家只限制请求体大小时应设 False。
+    """
+
+    def __init__(
+        self,
+        name: str,
+        upstream_limit_bytes: int,
+        headroom_bytes: int = 1024 * 1024,
+        applies_to_source: bool = True,
+    ) -> None:
+        if headroom_bytes >= upstream_limit_bytes:
+            raise ValueError("headroom_bytes 必须小于 upstream_limit_bytes")
+        self.name = name
+        self.upstream_limit_bytes = upstream_limit_bytes
+        self.headroom_bytes = headroom_bytes
+        self.applies_to_source = applies_to_source
+
+    def inline_wire_limit(self) -> int | None:
+        return self.upstream_limit_bytes - self.headroom_bytes
+
+    def source_bytes_limit(self) -> int | None:
+        # URL 投递由上游自行下载, 不经 base64 膨胀, 故直接按硬上限判（无需 headroom）。
+        return self.upstream_limit_bytes if self.applies_to_source else None
+
+
+#: 默认预算：不限。所有未显式声明的提供商都用它。
+UNLIMITED_REF_BUDGET = UnlimitedRefBudget()
+
+#: 预置（**当前未启用**）：按「单图 ≤ 10MB 线上字节 + 1MB headroom」= 内联预算 9MB。
+#  实测 Agnes 并无该硬限, 故不接线; 保留此实例是为了将来某家确认有硬限时能一行启用：
+#      class XxxAdapter(...):
+#          ref_strategy = Base64InlineStrategy(AGNES_REF_BUDGET)
+AGNES_REF_BUDGET = FixedRefBudget(
+    name="agnes",
+    upstream_limit_bytes=AGNES_UPSTREAM_REF_IMAGE_LIMIT_BYTES,
+    headroom_bytes=AGNES_REF_IMAGE_HEADROOM_BYTES,
+)
+
+#: 预算注册表（类 Java SPI）: provider key -> 预算实现。未注册者一律 UNLIMITED_REF_BUDGET。
+#  ★ 当前**故意为空**: 没有任何提供商被证实存在字节硬限, 一律交上游判定。
+#    将来实测确认某家有限制时, 在此登记或在其适配器上直接声明即可。
+_REF_BUDGET_REGISTRY: dict[str, RefImageBudget] = {}
+
+
+def register_ref_budget(provider_key: str, budget: RefImageBudget) -> None:
+    """注册某提供商的参考图预算。新接入的提供商若确有硬限制, 在此登记（或直接在适配器上声明）。"""
+    if not isinstance(budget, RefImageBudget):
+        raise TypeError("budget 必须实现 RefImageBudget 接口")
+    _REF_BUDGET_REGISTRY[provider_key.lower()] = budget
+
+
+def get_ref_budget(provider_key: str | None) -> RefImageBudget:
+    """按提供商 key 取预算; 未注册返回 UNLIMITED_REF_BUDGET（不限）。"""
+    if not provider_key:
+        return UNLIMITED_REF_BUDGET
+    return _REF_BUDGET_REGISTRY.get(provider_key.lower(), UNLIMITED_REF_BUDGET)
+
+
+def _guard_url_ref(url: str, provider: Any = None,
+                   budget: RefImageBudget = UNLIMITED_REF_BUDGET) -> str:
+    """公网 URL 参考图的大小护栏（fail-open）。
+
+    上游按「原始文件字节数」判上限（URL 图由上游自行下载，不经过 base64 膨胀，
+    故直接比原始大小）。能拿到 Content-Length 且超限时，下载 → Pillow 降采样 →
+    经 provider.resolve_refs 转存为公网 URL 再回传；拿不到大小 / 降采样失败 / 任何异常
+    则原样透传，交上游最终判定 —— 绝不误伤正常图。
+
+    ★ budget 无 source 上限时（默认，即 Agnes 之外的所有提供商）直接透传：
+      连 HEAD 预检都不发，零额外开销、零画质损失。
+    仅当 provider 可用（图片适配器总会带 provider）时才做转存兜底；否则超限也透传。
+    """
+    src_limit = budget.source_bytes_limit()
+    if src_limit is None:
+        return url
+    target = budget.downsample_target_bytes()
+    try:
+        head = requests.head(
+            url, timeout=(settings.provider_http_connect_timeout_s, 20),
+            allow_redirects=True, proxies={"http": None, "https": None},
+        )
+        cl = head.headers.get("Content-Length")
+        if cl and int(cl) > src_limit:
+            resp = requests.get(
+                url, timeout=(settings.provider_http_connect_timeout_s, 60),
+                proxies={"http": None, "https": None},
+            )
+            resp.raise_for_status()
+            raw = resp.content
+            if len(raw) <= src_limit:
+                return url  # HEAD 报大、实际小（压缩传输）则透传
+            smaller = _downsample_image_bytes(raw, target or src_limit)
+            if provider is not None and smaller:
+                rehosted = provider.resolve_refs([_data_uri_of(smaller, "image/jpeg")])
+                if rehosted:
+                    logger.info("[refs] URL 参考图超阈值已下载降采样并转存 (%d bytes -> %s)",
+                                len(raw), rehosted[0][:120])
+                    return rehosted[0]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[refs] URL 参考图大小预检失败(透传交上游判定): %s | %s", url[:120], exc)
+    return url
+
+
 def _downsample_image_bytes(raw: bytes, max_bytes: int) -> bytes:
     """把图片原始字节降采样/重编码到 ≤ max_bytes（输出 JPEG）。
 
@@ -321,21 +533,35 @@ class Base64InlineStrategy(ReferenceResolutionStrategy):
     - data: URI 未超上限时原样保留;
     - 内部/相对 URL (localhost / 私有 IP / /media/<key>) 经编排器自有 MinIO 客户端
       直下, 转 base64 data URI; 外部模型直接消费内联 base64;
-    - 公网 http(s) URL 原样保留 (模型自行拉取);
-    - ★ 边界护栏（2026-08-04 新增）: 单张解码后字节 > MAX_REF_IMAGE_BYTES 时,
-      先用 Pillow 降采样到 ≤ 上限（仍内联, 保隐私, 真正打穿上游 10MB 上限）；
-      若降采样后仍超限（极端长图）或 Pillow 不可用, 则退化为公网 URL 投递
-      （provider.resolve_refs —— 复用视频链路的 store_bytes 上传 + 可达性预检）,
-      即用户要的「照片大于阈值就走连接兜底」。
+    - 公网 http(s) URL 走 fail-open 大小预检 (_guard_url_ref): 已知超限才下载+降采样+转存,
+      拿不到大小则原样透传交上游判定;
+    - ★ 边界护栏由构造注入的 RefImageBudget 决定, **不再硬编码**:
+        Base64InlineStrategy()                    -> 不限 (默认, **当前全部提供商**)
+        Base64InlineStrategy(AGNES_REF_BUDGET)    -> 内联线上 ≤ 9MB / 源文件 ≤ 10MB (备用)
+      有上限时: 内联图按「线上 base64 字节」判断（见 _base64_len）而非解码字节 —— 这是
+      base64 膨胀 33% 的必然要求（8MB 原图 → 线上 ~10.67MB）; 超预算先用 Pillow 降采样
+      （仍内联, 保隐私）, 降采样后仍超限或 Pillow 不可用则退化为公网 URL 投递
+      （provider.resolve_refs —— 复用视频链路的 store_bytes 上传 + 可达性预检）。
+      不限时: 原图原样内联, 不解码、不降采样、不发 HEAD —— 零开销零画质损失。
     仅触发 URL 兜底分支时才调用 storage.store_bytes 上传公开存储。
     """
 
+    def __init__(self, budget: RefImageBudget = UNLIMITED_REF_BUDGET) -> None:
+        if not isinstance(budget, RefImageBudget):
+            raise TypeError("budget 必须实现 RefImageBudget 接口")
+        self.budget = budget
+
     def resolve(self, refs: Any, provider: Any = None) -> list[str]:
+        budget = self.budget
+        normalized = _normalize_refs(refs)
+        # 快路径: 无任何上限 -> 原样投递, 不解码/不降采样/不发 HEAD 预检。
+        if not budget.enforced:
+            return normalized
         out: list[str] = []
-        for r in _normalize_refs(refs):
+        for r in normalized:
             if not r.startswith("data:"):
-                # 公网 URL: 直接透传, 由模型自行拉取（不在此下载做大小预检）。
-                out.append(r)
+                # 公网 URL: fail-open 大小预检（已知超限才下载+降采样+转存；拿不到大小则透传）。
+                out.append(_guard_url_ref(r, provider, budget))
                 continue
             # data: URI: 解析解码后字节数
             try:
@@ -345,16 +571,21 @@ class Base64InlineStrategy(ReferenceResolutionStrategy):
                 # 非标准 data URI 原样保留, 交给上游判错。
                 out.append(r)
                 continue
-            if len(raw) <= MAX_REF_IMAGE_BYTES:
+            # 按「线上 base64 字节」判断（关键修复：旧实现按解码字节, 漏算 33% 膨胀打穿上限）。
+            if budget.accepts_inline(len(raw)):
                 out.append(r)
                 continue
             # 超阈值: 先降采样（尽量保内联）
             smaller: bytes | None = None
+            target = budget.downsample_target_bytes()
             try:
-                smaller = _downsample_image_bytes(raw, _REF_DOWNSAMPLE_TARGET_BYTES)
+                if target is not None:
+                    smaller = _downsample_image_bytes(raw, target)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[refs] 参考图降采样失败 (将退化为公网 URL 兜底): %s", exc)
-            if smaller and len(smaller) <= MAX_REF_IMAGE_BYTES:
+            if smaller and budget.accepts_inline(len(smaller)):
+                logger.info("[refs][%s] 内联参考图超预算已降采样 (%d -> %d bytes)",
+                            budget.name, len(raw), len(smaller))
                 out.append(_data_uri_of(smaller, "image/jpeg"))
                 continue
             # 降采样后仍超限 或 不可用 -> 走连接兜底: 上传公开存储, 返回公网 URL
@@ -408,6 +639,8 @@ def _clean_ref_list(refs: Any) -> list[str]:
 
 class ImageParamAdapter:
     # 参考图解析策略: 图片模型默认内联 base64 (不经公网); 视频类需覆写为 PublicUrlStrategy。
+    # ★ 默认预算 = UNLIMITED_REF_BUDGET（不限）: 不替上游猜它的规矩。
+    #   某家确有硬限制时, 在其适配器上显式声明 Base64InlineStrategy(FixedRefBudget(...))。
     ref_strategy: ReferenceResolutionStrategy = Base64InlineStrategy()
 
     def build(self, norm: NormImageParams, provider) -> dict:
@@ -425,6 +658,11 @@ class AgnesImageAdapter(ImageParamAdapter):
       - 图生图 image 放 extra_body.image; 不要传 tags:["img2img"]。
       - response_format 必须在 extra_body 内 (顶层会 400); 但我们直接读 data[0].url,
         且历史行为不发送也能拿到 URL, 故默认不发送以兼容 2.0, 避免回归。
+
+    ★ 大小预算: **不设限**（与其他提供商一致）。曾据「图片超过10m」报错推断 Agnes 硬限
+      单图 ≤ 10MB, 2026-08-04 实测复核未复现（>10MB 亦可正常出图）, 故撤下护栏, 交上游判定。
+      若将来确认确有硬限, 改为 `ref_strategy = Base64InlineStrategy(AGNES_REF_BUDGET)` 即可
+      —— 预算实例与接口都在, 只差这一行。
     """
 
     ref_strategy = Base64InlineStrategy()

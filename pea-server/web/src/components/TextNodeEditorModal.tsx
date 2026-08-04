@@ -20,56 +20,43 @@ interface TextNodeEditorModalProps {
 
 export default function TextNodeEditorModal({ open, initialHtml, onSave, onCancel }: TextNodeEditorModalProps) {
   const [html, setHtml] = useState(initialHtml);
-  const editorRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
   const [saved, setSaved] = useState(true);
   const [wordCount, setWordCount] = useState(0);
 
-  // 打开时把初始 HTML 灌入可编辑区（仅一次）。之后以 DOM 为唯一真源，
-  // 不再用 dangerouslySetInnerHTML 回写，避免每次按键都被 React 重置导致光标跳到行首。
-  useEffect(() => {
-    if (open && editorRef.current) {
-      editorRef.current.innerHTML = initialHtml ?? '';
+  // 回调 ref：编辑区 DOM 真正挂载的瞬间（含 destroyOnClose 重挂载、Portal 异步挂载）立即灌入初始 HTML
+  // 并聚焦。不依赖 [open] effect 的时机——Modal 内容经 Portal 延迟一拍挂载时，普通 effect 里
+  // editorRef.current 可能为 null，innerHTML 写入被整个 if 跳过 → 编辑区空白，而预览区（走 React state
+  // useState(initialHtml)，组件首次挂载时就已拿到文本）照常显示。这正是「编辑区不展示内容、预览却有」的根因。
+  // 用回调 ref 保证「元素一挂载就写入」，彻底消除竞态。仅在元素挂载时执行一次；
+  // 编辑过程中 initialHtml 不变（保存才回写 store），故不会误清空用户正在输入的内容。
+  const setEditorRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      editorRef.current = el;
+      if (!el) return;
+      el.innerHTML = initialHtml ?? '';
       setHtml(initialHtml ?? '');
       setSaved(true);
       requestAnimationFrame(() => {
-        editorRef.current?.focus();
+        el.focus();
         const sel = window.getSelection();
-        if (sel && editorRef.current) {
+        if (sel) {
           const range = document.createRange();
-          range.selectNodeContents(editorRef.current);
+          range.selectNodeContents(el);
           range.collapse(false);
           sel.removeAllRanges();
           sel.addRange(range);
         }
       });
-    }
-    // 仅在打开瞬间初始化；编辑过程中 initialHtml 不变，故不再重置，避免光标跳动
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+    },
+    [initialHtml],
+  );
 
   // 字数统计
   useEffect(() => {
     const text = editorRef.current?.innerText ?? '';
     setWordCount(text.replace(/\s/g, '').length);
   }, [html]);
-
-  // 打开时聚焦编辑器
-  useEffect(() => {
-    if (open && editorRef.current) {
-      // 下一帧聚焦并移动光标到末尾
-      requestAnimationFrame(() => {
-        editorRef.current?.focus();
-        const sel = window.getSelection();
-        if (sel && editorRef.current) {
-          const range = document.createRange();
-          range.selectNodeContents(editorRef.current);
-          range.collapse(false);
-          sel.removeAllRanges();
-          sel.addRange(range);
-        }
-      });
-    }
-  }, [open]);
 
   // 快捷键：Ctrl+S 保存 / Esc 关闭
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -114,7 +101,21 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
 
   /* ── 工具栏按钮 ── */
   const ToolBtn = ({ label, title, onClick }: { label: React.ReactNode; title: string; onClick: () => void }) => (
-    <button type="button" className="tne-tool-btn" title={title} onClick={(e) => { e.preventDefault(); onClick(); }}>
+    <button
+      type="button"
+      className="tne-tool-btn"
+      title={title}
+      // 关键：mousedown 阶段阻止默认，避免点击按钮时编辑区失焦、选区丢失，
+      // 否则紧接的 execCommand(formatBlock/bold...) 因无有效选区而无效（工具栏点了没反应）。
+      onMouseDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onClick={(e) => {
+        e.preventDefault();
+        onClick();
+      }}
+    >
       {label}
     </button>
   );
@@ -218,7 +219,7 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
             <span>编辑</span>
           </div>
           <div
-            ref={editorRef}
+            ref={setEditorRef}
             className="tne-editor-content"
             contentEditable
             suppressContentEditableWarning

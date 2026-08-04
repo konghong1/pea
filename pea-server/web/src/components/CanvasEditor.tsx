@@ -62,7 +62,9 @@ import MaterialPanel from './MaterialPanel';
 import NodeChatPrompt from './NodeChatPrompt';
 import MultiSelectToolbar from './MultiSelectToolbar';
 import SelectionBoundsBox from './SelectionBoundsBox';
+import SearchPopover from './SearchPopover';
 import { acceptsUpstreamInput } from '../lib/nodeSemantics';
+import { resolveConnection } from '../lib/connectionOrientation';
 import {
   NODE_DEF_OF,
   PeaNodeKind,
@@ -1248,9 +1250,40 @@ function Flow() {
       };
     }
   }, [getViewport, setViewport, fitView]);
+
+  // 搜索弹层点击结果 → 移动视口到目标节点中心。
+  // 通过 window CustomEvent 解耦：弹层只 dispatch，由 CanvasEditor 唯一一处 useReactFlow 持有者执行 setViewport。
+  // 这样无论弹层在 Portal 哪个 DOM 子树都能复用同一份 ReactFlow 实例。
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onFocus = (e: Event) => {
+      const id = (e as CustomEvent).detail?.id as string | undefined;
+      if (!id) return;
+      const target = useCanvas.getState().nodes.find((n) => n.id === id);
+      if (!target) return;
+      const w = (target as any).width ?? 260;
+      const h = (target as any).height ?? 160;
+      const cx = target.position.x + w / 2;
+      const cy = target.position.y + h / 2;
+      // 计算把节点中心挪到视口中心所需的偏移；
+      // 公式：viewport.x = -cx * zoom + containerWidth/2 - (w/2)*zoom  → 这里用 transform 反推即可。
+      const vp = getViewport();
+      const zoom = vp.zoom;
+      const container = flowRef.current;
+      const cw = container?.clientWidth ?? window.innerWidth;
+      const ch = container?.clientHeight ?? window.innerHeight;
+      const nextX = cw / 2 - cx * zoom;
+      const nextY = ch / 2 - cy * zoom;
+      setViewport({ x: nextX, y: nextY, zoom }, { duration: 320 });
+    };
+    window.addEventListener('pea:focus-node', onFocus as EventListener);
+    return () => window.removeEventListener('pea:focus-node', onFocus as EventListener);
+  }, [getViewport, setViewport]);
+
   const { message } = App.useApp();
   const saveTimer = useRef<number>();
   const [sideOpen, setSideOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [materialOpen, setMaterialOpen] = useState(false);
   const [libAt, setLibAt] = useState<{ x: number; y: number } | null>(null);
   // 节点落点（独立于弹窗锚点 libAt）：从工具栏/右键打开库时留空 → 走"视口中心 + 避让"，
@@ -1446,7 +1479,9 @@ function Flow() {
       },
     } as PeaNodeData, pos);
     if (newId) {
-      // 单击源(out)连接点：新节点作为下游(target)；单击目标(in)连接点：新节点作为上游(source)。
+      // 单击连接点 → 新建并连接（与拖拽连线是不同的交互）：
+      // 单击源(out)连接点：新节点作为下游(target)；单击目标(in)连接点：新节点作为上游(source)喂我。
+      // 该语义独立于拖拽连线的「起拉节点恒为 source」规则，保持原 handleType 分支，避免回归。
       if (handleType === 'target') {
         onConnect({ source: newId, target: sourceId, sourceHandle: null, targetHandle: 'in' });
       } else {
@@ -1670,7 +1705,7 @@ function Flow() {
 
       <LeftToolbar
         onAdd={() => { setLibAt({ x: (window.innerWidth - 300) / 2, y: window.innerHeight / 2 - 220 }); setSpawnAt(null); }}
-        onSearch={() => setSideOpen((s) => !s)}
+        onSearch={() => setSearchOpen((s) => !s)}
         onFiles={() => setMaterialOpen((s) => !s)}
         onComments={() => toast.info('评论功能即将开放')}
         onHistory={() => toast.info('历史记录功能即将开放')}
@@ -1680,7 +1715,7 @@ function Flow() {
           av?.click();
         }}
         libraryOpen={!!libAt}
-        searchOpen={sideOpen}
+        searchOpen={searchOpen}
         filesOpen={materialOpen}
       />
 
@@ -1693,6 +1728,7 @@ function Flow() {
       )}
 
       {sideOpen && <SidePanel onClose={() => setSideOpen(false)} />}
+      {searchOpen && <SearchPopover onClose={() => setSearchOpen(false)} />}
       {materialOpen && <MaterialPanel onClose={() => setMaterialOpen(false)} />}
       {libAt && (
         <NodeLibrary
@@ -1727,23 +1763,21 @@ function Flow() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={(conn: Connection) => {
-            // 所有入边统一固定到目标节点的 'in' 连接点（左侧），防止 Loose 模式下根据落点吸到
-            // source handle 'out'（右侧）或节点框任意位置（需求1）。
+            const pending = pendingEdge.current;
+            pendingEdge.current = null;
+            if (!pending?.source) return;
             if (!conn.source || !conn.target || conn.source === conn.target) return;
-            const tNode = useCanvas.getState().nodes.find((n) => n.id === conn.target);
+            // 关键修复：连线方向只由「起拉手柄类型」决定，与几何位置/落点命中哪个手柄无关。
+            // 落点节点 = conn 中不是起拉节点的那个端点（ReactFlow 在 onConnect 里已填好两端 id）。
+            const dropNode = conn.source === pending.source ? conn.target : conn.source;
+            const edge = resolveConnection(pending, dropNode);
+            const tNode = useCanvas.getState().nodes.find((n) => n.id === edge.target);
             // 用户上传的素材节点没有 target handle，不接受连线入边。
-            // ⚠️ 此前这里只判 kind === 'image'，视频/音频上传节点虽然隐藏了 handle，
-            //    仍能在 ConnectionMode.Loose 下被连上（视觉与行为不一致的真实缺陷）。
-            //    现统一走 lib/nodeSemantics.acceptsUpstreamInput。
+            // 统一走 lib/nodeSemantics.acceptsUpstreamInput（此前只判 kind==='image'，
+            // 视频/音频上传节点虽隐藏 handle 仍能被 Loose 模式连上，是真实缺陷）。
             if (tNode && !acceptsUpstreamInput(tNode.data)) return;
             connectedThisDrag.current = true;
-            pendingEdge.current = null;
-            onConnect({
-              source: conn.source,
-              target: conn.target,
-              sourceHandle: conn.sourceHandle ?? null,
-              targetHandle: 'in',
-            } as Connection);
+            onConnect(edge);
           }}
           onConnectStart={(_evt: any, params: any) => {
             const me = _evt as MouseEvent | undefined;
@@ -1791,18 +1825,14 @@ function Flow() {
               return;
             }
 
-            // 兜底：极少数场景 onConnect 未识别到目标节点，但鼠标实际释放在其它节点本体上，
-            // 仍解析到 'in' 连接点，保证固定连接点行为一致。
+            // 兜底：onConnect 未触发（鼠标释放在其它节点本体，但不在任何手柄 connectionRadius 内），
+            // 仍按统一规则建边。方向与 onConnect 完全一致——只由「起拉手柄类型」决定，与几何无关。
             if (releasedOnOtherNode && pending?.source) {
-              const tNode = useCanvas.getState().nodes.find((n) => n.id === targetId);
+              const edge = resolveConnection(pending, targetId as string);
+              const tNode = useCanvas.getState().nodes.find((n) => n.id === edge.target);
               // 同 onConnect：所有类型的上传素材节点都拒绝入边（不止图片）。
               if (!tNode || acceptsUpstreamInput(tNode.data)) {
-                onConnect({
-                  source: pending.source,
-                  target: targetId as string,
-                  sourceHandle: pending.handleId ?? null,
-                  targetHandle: 'in',
-                } as Connection);
+                onConnect(edge);
               }
               return;
             }

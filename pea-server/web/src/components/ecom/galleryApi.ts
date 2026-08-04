@@ -238,8 +238,21 @@ function placeholderImg(label: string): string {
 function loadDraft(): GalleryProject | null {
   try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') } catch { return null }
 }
-function saveDraft(p: GalleryProject): void {
-  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(p)) } catch {}
+/**
+ * 持久化草稿。返回是否写入成功。
+ *
+ * ★ localStorage 每源配额仅约 5MB，而草稿里内联着 base64 产品图，极易打爆配额。
+ * 旧实现 `catch {}` 静默吞掉 QuotaExceededError —— UI 显示"上传成功"，刷新后图全丢，
+ * 用户零感知。这里改为返回布尔值 + 明确日志，由调用方决定是否回滚/提示。
+ */
+function saveDraft(p: GalleryProject): boolean {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(p))
+    return true
+  } catch (e) {
+    console.error('[gallery] 草稿持久化失败（多半是超出 localStorage 配额）:', e)
+    return false
+  }
 }
 
 function loadTasks(): GalleryTask[] {
@@ -384,66 +397,134 @@ export function updateProject(projectId: number, data: Partial<Pick<GalleryProje
 
 // ───────────────────────────── 产品图 ─────────────────────────────
 
+// ★ 参考图尺寸预算 —— 单一真相源，与后端 param_adapters.py 对齐。
+//
+// ★ 后端现状（2026-08-04 实测复核）：**没有任何提供商启用字节护栏**，包括 Agnes。
+//   曾据「图片超过10m」报错推断 Agnes 硬限单图 ≤ 10MB，实测未复现，后端已撤下该护栏
+//   （见 param_adapters.py 的 RefImageBudget / UNLIMITED_REF_BUDGET）。
+//   故下面的 10MB **不是上游限制**，只是一道前端可用性闸门：拦住明显异常的巨图，
+//   给用户即时反馈，避免把几十 MB 的原图塞进浏览器解码。
+// 前端这一层的真正瓶颈另有其人：产品图以 base64 内联进草稿存 localStorage，
+// 而 localStorage 每源配额仅约 5MB —— 所以落库预算（STORE_BUDGET_BYTES）必须远小于它。
+
+/** 允许用户选择的单文件上限，与 UI 文案「单张 ≤ 10MB」一致（前端可用性闸门，非上游限制）；超出直接拒绝并明确提示。 */
+export const MAX_PICK_BYTES = 10 * 1024 * 1024
+
+/**
+ * 单张图落草稿的字节预算（按 data URL 字符串长度算，即线上字节）。
+ * 受 localStorage ~5MB 配额约束，收敛到 ~1.1MB/张（一个草稿可稳放 4 张以上）。
+ * 1600px 长边做图生图参考图完全够用，同时把上游 10MB 限制甩开一个数量级，
+ * 后端降采样护栏在正常路径下永不触发。
+ */
+const STORE_BUDGET_BYTES = 1100 * 1024
+
+/** 归一化后的最长边像素上限。 */
+const MAX_EDGE = 1600
+
+/** 探测 canvas 是否支持编码指定 MIME（用于判断 WebP 可用性）。 */
+function canEncode(type: string): boolean {
+  try {
+    const c = document.createElement('canvas')
+    c.width = 1
+    c.height = 1
+    return c.toDataURL(type).startsWith(`data:${type}`)
+  } catch { return false }
+}
+let _webpOk: boolean | null = null
+function webpSupported(): boolean {
+  if (_webpOk === null) _webpOk = canEncode('image/webp')
+  return _webpOk
+}
+
+/**
+ * 把 File 归一化成 ≤ STORE_BUDGET_BYTES 的 data URL。
+ *
+ * - 本身已在预算内 → 原样读取，保留原始画质与透明通道；
+ * - 超预算 → canvas 逐轮降采样 + 降质量，直到进预算（最多 7 轮）。
+ *   输出优先 WebP（同质量下比 JPEG 小 25~35%，且保留 alpha），浏览器不支持时回退 JPEG；
+ *   回退 JPEG 时先铺白底，避免透明区域被渲染成黑块。
+ *
+ * 旧实现的问题：只有 >8MB 才压，且一律压到 800px 强转 JPEG —— 7.9MB 的图原样内联
+ * （base64 后 10.5MB，既打穿上游 10MB 又爆 localStorage），8.1MB 的图却被砍到 800px
+ * 并丢掉透明通道。一个悬崖式阈值造成"画质与可用性同时不可预测"，故改为统一归一化。
+ */
+function normalizeToDataUrl(f: File): Promise<string> {
+  if (f.size <= STORE_BUDGET_BYTES) {
+    return new Promise((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => resolve(placeholderImg(f.name))
+      reader.readAsDataURL(f)
+    })
+  }
+  return new Promise((resolve) => {
+    const objUrl = URL.createObjectURL(f)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(objUrl)
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')
+      if (!ctx) { resolve(placeholderImg(f.name)); return }
+      const mime = webpSupported() ? 'image/webp' : 'image/jpeg'
+      const keepAlpha = mime === 'image/webp' && /^image\/(png|webp|gif|avif)$/i.test(f.type)
+      let scale = Math.min(MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight), 1)
+      let quality = 0.86
+      let out = ''
+      for (let round = 0; round < 7; round++) {
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale))
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale))
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        if (!keepAlpha) {
+          ctx.fillStyle = '#FFFFFF'
+          ctx.fillRect(0, 0, canvas.width, canvas.height)
+        }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+        out = canvas.toDataURL(mime, quality)
+        if (out.length <= STORE_BUDGET_BYTES) break
+        scale *= 0.8
+        if (quality > 0.6) quality -= 0.08
+      }
+      resolve(out || placeholderImg(f.name))
+    }
+    img.onerror = () => { URL.revokeObjectURL(objUrl); resolve(placeholderImg(f.name)) }
+    img.src = objUrl
+  })
+}
+
 export function uploadImages(projectId: number, files: File[]): Promise<GalleryProject[]> {
   const p = ensureDraft()
   const startId = nextId()
-  // 将文件转为 base64 data URL（而非 blob URL），以便持久化到 localStorage 后跨会话/刷新仍可渲染。
-  // 限制单文件 8MB（base64 后约 10.7MB），超出则降级为 placeholder。
-  const MAX_FILE_BYTES = 8 * 1024 * 1024
-  const newImages: GalleryImage[] = []
-  let pending = files.length
 
-  return new Promise((resolve) => {
-    if (pending === 0) { resolve([p]); return }
+  const oversized = files.filter((f) => f.size > MAX_PICK_BYTES)
+  if (oversized.length > 0) {
+    const names = oversized.map((f) => f.name).join('、')
+    return Promise.reject(new Error(
+      `以下图片超过 ${Math.round(MAX_PICK_BYTES / 1024 / 1024)}MB，请压缩后再上传：${names}`,
+    ))
+  }
+  if (files.length === 0) return Promise.resolve([p])
 
-    files.forEach((f, i) => {
-      if (f.size > MAX_FILE_BYTES) {
-        // 超大文件：用缩略图尺寸的 canvas 重绘压缩后再转 base64
-        const img = new Image()
-        const url = URL.createObjectURL(f)
-        img.onload = () => {
-          const canvas = document.createElement('canvas')
-          const maxDim = 800
-          const scale = Math.min(maxDim / img.naturalWidth, maxDim / img.naturalHeight, 1)
-          canvas.width = Math.round(img.naturalWidth * scale)
-          canvas.height = Math.round(img.naturalHeight * scale)
-          const ctx = canvas.getContext('2d')!
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-          URL.revokeObjectURL(url)
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.82)
-          pushImage(startId + i, f.name, dataUrl)
-        }
-        img.onerror = () => {
-          URL.revokeObjectURL(url)
-          pushImage(startId + i, f.name, placeholderImg(f.name))
-        }
-        img.src = url
-      } else {
-        const reader = new FileReader()
-        reader.onload = () => pushImage(startId + i, f.name, reader.result as string)
-        reader.onerror = () => pushImage(startId + i, f.name, placeholderImg(f.name))
-        reader.readAsDataURL(f)
-      }
-    })
-
-    function pushImage(id: number, filename: string, url: string) {
-      newImages.push({
-        id,
-        project_id: projectId,
-        filename,
-        url,
-        original: p.images.length === 0 && newImages.length === 0,
-        order: p.images.length + newImages.length,
-        created_at: nowUtc(),
-      })
-      pending--
-      if (pending === 0) {
-        p.images = [...p.images, ...newImages]
-        p.updated_at = nowUtc()
-        saveDraft(p)
-        resolve([p])
-      }
+  // 用 Promise.all 保序：旧实现按"解码完成先后"入列，导致 order / original（首图）
+  // 在多图并发上传时不确定 —— 谁先解码完谁就成了主图。这里改为严格按选择顺序。
+  return Promise.all(files.map((f) => normalizeToDataUrl(f))).then((urls) => {
+    const baseCount = p.images.length
+    const newImages: GalleryImage[] = urls.map((url, i) => ({
+      id: startId + i,
+      project_id: projectId,
+      filename: files[i].name,
+      url,
+      original: baseCount === 0 && i === 0,
+      order: baseCount + i,
+      created_at: nowUtc(),
+    }))
+    p.images = [...p.images, ...newImages]
+    p.updated_at = nowUtc()
+    if (!saveDraft(p)) {
+      // 回滚内存态，避免"UI 显示成功、刷新即丢"的假成功。
+      p.images = p.images.slice(0, baseCount)
+      throw new Error('浏览器本地存储空间不足，图片未保存。请先删除部分已上传的产品图后重试。')
     }
+    return [p]
   })
 }
 
