@@ -31,6 +31,8 @@ env/
 scripts/shots/
 *.log
 coverage/
+.playwright-cli/
+pea-server/.playwright-cli/
 
 # ===== OS / Editor =====
 .DS_Store
@@ -51,6 +53,8 @@ verify/**/*.json
 verify/**/*.md
 verify/**/*.html
 verify/**/*.txt
+verify/**/*.yaml
+verify/**/*.yml
 verify/**/__pycache__/
 
 # ===== WorkBuddy / agent working artifacts (NEVER commit) =====

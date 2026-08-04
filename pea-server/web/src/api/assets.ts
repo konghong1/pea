@@ -2,6 +2,12 @@ import { api } from './client';
 
 export type AssetScope = 'personal' | 'team';
 
+/** 素材库文件夹变更事件名：任何组件创建/修改/删除文件夹后应 dispatch，供需要同步刷新的面板监听。 */
+export const ASSET_FOLDERS_CHANGED_EVENT = 'pea:asset-folders-changed';
+
+/** 素材库素材列表变更事件名：任何组件创建/收藏/取消收藏/删除/移动素材后应 dispatch，供需要同步刷新的面板监听。 */
+export const ASSET_ASSETS_CHANGED_EVENT = 'pea:asset-assets-changed';
+
 export interface AssetFolder {
   id: number;
   name: string;

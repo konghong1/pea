@@ -1957,7 +1957,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
   position: absolute;
   left: 60px;
   top: 64px;
-  height: calc(100% - 64px);
+  /* 底部留出 80px 安全区，避免覆盖左下角的画布缩放控件（高度约 46px + 间距）。 */
+  height: calc(100% - 64px - 80px);
   width: 280px;
   display: flex;
   flex-direction: column;
@@ -2800,13 +2801,45 @@ html:not(.dark) .pea-node-prompt-echo-params {
   white-space: nowrap;
 }
 
-.pea-material-asset-item .pea-material-more {
+.pea-material-asset-item .pea-material-more,
+.pea-material-asset-item-favorite {
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
-.pea-material-asset-item:hover .pea-material-more {
+.pea-material-asset-item:hover .pea-material-more,
+.pea-material-asset-item:hover .pea-material-asset-item-favorite {
   opacity: 1;
+}
+
+/* 文件夹树内素材行的收藏按钮 */
+.pea-material-asset-item-favorite {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pea-material-asset-item-favorite:hover {
+  background: var(--pea-bg-elevated);
+  color: var(--pea-text-primary);
+}
+
+.pea-material-asset-item-favorite.favorite {
+  color: #fbbf24;
+}
+
+.pea-material-asset-item-favorite:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ===== 缩略图卡片 ===== */
@@ -2935,7 +2968,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   color: #fbbf24;
 }
 
-/* 收藏视图卡片左上角星标 */
+/* 收藏视图卡片左上角星标（可点击取消收藏） */
 .pea-material-fav-star {
   position: absolute;
   top: 6px;
@@ -2947,10 +2980,105 @@ html:not(.dark) .pea-node-prompt-echo-params {
   align-items: center;
   justify-content: center;
   border-radius: 6px;
+  border: none;
   background: rgba(0, 0, 0, 0.45);
   color: #fbbf24;
   font-size: 12px;
-  pointer-events: none;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.pea-material-fav-star:hover {
+  background: rgba(0, 0, 0, 0.65);
+  transform: scale(1.08);
+}
+
+.pea-material-fav-star:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ===== 素材预览 Lightbox ===== */
+.pea-asset-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.88);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  animation: pea-lightbox-fade-in 0.2s ease;
+}
+
+@keyframes pea-lightbox-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pea-asset-lightbox-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  z-index: 2;
+}
+
+.pea-asset-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.pea-asset-lightbox-content {
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.pea-asset-lightbox-content img,
+.pea-asset-lightbox-content video {
+  max-width: 100%;
+  max-height: calc(100vh - 96px);
+  object-fit: contain;
+  display: block;
+}
+
+.pea-asset-lightbox-name {
+  margin-top: 14px;
+  padding: 0 20px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pea-material-thumb.previewable {
+  outline: none;
+}
+
+.pea-material-thumb.previewable:focus-visible .pea-material-thumb-img {
+  outline: 2px solid var(--pea-brand);
+  outline-offset: 2px;
 }
 
 /* ===== 画布底部 Composer (add-pal) ===== */

@@ -22,10 +22,18 @@ import {
   PictureOutlined,
 } from '@ant-design/icons';
 import { App, Button, Dropdown, Input, Modal, Tooltip } from 'antd';
-import { assetsApi, type AssetFolder, type Asset, type AssetScope } from '../api/assets';
+import {
+  assetsApi,
+  ASSET_FOLDERS_CHANGED_EVENT,
+  ASSET_ASSETS_CHANGED_EVENT,
+  type AssetFolder,
+  type Asset,
+  type AssetScope,
+} from '../api/assets';
 import { getFileUrl } from '../api/files';
 import { toast } from '../store/toast';
 import MoveToFolderModal from './MoveToFolderModal';
+import AssetLightbox from './AssetLightbox';
 
 type View = 'root' | 'favorites' | 'folder';
 
@@ -39,11 +47,13 @@ function AssetThumb({
   size = 'sm',
   showLabel = false,
   className = '',
+  onClick,
 }: {
   asset: Asset;
   size?: 'sm' | 'md';
   showLabel?: boolean;
   className?: string;
+  onClick?: (asset: Asset) => void;
 }) {
   const [src, setSrc] = useState(asset.url);
   const isImage = /^image\//.test(asset.content_type);
@@ -63,8 +73,24 @@ function AssetThumb({
     }
   }, [asset.object_key, isImage, isVideo]);
 
+  const handleClick = () => {
+    if (onClick && (isImage || isVideo)) onClick(asset);
+  };
+
   return (
-    <div className={`pea-material-thumb ${size} ${className}`} title={asset.name}>
+    <div
+      className={`pea-material-thumb ${size} ${className} ${onClick && (isImage || isVideo) ? 'previewable' : ''}`}
+      title={asset.name}
+      onClick={handleClick}
+      role={onClick && (isImage || isVideo) ? 'button' : undefined}
+      tabIndex={onClick && (isImage || isVideo) ? 0 : undefined}
+      onKeyDown={(e) => {
+        if ((e.key === 'Enter' || e.key === ' ') && onClick && (isImage || isVideo)) {
+          e.preventDefault();
+          onClick(asset);
+        }
+      }}
+    >
       <div className="pea-material-thumb-img">
         {isImage ? (
           <img src={src} alt="" loading="lazy" onError={handleError} />
@@ -92,6 +118,8 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   const [loading, setLoading] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<number>>(new Set());
   const [moveTarget, setMoveTarget] = useState<Asset | null>(null);
+  const [previewAsset, setPreviewAsset] = useState<Asset | null>(null);
+  const [togglingFavoriteId, setTogglingFavoriteId] = useState<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refreshFolders = useCallback(async () => {
@@ -112,11 +140,13 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
         setAssets(data.filter((a) => a.is_favorite));
       } else if (view === 'folder' && folderId != null) {
         const { data } = await assetsApi.listAssets(scope, folderId, query);
-        setAssets(data);
+        // 收藏素材只在「收藏」入口展示，避免在文件夹视图重复出现
+        setAssets(data.filter((a) => !a.is_favorite));
       } else if (view === 'root') {
-        // 文件库根目录：拉取当前 scope 全部素材，按文件夹分组展示
+        // 文件库根目录：仅展示未分类且未收藏的素材
+        // 已收藏的素材只在「收藏」入口出现，避免与收藏视图重复
         const { data } = await assetsApi.listAssets(scope, null, query);
-        setAssets(data);
+        setAssets(data.filter((a) => !a.is_favorite));
       } else {
         setAssets([]);
       }
@@ -130,6 +160,20 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   useEffect(() => {
     refreshFolders();
   }, [refreshFolders]);
+
+  // 监听其他组件（如 SaveToLibraryModal / MoveToFolderModal）新建的文件夹，即时刷新左侧树
+  useEffect(() => {
+    const handleFoldersChanged = () => refreshFolders();
+    window.addEventListener(ASSET_FOLDERS_CHANGED_EVENT, handleFoldersChanged);
+    return () => window.removeEventListener(ASSET_FOLDERS_CHANGED_EVENT, handleFoldersChanged);
+  }, [refreshFolders]);
+
+  // 监听素材变更事件（如节点一键收藏、保存到素材库、取消收藏等），即时刷新当前素材列表
+  useEffect(() => {
+    const handleAssetsChanged = () => refreshAssets();
+    window.addEventListener(ASSET_ASSETS_CHANGED_EVENT, handleAssetsChanged);
+    return () => window.removeEventListener(ASSET_ASSETS_CHANGED_EVENT, handleAssetsChanged);
+  }, [refreshAssets]);
 
   useEffect(() => {
     refreshAssets();
@@ -232,11 +276,28 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   };
 
   const toggleFavorite = async (a: Asset) => {
+    if (togglingFavoriteId === a.id) return;
+    const nextFavorite = !a.is_favorite;
+    setTogglingFavoriteId(a.id);
+    // 乐观更新：先在本地刷新状态，让 UI 立即响应
+    setAssets((prev) => prev.map((item) => (item.id === a.id ? { ...item, is_favorite: nextFavorite } : item)));
     try {
-      await assetsApi.updateAsset(a.id, { is_favorite: !a.is_favorite });
-      refreshAssets();
+      await assetsApi.updateAsset(a.id, { is_favorite: nextFavorite });
+      // folder 视图下收藏后、或 favorites 视图下取消收藏后，应立刻从当前列表消失
+      if ((view === 'folder' && nextFavorite) || (view === 'favorites' && !nextFavorite)) {
+        setAssets((prev) => prev.filter((item) => item.id !== a.id));
+      }
+      // 其他情况整列表刷新，保证跨视图一致性
+      if (!((view === 'folder' && nextFavorite) || (view === 'favorites' && !nextFavorite))) {
+        refreshAssets();
+      }
     } catch {
       toast.error('操作失败');
+      // 失败回滚：恢复原来的收藏状态并重新拉取
+      setAssets((prev) => prev.map((item) => (item.id === a.id ? { ...item, is_favorite: a.is_favorite } : item)));
+      refreshAssets();
+    } finally {
+      setTogglingFavoriteId(null);
     }
   };
 
@@ -394,6 +455,7 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
         key: 'favorite',
         icon: a.is_favorite ? <StarOutlined /> : <StarFilled />,
         label: a.is_favorite ? '取消收藏' : '收藏',
+        disabled: togglingFavoriteId === a.id,
         onClick: () => toggleFavorite(a),
       },
       {
@@ -458,7 +520,34 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
   }, [assets]);
 
   const renderAssetThumb = (a: Asset, size: 'sm' | 'md' = 'sm') => (
-    <AssetThumb key={a.id} asset={a} size={size} />
+    <AssetThumb key={a.id} asset={a} size={size} onClick={(asset) => setPreviewAsset(asset)} />
+  );
+
+  /** root / folder 视图下素材卡片：缩略图 + 收藏 + 更多 */
+  const renderAssetCard = (a: Asset, size: 'sm' | 'md' = 'sm') => (
+    <div key={a.id} className="pea-material-thumb-wrap" title={a.name}>
+      <AssetThumb asset={a} size={size} onClick={(asset) => setPreviewAsset(asset)} />
+      <div className="pea-material-thumb-actions">
+        <button
+          type="button"
+          className={a.is_favorite ? 'favorite' : ''}
+          disabled={togglingFavoriteId === a.id}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleFavorite(a);
+          }}
+          aria-label={a.is_favorite ? '取消收藏' : '收藏'}
+          title={a.is_favorite ? '取消收藏' : '收藏'}
+        >
+          {a.is_favorite ? <StarFilled /> : <StarOutlined />}
+        </button>
+        <Dropdown menu={assetMenu(a)} placement="bottomRight" arrow>
+          <button type="button" aria-label="更多" title="更多">
+            <MoreOutlined />
+          </button>
+        </Dropdown>
+      </div>
+    </div>
   );
 
   const renderFolderTree = (f: AssetFolder, depth = 0) => {
@@ -513,8 +602,21 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
               <div className="pea-material-asset-list">
                 {folderAssets.map((a) => (
                   <div key={a.id} className="pea-material-asset-item" title={a.name}>
-                    <AssetThumb asset={a} size="sm" />
+                    <AssetThumb asset={a} size="sm" onClick={(asset) => setPreviewAsset(asset)} />
                     <span className="pea-material-asset-item-name">{a.name}</span>
+                    <button
+                      type="button"
+                      className={`pea-material-asset-item-favorite ${a.is_favorite ? 'favorite' : ''}`}
+                      disabled={togglingFavoriteId === a.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleFavorite(a);
+                      }}
+                      aria-label={a.is_favorite ? '取消收藏' : '收藏'}
+                      title={a.is_favorite ? '取消收藏' : '收藏'}
+                    >
+                      {a.is_favorite ? <StarFilled /> : <StarOutlined />}
+                    </button>
                     <Dropdown menu={assetMenu(a)} placement="bottomRight" arrow>
                       <button type="button" className="pea-material-more" aria-label="更多">
                         <MoreOutlined />
@@ -635,7 +737,7 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
             {/* 根目录下未归入文件夹的素材，直接展示不再显示“未分类”标题 */}
             {(assetsByFolder.get(null)?.length ?? 0) > 0 && (
               <div className="pea-material-root-assets">
-                {assetsByFolder.get(null)?.map((a) => renderAssetThumb(a, 'sm'))}
+                {assetsByFolder.get(null)?.map((a) => renderAssetCard(a, 'sm'))}
               </div>
             )}
           </>
@@ -652,10 +754,20 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
                 <div className="pea-material-fav-grid">
                   {items.map((a) => (
                     <div key={a.id} className="pea-material-thumb-wrap" title={a.name}>
-                      <div className="pea-material-fav-star">
+                      <button
+                        type="button"
+                        className="pea-material-fav-star"
+                        disabled={togglingFavoriteId === a.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleFavorite(a);
+                        }}
+                        aria-label="取消收藏"
+                        title="取消收藏"
+                      >
                         <StarFilled />
-                      </div>
-                      <AssetThumb asset={a} size="md" />
+                      </button>
+                      <AssetThumb asset={a} size="md" onClick={(asset) => setPreviewAsset(asset)} />
                       <div className="pea-material-thumb-actions">
                         <Dropdown menu={assetMenu(a)} placement="bottomRight" arrow>
                           <button type="button" aria-label="更多">
@@ -679,11 +791,12 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
             <div className="pea-material-folder-assets root">
               {assets.map((a) => (
                 <div key={a.id} className="pea-material-thumb-wrap" title={a.name}>
-                  <AssetThumb asset={a} size="sm" />
+                  <AssetThumb asset={a} size="sm" onClick={(asset) => setPreviewAsset(asset)} />
                   <div className="pea-material-thumb-actions">
                     <button
                       type="button"
                       className={a.is_favorite ? 'favorite' : ''}
+                      disabled={togglingFavoriteId === a.id}
                       onClick={(e) => {
                         e.stopPropagation();
                         toggleFavorite(a);
@@ -712,7 +825,10 @@ export default function MaterialPanel({ onClose }: MaterialPanelProps) {
         onMove={async (folderId) => {
           if (moveTarget) await doMoveAsset(moveTarget, folderId);
         }}
+        onFoldersChange={refreshFolders}
       />
+
+      <AssetLightbox asset={previewAsset} onClose={() => setPreviewAsset(null)} />
     </div>
   );
 }

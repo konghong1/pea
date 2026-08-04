@@ -12,7 +12,7 @@ import TextNodeToolbar from './TextNodeToolbar';
 import TextNodeEditorModal from './TextNodeEditorModal';
 import TechLoader from './TechLoader';
 import SaveToLibraryModal from './SaveToLibraryModal';
-import { assetsApi, type AssetScope } from '../api/assets';
+import { assetsApi, ASSET_ASSETS_CHANGED_EVENT, type AssetScope } from '../api/assets';
 import { retryNodeGeneration } from '../lib/nodeGeneration';
 import {
   acceptsUpstreamInput,
@@ -651,6 +651,8 @@ function ResultMediaView({
       );
       // 收藏与保存到素材库拆分为两个独立状态
       update(id, payload.isFavorite ? { isFavorite: true } : { savedToLibrary: true });
+      // 通知素材面板即时刷新（如收藏夹已打开，可立即看到新收藏的素材）
+      window.dispatchEvent(new CustomEvent(ASSET_ASSETS_CHANGED_EVENT));
       toast.success(payload.isFavorite ? '已收藏到素材库' : '已保存到素材库');
     } catch {
       toast.error(payload.isFavorite ? '收藏到素材库失败' : '保存到素材库失败');
