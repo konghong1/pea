@@ -197,11 +197,7 @@ export default function AgentPanel() {
         {!hasMessages ? (
           <div className="pea-agent-welcome">
             <div className="pea-agent-welcome-logo">
-              <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M7 10c4-3 14-3 18 0" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
-                <path d="M5 16c6-4 16-4 22 0" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
-                <path d="M7 22c4-3 14-3 18 0" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
-              </svg>
+              <img src="/logo.svg" alt="pea" />
             </div>
             <div className="pea-agent-welcome-title">Hi {displayName}!</div>
             <div className="pea-agent-welcome-subtitle">今天一起创作点什么？</div>

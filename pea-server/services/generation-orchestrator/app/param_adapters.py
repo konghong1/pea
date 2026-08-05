@@ -42,23 +42,25 @@ _TIER_TO_PIXELS = {
 _AGNES_RATIOS = {"1:1", "3:4", "4:3", "16:9", "9:16", "2:3", "3:2", "21:9"}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 参考图字节预算：预置常量（当前**全部提供商均不启用**，仅备用）
+# 参考图字节预算：Agnes 已接线（env 可调），其余提供商仍不设限
 # ─────────────────────────────────────────────────────────────────────────────
-# ★ 现状（2026-08-04 实测复核）：**没有任何提供商启用字节护栏**，包括 Agnes。
-#   曾据「图片超过10m」报错推断 Agnes 硬限单图 ≤ 10MB，后经实测：>10MB 的图同样能正常出图，
-#   该报错并非稳定的尺寸硬限。既然限制不成立，就不替上游猜规矩 —— 全部走
-#   UNLIMITED_REF_BUDGET，由各家上游自行判定并返回真实错误。
+# ★ 演进史（三次反复，值得记住）：
+#   - 初版：硬编码 8MB「解码字节」护栏 —— 漏算 base64 膨胀 33%，8MB 原图线上 10.67MB，
+#           反而打穿了 10MB 上限（错在计量口径）。
+#   - 2026-08-04：实测 >10MB 也能出图，判定「限制不存在」，整条护栏撤下（错在把
+#           一次抽样当结论）。
+#   - 2026-08-05：再次踩到「单张图片不能超过 10m」。结论不是「到底限不限」，而是
+#           **上游的规矩我们无法稳定观测**。于是改成两道互补防线，且都不写死：
+#             ① 主动护栏（本节）：按 env 配置的上限，在发出前把超限图压进预算；
+#             ② 被动自愈（agnes_provider._call_image_with_oversize_retry）：上游明确
+#                回「图太大」时，自动压缩后重试一次。
+#           ①失准也有②兜底，②生效则说明①的阈值该调 —— 调 env 即可，无需改代码。
 #
-#   下面的数字**仅作为预置参数保留**，供将来某家确认存在硬限制时一行接线启用：
-#       ref_strategy = Base64InlineStrategy(AGNES_REF_BUDGET)        # 适配器上声明
-#       register_ref_budget("some-provider", FixedRefBudget(...))    # 或注册表登记
-#
-#   若将来真要启用，务必记住这条教训：护栏必须按「线上字节数」判断（见 _base64_len），
-#   不能用解码字节 —— 内联参考图以 base64 data URI 放在 JSON 体里发送，base64 会把原始
-#   字节膨胀约 33%（线上 = 原图 × 4/3）。历史实现按解码字节卡 8MB，而 8MB 原图 → 线上
-#   ~10.67MB，反而打穿了当时以为存在的 10MB 上限。
-AGNES_UPSTREAM_REF_IMAGE_LIMIT_BYTES = 10 * 1024 * 1024
-AGNES_REF_IMAGE_HEADROOM_BYTES = 1 * 1024 * 1024
+#   计量口径（务必记牢）：内联参考图以 base64 data URI 放进 JSON 体发送，上游数的是
+#   那串**线上字节** = 原图 × 4/3；而 URL 投递由上游自行下载，数的是**原始文件字节**。
+#   两种口径分别对应 inline_wire_limit() / source_bytes_limit()，不能混用。
+AGNES_UPSTREAM_REF_IMAGE_LIMIT_BYTES = settings.agnes_ref_image_limit_bytes
+AGNES_REF_IMAGE_HEADROOM_BYTES = settings.agnes_ref_image_headroom_bytes
 
 # 向后兼容别名（历史代码/测试可能引用；新代码请改用 adapter.ref_strategy.budget）。
 UPSTREAM_REF_IMAGE_LIMIT_BYTES = AGNES_UPSTREAM_REF_IMAGE_LIMIT_BYTES
@@ -421,20 +423,39 @@ class FixedRefBudget(RefImageBudget):
 #: 默认预算：不限。所有未显式声明的提供商都用它。
 UNLIMITED_REF_BUDGET = UnlimitedRefBudget()
 
-#: 预置（**当前未启用**）：按「单图 ≤ 10MB 线上字节 + 1MB headroom」= 内联预算 9MB。
-#  实测 Agnes 并无该硬限, 故不接线; 保留此实例是为了将来某家确认有硬限时能一行启用：
-#      class XxxAdapter(...):
-#          ref_strategy = Base64InlineStrategy(AGNES_REF_BUDGET)
-AGNES_REF_BUDGET = FixedRefBudget(
-    name="agnes",
-    upstream_limit_bytes=AGNES_UPSTREAM_REF_IMAGE_LIMIT_BYTES,
-    headroom_bytes=AGNES_REF_IMAGE_HEADROOM_BYTES,
+def make_env_ref_budget(name: str, limit_bytes: int, headroom_bytes: int) -> RefImageBudget:
+    """按 env 配置构造预算; ``limit_bytes <= 0`` 视为「关闭护栏」-> 返回不限预算。
+
+    为什么要工厂而不是直接 new: 上限来自环境变量, 运维可能填 0 (关闭) 或填一个
+    小于 headroom 的值。工厂负责把这些边界收敛成合法对象, 而不是让服务在 import
+    阶段抛 ValueError 起不来 —— 配置错误不该导致整个编排器无法启动。
+    """
+    if limit_bytes <= 0:
+        return UNLIMITED_REF_BUDGET
+    headroom = headroom_bytes
+    if headroom >= limit_bytes:            # 配置不合理时退化为 10% 余量, 并告警
+        headroom = max(1, limit_bytes // 10)
+        logger.warning(
+            "[refs][%s] headroom(%d) >= limit(%d), 已自动收敛为 %d",
+            name, headroom_bytes, limit_bytes, headroom,
+        )
+    return FixedRefBudget(name=name, upstream_limit_bytes=limit_bytes,
+                          headroom_bytes=headroom)
+
+
+#: Agnes 参考图预算（**已接线**）。默认「单图 ≤ 10MB 线上字节 + 1MB headroom」= 内联预算 9MB。
+#  运维可通过 PEA_AGNES_REF_IMAGE_LIMIT_BYTES 调整; 置 0 = 关闭主动护栏, 只留被动自愈。
+AGNES_REF_BUDGET = make_env_ref_budget(
+    "agnes",
+    AGNES_UPSTREAM_REF_IMAGE_LIMIT_BYTES,
+    AGNES_REF_IMAGE_HEADROOM_BYTES,
 )
 
 #: 预算注册表（类 Java SPI）: provider key -> 预算实现。未注册者一律 UNLIMITED_REF_BUDGET。
-#  ★ 当前**故意为空**: 没有任何提供商被证实存在字节硬限, 一律交上游判定。
-#    将来实测确认某家有限制时, 在此登记或在其适配器上直接声明即可。
-_REF_BUDGET_REGISTRY: dict[str, RefImageBudget] = {}
+#  只登记**已被实测证实**存在硬限的提供商; 其余交上游判定 —— 猜松了拦不住, 猜紧了白降画质。
+_REF_BUDGET_REGISTRY: dict[str, RefImageBudget] = {
+    "agnes": AGNES_REF_BUDGET,
+}
 
 
 def register_ref_budget(provider_key: str, budget: RefImageBudget) -> None:
@@ -496,35 +517,18 @@ def _guard_url_ref(url: str, provider: Any = None,
 
 
 def _downsample_image_bytes(raw: bytes, max_bytes: int) -> bytes:
-    """把图片原始字节降采样/重编码到 ≤ max_bytes（输出 JPEG）。
+    """把图片原始字节压到 ≤ max_bytes（薄封装, 真正的算法在 app.image_compress）。
 
-    用于参考图超过上游大小上限前的边界护栏：先尽量保留内联（保隐私），
-    仅当降采样后仍超限才退化为公网 URL 投递（见 Base64InlineStrategy）。
+    保留此函数名是为了兼容既有调用点与单测 (它们会 mock 这个符号)。
+    实现已换成「先降质量保分辨率, 再按面积一次缩到位 + 质量二分」的压缩引擎:
+    同样体积下画质明显更好, 编码轮数也更少 (详见 image_compress 模块 docstring)。
+
     依赖 Pillow；缺失时抛 ImportError，由调用方降级到 URL 兜底。
     """
-    from io import BytesIO
+    from app.image_compress import compress_to_budget
 
-    from PIL import Image
-
-    img = Image.open(BytesIO(raw)).convert("RGB")
-    quality = 85
-    scale = 1.0
-    last: bytes | None = None
-    for _ in range(8):
-        w = max(1, int(img.width * scale))
-        h = max(1, int(img.height * scale))
-        tmp = img.resize((w, h), Image.LANCZOS)
-        buf = BytesIO()
-        tmp.save(buf, format="JPEG", quality=quality, optimize=True)
-        out = buf.getvalue()
-        if len(out) <= max_bytes:
-            return out
-        last = out
-        scale *= 0.75
-        if quality > 60:
-            quality -= 10
-    # 尽力而为：返回最小的一版（仍可能超上限，调用方再走 URL 兜底）
-    return last or out
+    res = compress_to_budget(raw, max_bytes, max_edge=settings.ref_compress_max_edge)
+    return res.data
 
 
 class Base64InlineStrategy(ReferenceResolutionStrategy):
@@ -659,13 +663,13 @@ class AgnesImageAdapter(ImageParamAdapter):
       - response_format 必须在 extra_body 内 (顶层会 400); 但我们直接读 data[0].url,
         且历史行为不发送也能拿到 URL, 故默认不发送以兼容 2.0, 避免回归。
 
-    ★ 大小预算: **不设限**（与其他提供商一致）。曾据「图片超过10m」报错推断 Agnes 硬限
-      单图 ≤ 10MB, 2026-08-04 实测复核未复现（>10MB 亦可正常出图）, 故撤下护栏, 交上游判定。
-      若将来确认确有硬限, 改为 `ref_strategy = Base64InlineStrategy(AGNES_REF_BUDGET)` 即可
-      —— 预算实例与接口都在, 只差这一行。
+    ★ 大小预算: **已启用**, 由 env 驱动 (PEA_AGNES_REF_IMAGE_LIMIT_BYTES, 默认 10MB)。
+      超预算的参考图在发出前就地压缩 (仍内联, 不经公网 -> 保隐私); 压完还超才退化为
+      公网 URL 投递。置 0 可关闭本护栏, 此时只保留 provider 层的「上游报错后压缩重试」自愈。
+      口径: 内联按线上 base64 字节判 (原图 × 4/3), URL 投递按原始文件字节判。
     """
 
-    ref_strategy = Base64InlineStrategy()
+    ref_strategy = Base64InlineStrategy(AGNES_REF_BUDGET)
 
     def build(self, norm: NormImageParams, provider) -> dict:
         payload: dict[str, Any] = {

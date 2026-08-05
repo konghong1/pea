@@ -167,10 +167,10 @@ def test_unlimited_budget_contract():
 
 
 def test_agnes_budget_contract():
-    """预置 10MB 预算的契约（**当前未接线**, 仅备用）: 内联按线上字节留 1MB headroom -> 9MB。
+    """Agnes 10MB 预算的契约（**已接线**）: 内联按线上字节留 1MB headroom -> 9MB。
 
-    保留此用例是为了锁住 FixedRefBudget 的换算语义 —— 将来某家确认有硬限、把这个预算接上去时,
-    base64 膨胀不会再被漏算。
+    锁住 FixedRefBudget 的换算语义 —— base64 膨胀必须计入, 否则又会像初版那样
+    「按解码字节卡 8MB, 实际线上 10.67MB」打穿上限。
     """
     b = AGNES_REF_BUDGET
     assert b.enforced is True
@@ -211,19 +211,36 @@ def test_strategy_rejects_non_budget():
         pass
 
 
-def test_no_provider_declares_limit():
-    """★ 核心断言: 当前**没有任何**适配器启用字节护栏（含 Agnes —— 实测无 10MB 硬限）。"""
-    assert AgnesImageAdapter().ref_strategy.budget.enforced is False, \
-        "Agnes 实测无 10MB 硬限, 不应启用护栏"
-    assert GenericOpenAIImageAdapter().ref_strategy.budget.enforced is False
+def test_only_agnes_declares_limit():
+    """★ 核心断言: 只有 Agnes 启用字节护栏; 其余提供商一律交上游判定, 不替它们猜规矩。"""
+    assert AgnesImageAdapter().ref_strategy.budget.enforced is True, \
+        "Agnes 已确认存在 10MB 级限制, 应启用护栏"
+    assert GenericOpenAIImageAdapter().ref_strategy.budget.enforced is False, \
+        "未证实有硬限的提供商不应被误伤降画质"
+
+
+def test_env_budget_factory():
+    """env 配置的边界收敛: 0 = 关闭; headroom 配错自动收敛而不是让服务起不来。"""
+    from app.param_adapters import make_env_ref_budget
+
+    assert make_env_ref_budget("off", 0, 1024) is UNLIMITED_REF_BUDGET
+    assert make_env_ref_budget("neg", -1, 1024) is UNLIMITED_REF_BUDGET
+
+    b = make_env_ref_budget("bad-headroom", 1000, 5000)   # headroom >= limit
+    assert b.enforced is True
+    assert 0 < b.inline_wire_limit() < 1000, b
+
+    ok = make_env_ref_budget("ok", 10 * 1024 * 1024, 1024 * 1024)
+    assert ok.inline_wire_limit() == 9 * 1024 * 1024
+    assert ok.source_bytes_limit() == 10 * 1024 * 1024
 
 
 def test_budget_registry():
-    assert get_ref_budget("agnes") is UNLIMITED_REF_BUDGET, "Agnes 已撤下护栏"
+    assert get_ref_budget("agnes") is AGNES_REF_BUDGET, "Agnes 已登记 10MB 预算"
     assert get_ref_budget("gemini") is UNLIMITED_REF_BUDGET, "未注册者不限"
     assert get_ref_budget(None) is UNLIMITED_REF_BUDGET
 
-    # 注册表本身仍可用（大小写不敏感）, 将来实测确认某家有硬限时一行登记即可。
+    # 注册表大小写不敏感; 新提供商实测确认有硬限时一行登记即可。
     register_ref_budget("Case-Test", AGNES_REF_BUDGET)
     assert get_ref_budget("case-test") is AGNES_REF_BUDGET
     assert get_ref_budget("CASE-TEST") is AGNES_REF_BUDGET, "key 应大小写不敏感"
@@ -275,7 +292,8 @@ if __name__ == "__main__":
         test_fixed_budget_rejects_bad_headroom,
         test_fixed_budget_source_opt_out,
         test_strategy_rejects_non_budget,
-        test_no_provider_declares_limit,
+        test_only_agnes_declares_limit,
+        test_env_budget_factory,
         test_budget_registry,
         test_budget_is_an_interface,
     ]

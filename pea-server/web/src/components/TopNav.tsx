@@ -50,7 +50,7 @@ export default function TopNav() {
     <header className="pea-topnav">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
-          <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-pea-purple via-pea-brand to-pea-lime shadow-sm" />
+          <img src="/logo.svg" alt="pea" className="h-7 w-7 rounded-lg" />
           <span className="font-semibold">pea</span>
         </div>
       </div>

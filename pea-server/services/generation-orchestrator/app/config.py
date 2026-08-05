@@ -94,6 +94,23 @@ class Settings(BaseSettings):
     failure_alert_window_s: int = 300
     failure_alert_threshold: int = 5
 
+    # ── 参考图字节护栏 (图生图输入图过大) ─────────────────────────
+    # 背景: Agnes 对单张输入图存在「10MB」级别的限制 (报文形如「图片超过10m」),
+    #   但该限制并非稳定复现 (2026-08-04 曾实测 >10MB 也能出图, 故一度撤下护栏;
+    #   2026-08-05 再次踩到)。结论: **不猜死, 改为可配 + 可自愈**。
+    # 语义:
+    #   agnes_ref_image_limit_bytes  上游硬上限, 0 = 关闭主动护栏 (只靠下面的自愈)
+    #   agnes_ref_image_headroom_bytes 预留余量, 避免 JPEG 元信息抖动刚好踩线
+    #   ref_oversize_auto_compress   上游明确回「图太大」时, 是否自动压缩后重试一次
+    #   ref_oversize_retry_wire_bytes 自愈重试时把每张图压到的**线上 base64 字节**目标
+    #                                (取得比硬上限更保守, 一次重试就要成功)
+    agnes_ref_image_limit_bytes: int = 10 * 1024 * 1024
+    agnes_ref_image_headroom_bytes: int = 1 * 1024 * 1024
+    ref_oversize_auto_compress: bool = True
+    ref_oversize_retry_wire_bytes: int = 6 * 1024 * 1024
+    # 参考图最长边硬上限 (像素): 只在触发压缩时生效, 顺手把 8000px 这类极端输入收敛。
+    ref_compress_max_edge: int = 4096
+
     # ── 速率限制(分档/分模型令牌桶, RC-1 治本) ──
     # 规则主来源: provider_rate_limits 表(BFF 后台可配), 编排器 TTL 缓存加载。
     provider_rate_limit_ttl_s: int = 30            # 规则重载缓存 TTL(改配置后最多 30s 生效, 无需重启)

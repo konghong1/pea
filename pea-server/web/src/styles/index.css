@@ -4377,13 +4377,15 @@ html:not(.dark) .pea-node-prompt-echo-params {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, var(--pea-purple), var(--pea-brand) 55%, var(--pea-lime));
+  background: transparent;
   color: #fff;
   margin-bottom: 6px;
 }
-.pea-agent-welcome-logo svg {
-  width: 24px;
-  height: 24px;
+.pea-agent-welcome-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 12px;
 }
 .pea-agent-welcome-title {
   font-size: 22px;
@@ -6722,32 +6724,46 @@ html:not(.dark) .text-node-toolbar {
   z-index: 30;
 }
 .pea-canvas-header-trigger {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 12px 6px 6px;
-  border-radius: 12px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
   background: var(--pea-bg-panel);
   border: 1px solid var(--pea-border);
   color: var(--pea-text-primary);
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-  min-width: 220px;
-  max-width: 360px;
-  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  /* 圆形按钮，按下态要"陷"一点 */
 }
 .pea-canvas-header-trigger:hover {
   background: var(--pea-bg-elevated);
   border-color: color-mix(in srgb, var(--pea-brand) 35%, transparent);
+  transform: scale(1.06);
+  box-shadow: 0 4px 14px rgba(31, 162, 220, 0.25);
 }
-.pea-canvas-caret {
-  margin-left: auto;
-  font-size: 10px;
-  color: var(--pea-text-muted);
-  transition: transform 0.15s ease;
+.pea-canvas-header-trigger:active {
+  transform: scale(0.96);
 }
-.pea-canvas-caret.open { transform: rotate(180deg); }
-
+.pea-canvas-header-trigger[aria-expanded="true"] {
+  background: var(--pea-bg-elevated);
+  border-color: color-mix(in srgb, var(--pea-brand) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pea-brand) 18%, transparent), 0 2px 8px rgba(31, 162, 220, 0.2);
+}
+.pea-canvas-header-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.pea-canvas-header-trigger:hover .pea-canvas-header-logo {
+  transform: scale(1.05);
+}
 /* ---- 画布左上角下拉菜单 ---- */
 .pea-canvas-dropdown {
   margin-top: 6px;
@@ -7303,7 +7319,15 @@ html:not(.dark) .text-node-toolbar {
   color: rgba(255, 255, 255, 0.85);
 }
 
-/* 文本节点编辑态视觉：双击进入编辑时给一个克制的微亮描边，告诉用户可以开始输入 */
+/* 文本节点编辑态视觉：双击进入编辑时给一个克制的微亮描边，告诉用户可以开始输入。
+   用 transition 让「进入/退出编辑态」是渐变而不是瞬时跳变——描边突然出现/消失
+   正是用户反馈的「编辑框刷闪」的观感来源。outline 不参与布局，
+   因此不会把上方功能条顶动。 */
+.pea-node-text-edit {
+  transition: outline-color 0.16s ease, background-color 0.16s ease;
+  outline: 1px solid transparent;
+  outline-offset: 2px;
+}
 .pea-node-text-edit.is-editing {
   outline: 1px solid rgba(31, 162, 220, 0.55);
   outline-offset: 2px;
@@ -9282,6 +9306,13 @@ html:not(.dark) .text-node-toolbar {
   display: flex;
   align-items: center;
   gap: 1px;
+  /* 关键修复：让 group 容器不拦截指针事件，使点击直达子按钮。
+     实测发现（Playwright + headless Chromium）trusted mousedown 的 e.target
+     始终解析为 tne-toolbar-group 而非 .tne-tool-btn 按钮，导致按钮的
+     onMouseDown+preventDefault 永远不触发 → 编辑区失焦 + execCommand 不执行。
+     设置 pointer-events:none 后，group 从命中测试中排除，按钮（pe:auto）
+     直接接收事件。这是工具栏的标准防拦截模式。 */
+  pointer-events: none;
 }
 .tne-toolbar-sep {
   width: 1px;
@@ -9309,6 +9340,8 @@ html:not(.dark) .text-node-toolbar {
   cursor: pointer;
   transition: all 0.15s ease;
   line-height: 1;
+  /* 父级 .tne-toolbar-group 设了 pointer-events:none，子按钮必须显式恢复 */
+  pointer-events: auto;
 }
 .tne-tool-btn:hover {
   background: rgba(255, 255, 255, 0.08);
@@ -9317,6 +9350,16 @@ html:not(.dark) .text-node-toolbar {
 .tne-tool-btn:active {
   background: rgba(255, 255, 255, 0.14);
   transform: scale(0.96);
+}
+/* 激活态：光标所在的格式按钮高亮，让用户看清"当前处于哪种格式" */
+.tne-tool-btn--active {
+  background: rgba(31, 162, 220, 0.18);
+  color: var(--tne-accent, #1fa2dc);
+  box-shadow: inset 0 0 0 1px rgba(31, 162, 220, 0.4);
+}
+.tne-tool-btn--active:hover {
+  background: rgba(31, 162, 220, 0.26);
+  color: var(--tne-accent, #1fa2dc);
 }
 
 /* 颜色选择圆点 */
@@ -9332,6 +9375,35 @@ html:not(.dark) .text-node-toolbar {
 .tne-tool-btn:hover .tne-color-dot {
   transform: scale(1.2);
   border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* 自定义颜色选择器：彩虹色环 */
+.tne-color-ring {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, #ff0000, #ff8800, #ffff00, #00ff00, #00ffff, #0088ff, #0000ff, #ff00ff, #ff0000);
+  display: inline-block;
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.35), 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease;
+}
+.tne-tool-btn:hover .tne-color-ring {
+  transform: scale(1.2);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* 隐藏原生 color input，仅通过按钮触发 */
+.tne-color-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+  border: none;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
 }
 
 /* ── 编辑/预览分屏区域 ── */
@@ -9472,6 +9544,15 @@ html:not(.dark) .tne-tool-btn:hover {
   background: rgba(0, 0, 0, 0.06);
   color: var(--pea-text-primary);
 }
+html:not(.dark) .tne-tool-btn--active {
+  background: rgba(31, 162, 220, 0.14);
+  color: var(--tne-accent, #0084b8);
+  box-shadow: inset 0 0 0 1px rgba(31, 162, 220, 0.4);
+}
+html:not(.dark) .tne-tool-btn--active:hover {
+  background: rgba(31, 162, 220, 0.22);
+  color: var(--tne-accent, #0084b8);
+}
 html:not(.dark) .tne-editor-content {
   color: var(--pea-text-primary);
 }
@@ -9507,6 +9588,10 @@ html:not(.dark) .tne-pane-header {
 html:not(.dark) .tne-color-dot {
   border-color: rgba(0, 0, 0, 0.15);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+html:not(.dark) .tne-color-ring {
+  border-color: rgba(0, 0, 0, 0.15);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.55), 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

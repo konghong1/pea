@@ -104,7 +104,7 @@ function relTime(ts: number | null): string {
   return `${Math.floor(h / 24)} 天前`;
 }
 
-/** 画布左上角：pea logo + 画布标题 + 上次修改时间（点击展开下拉）。 */
+/** 画布左上角：pea logo 圆形按钮（hover 提示画布名 + 修改时间，点击展开下拉）。 */
 function CanvasHeader({
   onClose,
 }: {
@@ -132,32 +132,34 @@ function CanvasHeader({
     };
   }, [open]);
 
+  const displayTitle = title || '未命名画布';
+  // Tooltip 内容：「画布名 · 上次修改于 X 分钟前」，居中显示（多行）
+  const tipTitle = (
+    <div className="text-center leading-tight">
+      <div className="font-medium">{displayTitle}</div>
+      <div className="text-[11px] opacity-80 mt-0.5">上次修改于 {relTime(lastSavedAt)}</div>
+    </div>
+  );
+
   return (
     <div ref={wrapRef} className="pea-canvas-header">
-      <button
-        type="button"
-        className="pea-canvas-header-trigger"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label={`画布：${title}`}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-to-br from-pea-purple via-pea-brand to-pea-lime shadow-sm" />
-        <div className="min-w-0 text-left">
-          <div className="truncate text-sm font-semibold leading-tight">{title || '未命名画布'}</div>
-          <div className="truncate text-[11px] text-pea-text-muted leading-tight">
-            上次修改于 {relTime(lastSavedAt)}
-          </div>
-        </div>
-        <span className={`pea-canvas-caret ${open ? 'open' : ''}`} aria-hidden>
-          ▾
-        </span>
-      </button>
+      <Tooltip title={tipTitle} placement="bottom" mouseEnterDelay={0.15}>
+        <button
+          type="button"
+          className="pea-canvas-header-trigger"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={`画布：${displayTitle}，点击打开画布菜单`}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <img src="/logo.svg" alt="pea" className="pea-canvas-header-logo" />
+        </button>
+      </Tooltip>
 
       {open && (
         <div role="menu" className="pea-canvas-dropdown">
           <div className="pea-canvas-dropdown-head">
-            <div className="h-7 w-7 shrink-0 rounded-lg bg-gradient-to-br from-pea-purple via-pea-brand to-pea-lime shadow-sm" />
+            <img src="/logo.svg" alt="pea" className="h-7 w-7 shrink-0 rounded-lg shadow-sm" />
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold">{title || '未命名画布'}</div>
               <div className="truncate text-[11px] text-pea-text-muted">
@@ -1026,11 +1028,12 @@ function saveViewportNow(key: string, vp: Viewport) {
   }
 }
 
-// 模块级防抖：同一时刻只有一个画布挂载，按 key 隔离足够；延迟写入避免 onMove 高频落盘。
+// 模块级节流：同一时刻只有一个画布挂载，按 key 隔离足够；用 rAF 替代 250ms setTimeout，
+// 缩短写入间隔（~16ms/帧），大幅降低"放大后快速刷新丢失最后zoom"的概率。
 let vpSaveTimer: number | undefined;
-function saveViewportDebounced(key: string, vp: Viewport) {
-  window.clearTimeout(vpSaveTimer);
-  vpSaveTimer = window.setTimeout(() => saveViewportNow(key, vp), 250);
+function saveViewportThrottled(key: string, vp: Viewport) {
+  if (vpSaveTimer != null) cancelAnimationFrame(vpSaveTimer);
+  vpSaveTimer = requestAnimationFrame(() => saveViewportNow(key, vp));
 }
 
 function Flow() {
@@ -1315,6 +1318,10 @@ function Flow() {
   const suppressCtxRef = useRef(false);
   // 最近一次视口：onMove 实时写入，卸载时立即落地（不等防抖），保证恢复准确。
   const lastVpRef = useRef<Viewport | null>(null);
+  // 【修复】ReactFlow 实例引用，用于 onInit 回调中可靠地恢复视口
+  const rfInstanceRef = useRef<any>(null);
+  // 【修复】待恢复的视口缓存：canvasId 异步到达时先存，onInit 就绪后消费
+  const pendingVpRef = useRef<Viewport | null>(null);
   // 退出画布时立即持久化视口（不等 onMove 防抖），下次进入原样恢复，不再回到初始态。
   useEffect(() => {
     return () => {
@@ -1352,16 +1359,36 @@ function Flow() {
     if (!dirty || canvasId == null) return;
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(async () => {
+      // 实时读 store，避免 effect 闭包拿到陈旧的 nodes/edges/version。
+      // 这是关键：flushSaveKeepalive（卸载/切走/visibilitychange）会 fire-and-forget 写入，
+      // 服务端 version+1 但本地无回调；下一次 autosave 必须用最新本地 version 才不会 409。
+      // 见 saveCanvasNow 的 409 重试模式（[store/canvas.ts]）。
+      const s = useCanvas.getState();
+      if (s.canvasId == null) return;
+      const doPut = (v: number) =>
+        api.put(`/canvases/${s.canvasId}`, { graph_json: { nodes: s.nodes, edges: s.edges }, version: v });
       try {
-        const graph = { nodes, edges };
-        const { data } = await api.put(`/canvases/${canvasId}`, { graph_json: graph, version });
-        markSaved(data.version);
+        const { data } = await doPut(s.version);
+        useCanvas.getState().markSaved(data.version);
       } catch (e: any) {
         if (e?.response?.status === 409) {
-          message.warning('画布已被他人更新，请刷新');
-        } else {
-          message.error('保存失败');
+          // 乐观锁冲突（最常见元凶：之前有 keepalive/multiple-tab 保存已让服务端 version+1，但本地未同步）。
+          // 自动拉取权威 version 后重试一次 — 单用户画布下 last-write-wins 安全。
+          try {
+            const g = await api.get(`/canvases/${s.canvasId}`);
+            const serverVersion: number = g.data.version;
+            useCanvas.setState({ version: serverVersion });
+            const { data } = await doPut(serverVersion);
+            useCanvas.getState().markSaved(data.version);
+            // 静默成功：不弹 toast 打扰用户；这是版本号自愈，不是真正的"被人改了"
+            return;
+          } catch {
+            // 重试仍失败 → 降级提示（不要再说"被别人更新"——单用户场景下基本是网络/服务异常）
+            message.warning('画布保存冲突，已自动重试，请稍后再试');
+            return;
+          }
         }
+        message.error('保存失败');
       }
     }, 1000);
     return () => window.clearTimeout(saveTimer.current);
@@ -1378,19 +1405,38 @@ function Flow() {
 
   // 视口恢复：当 canvasId 从 null 变为有值时，如果有保存的视口则用 setViewport 恢复；
   // 否则 fitView 自适应。这修复了"刷新页面后画布回到初始状态"的问题。
+  //
+  // 【修复】三阶段恢复策略：
+  //   阶段1（此处）：canvasId 就绪后读取存档 → 缓存到 pendingVpRef + 尝试 RAF 恢复
+  //   阶段2（onInit）：ReactFlow 实例就绪后，若 pendingVpRef 有值且阶段1未成功则再次恢复
+  //   阶段3（兜底）：若两阶段都失败且 nodes 已加载，fitView 自适应
   const didFit = useRef(false);
+  const vpRestored = useRef(false); // 【新增】标记视口是否已成功恢复
   useEffect(() => {
     if (canvasId == null) return;
     const saved = loadViewport(vpKey(canvasId));
-    if (saved && !didFit.current) {
-      didFit.current = true;
+    if (saved) {
+      // 有存档：缓存待恢复视口
+      pendingVpRef.current = saved;
       lastVpRef.current = saved;
-      // 延迟一帧等 ReactFlow 完成初始化后再 setViewport
-      requestAnimationFrame(() => {
-        setViewport({ x: saved.x, y: saved.y, zoom: saved.zoom }, { duration: 0 });
-      });
-      return;
+
+      if (!didFit.current) {
+        didFit.current = true;
+        // 尝试立即恢复（ReactFlow 可能已就绪）
+        requestAnimationFrame(() => {
+          try {
+            setViewport({ x: saved.x, y: saved.y, zoom: saved.zoom }, { duration: 0 });
+            vpRestored.current = true;
+          } catch {
+            // RAF 时实例可能未就绪，由 onInit 兜底恢复
+            vpRestored.current = false;
+          }
+        });
+        return;
+      }
     }
+
+    // 无存档或已尝试过：fallback 到 fitView
     if (!didFit.current && nodes.length > 0) {
       didFit.current = true;
       // 默认 fitView 后把画布整体向下偏移一点，让节点内容在视口中显示在中间偏上位置
@@ -1779,6 +1825,23 @@ function Flow() {
             connectedThisDrag.current = true;
             onConnect(edge);
           }}
+          // 【修复】onInit：ReactFlow 内部 d3-zoom 实例就绪后触发。
+          // 此处是恢复视口的最佳时机——比 RAF 更可靠（保证实例已完全初始化）。
+          // 若 RAF 阶段已成功恢复（vpRestored=true），跳过；否则用实例 API 直接设置视口。
+          onInit={(instance: any) => {
+            rfInstanceRef.current = instance;
+            const pending = pendingVpRef.current;
+            if (pending && !vpRestored.current) {
+              try {
+                instance.setViewport({ x: pending.x, y: pending.y, zoom: pending.zoom }, { duration: 0 });
+                vpRestored.current = true;
+                lastVpRef.current = pending;
+              } catch {
+                setViewport({ x: pending.x, y: pending.y, zoom: pending.zoom }, { duration: 0 });
+                vpRestored.current = true;
+              }
+            }
+          }}
           onConnectStart={(_evt: any, params: any) => {
             const me = _evt as MouseEvent | undefined;
             startPosRef.current = me ? { x: me.clientX, y: me.clientY } : null;
@@ -1899,11 +1962,11 @@ function Flow() {
             if (vp && typeof vp.zoom === 'number') {
               document.documentElement.style.setProperty('--pea-inv-zoom', String(1 / vp.zoom));
             }
-            // 视口持久化：平移/缩放后防抖写入 localStorage，退出画布可原样恢复。
+            // 视口持久化：平移/缩放后节流写入 localStorage（~16ms/帧），退出画布可原样恢复。
             if (vp && canvasId != null && typeof vp.x === 'number' && typeof vp.y === 'number' && typeof vp.zoom === 'number') {
               const v = { x: vp.x, y: vp.y, zoom: vp.zoom };
               lastVpRef.current = v;
-              saveViewportDebounced(vpKey(canvasId), v);
+              saveViewportThrottled(vpKey(canvasId), v);
             }
           }}
           zoomOnDoubleClick={false}

@@ -44,6 +44,7 @@ export const HANDLE_HALF = 6.5;
 export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const update = useCanvas((s) => s.updateNodeData);
   const selectedIdsArr = useCanvas((s) => s.selectedIds);
+  const clearSelection = useCanvas((s) => s.clearSelection);
   const selected = selectedIdsArr.includes(id);
   // 多选（框选 / Shift 多选）时抑制单节点自身的「选中边框 + 功能条」，
   // 只保留透明组选框 + 多选工具条，避免多个节点功能框堆叠干扰（需求3）。
@@ -158,6 +159,16 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
     if (!selected && editing) setEditing(false);
   }, [selected, editing]);
 
+  // 打开全屏编辑弹窗时，主动取消底层节点选中并退出编辑态。
+  // 否则弹窗盖住画布后，TextNodeToolbar 和 NodeChatPrompt 输入栏仍依赖 selectedIds 显示，
+  // 用户在弹窗内点击/聚焦会造成底层 editing/hover 状态抖动，表现为一闪一闪。
+  useEffect(() => {
+    if (editorModalOpen) {
+      setEditing(false);
+      clearSelection();
+    }
+  }, [editorModalOpen, clearSelection]);
+
   // 进入编辑态时聚焦编辑区，并把光标放到内容末尾（避免后续输入插到最前面）。
   // 同时保证功能条 execCommand 操作的是一个真正可编辑的区域。
   useEffect(() => {
@@ -221,8 +232,17 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
     if (!fileKey) toast.error('上传失败，已用本地预览（刷新后可能丢失）');
   };
 
-  const onEditBlur = () => {
+  const onEditBlur = (e: React.FocusEvent<HTMLDivElement>) => {
     if (editRef.current) update(id, { html: editRef.current.innerHTML });
+    // 焦点落到「本节点自己的 UI」上时不要退出编辑态。
+    //   - .tnt-bar        节点上方格式功能条
+    //   - .node-input-bar 节点下方输入栏（边框框）
+    //   - .tne-modal      文本节点全屏编辑弹窗
+    // 否则会连锁出两个用户可见的 bug：
+    //   1) contentEditable 被关掉 → 之后点功能条的 H1/粗体/颜色全部静默失效；
+    //   2) is-editing class 瞬时增删 → 编辑框和功能条「刷闪」。
+    const next = e.relatedTarget as HTMLElement | null;
+    if (next?.closest?.('.tnt-bar, .node-input-bar, .tne-modal')) return;
     setEditing(false);
   };
 
@@ -352,7 +372,16 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       <div className="pea-node-chrome" ref={chromeRef} style={chromeStyle} data-zoom={zoom.toFixed(2)}>
         <NodeBadge id={id} kind={kind} data={data} />
         <div className="pea-node-chrome-fixed" ref={chromeFixedRef}>
-          {isText && isSingleSelected && <TextNodeToolbar editorRef={editRef} />}
+          {isText && isSingleSelected && (
+            <TextNodeToolbar
+              editorRef={editRef}
+              // 工具条按「选中」显示，编辑区按「editing」才可编辑。
+              // 用户在未进入编辑态时点格式按钮，工具条会同步打开 DOM 的 contentEditable，
+              // 这里把 React 状态补齐，避免下一次 render 又把它关掉。
+              onRequestEditing={() => setEditing(true)}
+              onAfterExec={(html) => update(id, { html })}
+            />
+          )}
           {isMedia && !hasMediaContent && !data.generating && !hasUpstreamInput && (
             <div className="pea-node-top-upload-bar" onClick={(e) => e.stopPropagation()}>
               <button

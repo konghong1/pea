@@ -430,14 +430,18 @@ export default function EcommerceGallery() {
   const handleFiles = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0 || !project) return
     const files = Array.from(fileList)
+    // 原图现在真的走网络传对象存储（可能是几十 MB），必须给出进行中反馈，
+    // 否则大图上传期间页面毫无动静，用户会重复点击造成重复上传。
+    const key = 'gallery-upload'
+    message.open({ key, type: 'loading', content: `正在上传 ${files.length} 张产品图…`, duration: 0 })
     try {
       const res = await uploadImages(project.id, files)
       if (Array.isArray(res) && res[0]) setProject(res[0])
-      message.success(`已上传 ${files.length} 张产品图`)
+      message.open({ key, type: 'success', content: `已上传 ${files.length} 张产品图`, duration: 2 })
     } catch (e: any) {
-      // 超出 10MB / 本地存储配额不足等均由 uploadImages 抛出明确文案，
+      // 超出上传上限 / 本地存储配额不足等均由 uploadImages 抛出明确文案，
       // 旧实现在这里静默吞掉（注释写"已提示"但实际无人提示），用户只看到什么都没发生。
-      message.error(e?.message || '产品图上传失败，请重试')
+      message.open({ key, type: 'error', content: e?.message || '产品图上传失败，请重试', duration: 3 })
     }
   }
 
@@ -1072,7 +1076,7 @@ export default function EcommerceGallery() {
                 </svg>
               </div>
               <h4>拖拽或点击上传</h4>
-              <p>支持 JPG / PNG / WEBP，单张 ≤ 10MB（大图自动压缩）</p>
+              <p>支持 JPG / PNG / WEBP，单张 ≤ 100MB（原图上传，超大图由服务端按需压缩）</p>
               <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => handleFiles(e.target.files)} />
             </div>
             {!warnClosed && (

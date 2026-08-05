@@ -10,6 +10,9 @@
 
 import { listAvailableModels, acceptGenerationJob, type AvailableModel } from '../../api/catalog';
 import { api } from '../../api/client';
+// 原图走 MinIO：上传用 POST /files/upload，投递模型前用签名 URL 换回真实可外链地址。
+// 与画布节点 (PeaNode / NodeChatPrompt) 完全同一套基础设施，不再各写一套。
+import { getPresignedUrl } from '../../api/files';
 // 真实「策划类型 + 配置项」数据：由 ai-agent 后端 gallery_config.serialize_types/serialize_options 生成，
 // 与 ai-agent GET /api/gallery/types 返回完全一致（19 种推荐类型 + 通用/市场/输出选项）。
 import { GALLERY_TYPES, DEFAULT_OPTIONS } from './galleryConfigData';
@@ -45,7 +48,18 @@ export interface GalleryImage {
   id: number
   project_id: number
   filename: string
+  /**
+   * 页面展示 & 草稿持久化用的图片地址。
+   * 正常路径下是一张 ≤180KB 的**缩略图** data URL —— 只负责"给人看"，不参与模型投递。
+   * 仅当原图上传 MinIO 失败（降级路径）时，这里才退回承载一张 ≤1.1MB 的内联图兜底。
+   */
   url: string
+  /**
+   * 原图在 MinIO 的 object key（`POST /files/upload` 返回）。
+   * 这是**发给模型的唯一真相源**：生成时用 getPresignedUrl(key) 换签名 URL，
+   * 模型侧下载到的是未经前端压缩的原图。空串表示上传失败，已降级为 url 内联投递。
+   */
+  file_key?: string
   original: boolean
   order: number
   created_at: string
@@ -397,29 +411,48 @@ export function updateProject(projectId: number, data: Partial<Pick<GalleryProje
 
 // ───────────────────────────── 产品图 ─────────────────────────────
 
-// ★ 参考图尺寸预算 —— 单一真相源，与后端 param_adapters.py 对齐。
+// ═══════════════ 原图投递策略（2026-08-05 重构，与画布节点对齐） ═══════════════
 //
-// ★ 后端现状（2026-08-04 实测复核）：**没有任何提供商启用字节护栏**，包括 Agnes。
-//   曾据「图片超过10m」报错推断 Agnes 硬限单图 ≤ 10MB，实测未复现，后端已撤下该护栏
-//   （见 param_adapters.py 的 RefImageBudget / UNLIMITED_REF_BUDGET）。
-//   故下面的 10MB **不是上游限制**，只是一道前端可用性闸门：拦住明显异常的巨图，
-//   给用户即时反馈，避免把几十 MB 的原图塞进浏览器解码。
-// 前端这一层的真正瓶颈另有其人：产品图以 base64 内联进草稿存 localStorage，
-// 而 localStorage 每源配额仅约 5MB —— 所以落库预算（STORE_BUDGET_BYTES）必须远小于它。
+// 旧实现：用户选的图先被 canvas 重编码压到 ~1.1MB，以 base64 内联进草稿存 localStorage，
+//         再拿这张**残血图**当参考图。两个后果：
+//           ① 高清原图在前端就被销毁 —— 8MB 的产品图，模型只看得到 1.1MB 的版本；
+//           ② 草稿内联大图，localStorage 每源 ~5MB 配额永远悬在头顶（放不下 5 张）。
+//
+// 新实现：把「给人看的」和「给模型看的」彻底拆成两条通道 ——
+//   ① 原图  → POST /files/upload（BFF 代理直写 MinIO，multipart 上限 100MB）→ 只留 object key。
+//             生成时用 getPresignedUrl(key) 换真实签名 URL 投递，模型下载到的是**未经前端压缩的原图**。
+//   ② 缩略图 → canvas 压到 ≤180KB / 长边 640，仅供页面预览与草稿持久化。
+//             草稿里不再内联大图，5MB 配额从此不是瓶颈。
+//
+// ★ 「多大才需要压缩」的决策统一收敛到服务端，前端一律不替模型做画质取舍：
+//   - param_adapters.RefImageBudget：≤10MB 原样透传（零解码零损失），>10MB 才逐张降采样；
+//   - agnes_provider：上游若仍回 413 / "图片过大"，压缩后自愈重试一次。
+//   前端这层只剩一个纯可用性闸门（MAX_PICK_BYTES），且直接对齐后端 multipart 上限。
 
-/** 允许用户选择的单文件上限，与 UI 文案「单张 ≤ 10MB」一致（前端可用性闸门，非上游限制）；超出直接拒绝并明确提示。 */
-export const MAX_PICK_BYTES = 10 * 1024 * 1024
+/** 允许选择的单文件上限：与 BFF `POST /files/upload` 的 100MB multipart 限制对齐（超出必然 413，提前拦下给明确提示）。 */
+export const MAX_PICK_BYTES = 100 * 1024 * 1024
 
 /**
- * 单张图落草稿的字节预算（按 data URL 字符串长度算，即线上字节）。
- * 受 localStorage ~5MB 配额约束，收敛到 ~1.1MB/张（一个草稿可稳放 4 张以上）。
- * 1600px 长边做图生图参考图完全够用，同时把上游 10MB 限制甩开一个数量级，
- * 后端降采样护栏在正常路径下永不触发。
+ * 预览缩略图的字节预算（按 data URL 字符串长度算）。
+ * 只用于 UI 展示与草稿持久化，**永不作为模型输入**（除非原图上传失败走降级路径）。
+ * 180KB × 十余张仍远低于 localStorage ~5MB 配额。
  */
-const STORE_BUDGET_BYTES = 1100 * 1024
+const THUMB_BUDGET_BYTES = 180 * 1024
 
-/** 归一化后的最长边像素上限。 */
-const MAX_EDGE = 1600
+/** 预览缩略图最长边像素。画廊网格最大展示尺寸 ~200px，640 足够 2x 高清屏。 */
+const THUMB_MAX_EDGE = 640
+
+/**
+ * 降级路径（原图上传 MinIO 失败）下的内联图预算。
+ * 此时缩略图会成为唯一送模型的输入，180KB 太糊，退回旧的 1.1MB 档位保底画质。
+ */
+const FALLBACK_INLINE_BUDGET_BYTES = 1100 * 1024
+
+/** 降级路径下的内联图最长边。 */
+const FALLBACK_MAX_EDGE = 1600
+
+/** 单次生成最多携带的参考图数量，防止请求体与上游计费失控。 */
+const MAX_REFS_PER_JOB = 8
 
 /** 探测 canvas 是否支持编码指定 MIME（用于判断 WebP 可用性）。 */
 function canEncode(type: string): boolean {
@@ -437,19 +470,15 @@ function webpSupported(): boolean {
 }
 
 /**
- * 把 File 归一化成 ≤ STORE_BUDGET_BYTES 的 data URL。
+ * 把 File 用 canvas 压成 ≤ budget 字节的 data URL（仅用于**本地展示/兜底**，绝不代表原图）。
  *
  * - 本身已在预算内 → 原样读取，保留原始画质与透明通道；
- * - 超预算 → canvas 逐轮降采样 + 降质量，直到进预算（最多 7 轮）。
+ * - 超预算 → 逐轮降采样 + 降质量，直到进预算（最多 7 轮）。
  *   输出优先 WebP（同质量下比 JPEG 小 25~35%，且保留 alpha），浏览器不支持时回退 JPEG；
  *   回退 JPEG 时先铺白底，避免透明区域被渲染成黑块。
- *
- * 旧实现的问题：只有 >8MB 才压，且一律压到 800px 强转 JPEG —— 7.9MB 的图原样内联
- * （base64 后 10.5MB，既打穿上游 10MB 又爆 localStorage），8.1MB 的图却被砍到 800px
- * 并丢掉透明通道。一个悬崖式阈值造成"画质与可用性同时不可预测"，故改为统一归一化。
  */
-function normalizeToDataUrl(f: File): Promise<string> {
-  if (f.size <= STORE_BUDGET_BYTES) {
+function encodeToDataUrl(f: File, budget: number, maxEdge: number): Promise<string> {
+  if (f.size <= budget) {
     return new Promise((resolve) => {
       const reader = new FileReader()
       reader.onload = () => resolve(reader.result as string)
@@ -467,7 +496,7 @@ function normalizeToDataUrl(f: File): Promise<string> {
       if (!ctx) { resolve(placeholderImg(f.name)); return }
       const mime = webpSupported() ? 'image/webp' : 'image/jpeg'
       const keepAlpha = mime === 'image/webp' && /^image\/(png|webp|gif|avif)$/i.test(f.type)
-      let scale = Math.min(MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight), 1)
+      let scale = Math.min(maxEdge / Math.max(img.naturalWidth, img.naturalHeight), 1)
       let quality = 0.86
       let out = ''
       for (let round = 0; round < 7; round++) {
@@ -480,7 +509,7 @@ function normalizeToDataUrl(f: File): Promise<string> {
         }
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
         out = canvas.toDataURL(mime, quality)
-        if (out.length <= STORE_BUDGET_BYTES) break
+        if (out.length <= budget) break
         scale *= 0.8
         if (quality > 0.6) quality -= 0.08
       }
@@ -491,41 +520,72 @@ function normalizeToDataUrl(f: File): Promise<string> {
   })
 }
 
-export function uploadImages(projectId: number, files: File[]): Promise<GalleryProject[]> {
+/** 生成预览缩略图（≤180KB / 长边 640）。 */
+const makeThumb = (f: File) => encodeToDataUrl(f, THUMB_BUDGET_BYTES, THUMB_MAX_EDGE)
+
+/**
+ * 原图直传 MinIO（经 BFF multipart 代理，服务端落对象存储）。
+ * 返回 object key；抛错交由调用方降级处理。与 PeaNode.onPickFile 同一条链路。
+ */
+async function putOriginalToStorage(f: File): Promise<string> {
+  const form = new FormData()
+  form.append('file', f)
+  const { data } = await api.post<{ key: string }>('/files/upload', form)
+  return data?.key || ''
+}
+
+export async function uploadImages(projectId: number, files: File[]): Promise<GalleryProject[]> {
   const p = ensureDraft()
-  const startId = nextId()
+  if (files.length === 0) return [p]
 
   const oversized = files.filter((f) => f.size > MAX_PICK_BYTES)
   if (oversized.length > 0) {
     const names = oversized.map((f) => f.name).join('、')
-    return Promise.reject(new Error(
-      `以下图片超过 ${Math.round(MAX_PICK_BYTES / 1024 / 1024)}MB，请压缩后再上传：${names}`,
-    ))
+    throw new Error(
+      `以下图片超过 ${Math.round(MAX_PICK_BYTES / 1024 / 1024)}MB 上传上限：${names}`,
+    )
   }
-  if (files.length === 0) return Promise.resolve([p])
+
+  const startId = nextId()
+  const baseCount = p.images.length
 
   // 用 Promise.all 保序：旧实现按"解码完成先后"入列，导致 order / original（首图）
   // 在多图并发上传时不确定 —— 谁先解码完谁就成了主图。这里改为严格按选择顺序。
-  return Promise.all(files.map((f) => normalizeToDataUrl(f))).then((urls) => {
-    const baseCount = p.images.length
-    const newImages: GalleryImage[] = urls.map((url, i) => ({
-      id: startId + i,
-      project_id: projectId,
-      filename: files[i].name,
-      url,
-      original: baseCount === 0 && i === 0,
-      order: baseCount + i,
-      created_at: nowUtc(),
-    }))
-    p.images = [...p.images, ...newImages]
-    p.updated_at = nowUtc()
-    if (!saveDraft(p)) {
-      // 回滚内存态，避免"UI 显示成功、刷新即丢"的假成功。
-      p.images = p.images.slice(0, baseCount)
-      throw new Error('浏览器本地存储空间不足，图片未保存。请先删除部分已上传的产品图后重试。')
-    }
-    return [p]
-  })
+  //
+  // 每张图两件事并行：上传原图拿 key（给模型）+ 生成缩略图（给人看）。
+  // 上传失败 fail-open：退回一张 ≤1.1MB 内联图兜底，功能可用性优先于画质，
+  // 且在控制台留痕，避免"静默降质"这种最难查的问题。
+  const prepared = await Promise.all(files.map(async (f) => {
+    const [key, thumb] = await Promise.all([
+      putOriginalToStorage(f).catch((e) => {
+        console.warn('[gallery] 原图上传对象存储失败，降级为内联兜底图:', f.name, e)
+        return ''
+      }),
+      makeThumb(f),
+    ])
+    if (key) return { key, url: thumb }
+    const fallback = await encodeToDataUrl(f, FALLBACK_INLINE_BUDGET_BYTES, FALLBACK_MAX_EDGE)
+    return { key: '', url: fallback }
+  }))
+
+  const newImages: GalleryImage[] = prepared.map((it, i) => ({
+    id: startId + i,
+    project_id: projectId,
+    filename: files[i].name,
+    url: it.url,
+    file_key: it.key || undefined,
+    original: baseCount === 0 && i === 0,
+    order: baseCount + i,
+    created_at: nowUtc(),
+  }))
+  p.images = [...p.images, ...newImages]
+  p.updated_at = nowUtc()
+  if (!saveDraft(p)) {
+    // 回滚内存态，避免"UI 显示成功、刷新即丢"的假成功。
+    p.images = p.images.slice(0, baseCount)
+    throw new Error('浏览器本地存储空间不足，图片未保存。请先删除部分已上传的产品图后重试。')
+  }
+  return [p]
 }
 
 export function deleteImage(projectId: number, imageId: number): Promise<null> {
@@ -659,6 +719,59 @@ export async function aiWriteSellingPoints(_projectId: number): Promise<AiSellin
 /** pea jobId → local taskId 映射 */
 const jobTaskMap = new Map<string, number>()
 
+/**
+ * 把「页面上展示用的图片地址」翻译成「可以真正发给模型的地址」。
+ *
+ * 草稿里 plan_item.reference_images / product_image 存的是展示用 URL（缩略图 data URL），
+ * 直接发给模型等于把残血图当参考图。这里以 project.images 为登记表，
+ * 展示 URL → file_key → getPresignedUrl 换成 MinIO 签名地址（指向**原图**）。
+ *
+ * 三级兜底，任何一环失败都不阻断生成：
+ *   ① 有 file_key 且签名成功 → 用签名 URL（最佳：原图 + 按原始字节计量，无 base64 膨胀）
+ *   ② 签名失败 / 无 key，但本身是 http(s) 或 data URL → 原样投递（兼容老草稿与降级图）
+ *   ③ 其余（如 blob:、占位 SVG）→ 丢弃，模型侧下载不到只会徒增失败
+ */
+async function resolveSendableRefs(p: GalleryProject, displayUrls: string[]): Promise<string[]> {
+  const keyByUrl = new Map<string, string>()
+  for (const img of p.images) {
+    if (img.file_key) keyByUrl.set(img.url, img.file_key)
+  }
+
+  const out: string[] = []
+  const seenSource = new Set<string>()
+  const seenResult = new Set<string>()
+  for (const u of displayUrls) {
+    if (out.length >= MAX_REFS_PER_JOB) break
+    if (!u || seenSource.has(u)) continue
+    seenSource.add(u)
+
+    let sendable = ''
+    const key = keyByUrl.get(u)
+    if (key) {
+      sendable = await getPresignedUrl(key)
+      if (!sendable) console.warn('[gallery] 签名 URL 获取失败，回退内联投递:', key)
+    }
+    if (!sendable && (u.startsWith('http') || u.startsWith('data:image/'))) sendable = u
+    if (!sendable || seenResult.has(sendable)) continue
+
+    seenResult.add(sendable)
+    out.push(sendable)
+  }
+  return out
+}
+
+/** 收集本次生成要携带的参考图（产品原图优先，其次各策划项自带参考图）。 */
+async function collectJobRefs(p: GalleryProject): Promise<string[]> {
+  const display: string[] = []
+  // 产品原图放最前：images[0] 是主体，模型对靠前的参考图权重更高。
+  for (const img of p.images) display.push(img.url)
+  for (const it of p.plan_items) {
+    if (it.product_image) display.push(it.product_image)
+    for (const r of it.reference_images || []) display.push(r)
+  }
+  return resolveSendableRefs(p, display)
+}
+
 export async function generate(projectId: number): Promise<GalleryTask> {
   const p = ensureDraft()
 
@@ -686,6 +799,11 @@ export async function generate(projectId: number): Promise<GalleryTask> {
   // 图片数：按各策划项 count 累加（用于计费倍率 + 提供商张数）
   const totalCount = p.plan_items.reduce((s, it) => s + (it.output_settings?.count || 1), 0)
 
+  // 参考图：产品原图 + 各策划项自带参考图，翻译成模型可下载的签名 URL。
+  // ★ 旧实现只发 prompt，用户上传的产品图从未抵达模型 —— "电商套图"实际退化成纯文生图，
+  //   这也是后端逐张 10MB 压缩护栏一直没被触发的根因（到后端时根本没有图）。
+  const referenceImages = await collectJobRefs(p)
+
   try {
     const result = await acceptGenerationJob({
       type: 'image',
@@ -698,6 +816,9 @@ export async function generate(projectId: number): Promise<GalleryTask> {
         // 计费倍率键名由模型 pricing.multiplier 约定为 'n'（见 PricingService.computeCost），
         // 必须显式传 n 才能按图片数扣减，否则只会扣 base。
         n: totalCount,
+        // 编排器统一从 params.reference_images 取参考图（见 param_adapters.NormalizedParams）。
+        // 空数组会被后端视为"有参考图但取不到"，故仅在非空时下发。
+        ...(referenceImages.length ? { reference_images: referenceImages } : {}),
       },
     })
 
@@ -873,12 +994,17 @@ export async function regenerateRecord(recordId: number, prompt?: string): Promi
   if (prompt) targetRec.prompt = prompt
   saveTasks(tasks)
 
-  // 重新提交到 pea 后端
+  // 重新提交到 pea 后端。带上与首次生成同一套参考图，否则"重作"会退化成纯文生图，
+  // 产出与原图主体对不上（用户视角就是"重作出来变了个产品"）。
+  const refs = await collectJobRefs(ensureDraft())
   try {
     const result = await acceptGenerationJob({
       type: 'image',
       prompt: targetRec.prompt,
-      params: { width: 1024, height: 1024, count: 1, n: 1 },
+      params: {
+        width: 1024, height: 1024, count: 1, n: 1,
+        ...(refs.length ? { reference_images: refs } : {}),
+      },
     })
 
     // 异步轮询

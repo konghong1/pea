@@ -7,8 +7,9 @@
  *  - 内置格式工具栏（H1-H3 / 粗体 / 斜体 / 列表 / 引用 / 代码）
  *  - 底部状态栏：字数统计 + 保存状态
  *  - 支持 Ctrl+S 快捷保存 / Esc 关闭
+ *  - 格式按「选区」或「插入点」应用：有选区只格式化选区；无选区时后续输入继承格式
  */
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import { Modal } from 'antd';
 
 interface TextNodeEditorModalProps {
@@ -19,25 +20,51 @@ interface TextNodeEditorModalProps {
 }
 
 export default function TextNodeEditorModal({ open, initialHtml, onSave, onCancel }: TextNodeEditorModalProps) {
-  const [html, setHtml] = useState(initialHtml);
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
   const [saved, setSaved] = useState(true);
   const [wordCount, setWordCount] = useState(0);
+  // 工具栏激活态：光标当前所在的块级格式（h1/p/blockquote...），用于高亮反馈
+  const [activeBlock, setActiveBlock] = useState('');
+  // 工具栏激活态：inline 命令是否生效（bold/italic...）
+  const [activeInline, setActiveInline] = useState<Record<string, boolean>>({});
+  // 标记：是否由工具栏 exec 触发的 input，用于跳过不必要的同步防止重复
+  const isExecRef = useRef(false);
+  // rAF timer：合并快速连续的预览同步，减少重渲染频率
+  const inputRafRef = useRef<number | undefined>(undefined);
+  // 标记：是否已完成首次内容灌注，避免 layout effect 重复覆盖用户输入
+  const seededRef = useRef(false);
+  // rAF timer：合并选区变化带来的激活态同步
+  const fmtRafRef = useRef<number | undefined>(undefined);
+  // 原生 color input 引用，用于触发系统取色器
+  const colorInputRef = useRef<HTMLInputElement>(null);
+  // 点击自定义颜色按钮前暂存当前选区，避免 color input 抢焦点导致 foreColor 找不到选区
+  const savedRangeRef = useRef<Range | null>(null);
 
-  // 回调 ref：编辑区 DOM 真正挂载的瞬间（含 destroyOnClose 重挂载、Portal 异步挂载）立即灌入初始 HTML
-  // 并聚焦。不依赖 [open] effect 的时机——Modal 内容经 Portal 延迟一拍挂载时，普通 effect 里
-  // editorRef.current 可能为 null，innerHTML 写入被整个 if 跳过 → 编辑区空白，而预览区（走 React state
-  // useState(initialHtml)，组件首次挂载时就已拿到文本）照常显示。这正是「编辑区不展示内容、预览却有」的根因。
-  // 用回调 ref 保证「元素一挂载就写入」，彻底消除竞态。仅在元素挂载时执行一次；
-  // 编辑过程中 initialHtml 不变（保存才回写 store），故不会误清空用户正在输入的内容。
+  // 字数统计 helper
+  const countText = useCallback((html: string) => {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html ?? '';
+    return (tmp.innerText ?? '').replace(/\s/g, '').length;
+  }, []);
+
+  // 关键修复：Modal 经 Portal/destroyOnHidden 挂载，普通 effect 里 ref 经常为 null。
+  // 用回调 ref 在编辑区 DOM 真正挂载的瞬间灌入初始 HTML 并聚焦；
+  // 预览区通过 requestAnimationFrame 延迟一拍同步，确保 previewRef 已赋值。
+  // seededRef 保证一次打开周期内只初始化一次，不会覆盖用户正在输入的内容。
   const setEditorRef = useCallback(
     (el: HTMLDivElement | null) => {
       editorRef.current = el;
-      if (!el) return;
-      el.innerHTML = initialHtml ?? '';
-      setHtml(initialHtml ?? '');
+      if (!el || seededRef.current) return;
+      const html = initialHtml ?? '';
+      el.innerHTML = html;
       setSaved(true);
+      setWordCount(countText(html));
+      seededRef.current = true;
+
       requestAnimationFrame(() => {
+        // 同步预览区（此时 previewRef 已可用）
+        if (previewRef.current) previewRef.current.innerHTML = html;
         el.focus();
         const sel = window.getSelection();
         if (sel) {
@@ -49,17 +76,63 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
         }
       });
     },
-    [initialHtml],
+    [initialHtml, countText],
   );
 
-  // 字数统计
+  // 关闭弹窗时重置 seededRef，保证下次打开重新灌入最新 initialHtml
   useEffect(() => {
-    const text = editorRef.current?.innerText ?? '';
-    setWordCount(text.replace(/\s/g, '').length);
-  }, [html]);
+    if (!open) seededRef.current = false;
+  }, [open]);
+
+  // 同步预览区 + 字数统计（用 rAF 合并，避免高频重渲染导致闪动）。
+  // 预览区用 ref 直写 innerHTML，不依赖 React state 重渲染——这是消除"编辑框/工具条闪动"的关键。
+  const syncPreview = useCallback(() => {
+    if (inputRafRef.current) cancelAnimationFrame(inputRafRef.current);
+    inputRafRef.current = requestAnimationFrame(() => {
+      const el = editorRef.current;
+      if (!el) return;
+      const content = el.innerHTML;
+      if (previewRef.current) previewRef.current.innerHTML = content;
+      setWordCount(countText(content));
+      setSaved(false);
+    });
+  }, [countText]);
+
+  // 同步工具栏激活态：根据当前光标所在的块标签 / inline 命令状态，高亮对应按钮。
+  // 这样用户点完 H1 后，H1 按钮会亮起，清楚知道后续输入将是一级标题。
+  const syncActiveFormats = useCallback(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) return; // 选区不在编辑区，忽略
+
+    const block = findCurrentBlock(el, range.commonAncestorContainer);
+    setActiveBlock(block ? block.tagName.toLowerCase() : '');
+
+    const next: Record<string, boolean> = {};
+    for (const c of INLINE_STATE_CMDS) {
+      try {
+        next[c] = document.queryCommandState(c);
+      } catch {
+        next[c] = false;
+      }
+    }
+    setActiveInline(next);
+  }, []);
+
+  // 用 rAF 节流选区变化，避免高频 setState 引起的重渲染/抖动
+  const scheduleSyncActiveFormats = useCallback(() => {
+    if (fmtRafRef.current) cancelAnimationFrame(fmtRafRef.current);
+    fmtRafRef.current = requestAnimationFrame(() => {
+      fmtRafRef.current = undefined;
+      syncActiveFormats();
+    });
+  }, [syncActiveFormats]);
 
   // 快捷键：Ctrl+S 保存 / Esc 关闭
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
       handleSave();
@@ -67,19 +140,89 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
       e.preventDefault();
       handleCancel();
     }
-  }, [html]);
-
-  const exec = (cmd: string, value?: string) => {
-    editorRef.current?.focus();
-    // formatBlock 在多数浏览器要求传入带尖括号的标签名（如 <h1>），否则 Chrome 会静默失败
-    const v = cmd === 'formatBlock' && value ? `<${value.toLowerCase()}>` : value;
-    document.execCommand(cmd, false, v);
-    // 触发 contentEditable 的 input 事件以同步 state
-    editorRef.current?.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
+  const exec = useCallback((cmd: string, value?: string) => {
+    const el = editorRef.current;
+    if (!el) return;
+
+    // 由工具栏按钮的 onMouseDown（已 preventDefault）调用：此时编辑区焦点与选区完好，
+    // execCommand 必定作用在正确选区上。先 focus 兜底，再执行命令并同步预览。
+    el.focus();
+    isExecRef.current = true;
+
+    if (cmd === 'formatBlock' && value) {
+      // 块级格式（H1-H3 / P / BLOCKQUOTE / PRE）按选区/插入点精细应用，
+      // 不再使用原生的 formatBlock（原生会把整个段落变成目标块）。
+      applyBlockFormat(el, value);
+    } else {
+      // inline / list / hr 继续使用原生 execCommand，浏览器已支持选区/插入点行为。
+      document.execCommand(cmd, false, value);
+    }
+
+    isExecRef.current = false;
+    // 同步预览 + 字数（rAF 合并，不触发整个 Modal 重渲染 → 不闪动）
+    syncPreview();
+    // 同步工具栏激活态高亮，让用户看见"当前处于哪种格式"
+    scheduleSyncActiveFormats();
+  }, [syncPreview, scheduleSyncActiveFormats]);
+
+  // 打开系统取色器：先保存当前选区，再触发隐藏的 <input type="color"> 点击。
+  // 这样用户选择颜色后，handleColorChange 可以恢复选区并正确应用 foreColor。
+  const openColorPicker = useCallback(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      if (el.contains(range.commonAncestorContainer)) {
+        savedRangeRef.current = range.cloneRange();
+      }
+    }
+    colorInputRef.current?.click();
+  }, []);
+
+  // 原生 color input 选择颜色后的回调
+  const handleColorChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const color = e.target.value;
+    if (!color) return;
+    const el = editorRef.current;
+    if (!el) return;
+
+    el.focus();
+    const sel = window.getSelection();
+    if (savedRangeRef.current && sel) {
+      sel.removeAllRanges();
+      sel.addRange(savedRangeRef.current);
+    }
+
+    isExecRef.current = true;
+    document.execCommand('foreColor', false, color);
+    isExecRef.current = false;
+    syncPreview();
+    scheduleSyncActiveFormats();
+    savedRangeRef.current = null;
+  }, [syncPreview, scheduleSyncActiveFormats]);
+
+  // 选区变化时实时同步激活态高亮（仅 open 时监听）
+  useEffect(() => {
+    if (!open) return;
+    const handler = () => scheduleSyncActiveFormats();
+    document.addEventListener('selectionchange', handler);
+    return () => document.removeEventListener('selectionchange', handler);
+  }, [open, scheduleSyncActiveFormats]);
+
+  // 清理 RAF timer，防止组件卸载后 setState
+  useEffect(() => {
+    return () => {
+      if (inputRafRef.current) cancelAnimationFrame(inputRafRef.current);
+      if (fmtRafRef.current) cancelAnimationFrame(fmtRafRef.current);
+    };
+  }, []);
+
   const handleSave = () => {
-    onSave(html);
+    // 直接读编辑区 DOM（非受控），无需维护 html state
+    onSave(editorRef.current?.innerHTML ?? '');
     setSaved(true);
   };
 
@@ -93,31 +236,39 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
   };
 
   const handleInput = () => {
-    if (editorRef.current) {
-      setHtml(editorRef.current.innerHTML);
-      setSaved(false);
-    }
+    // exec 触发时会同步调用 syncPreview，跳过此处避免重复；用户真实输入才走这里
+    if (isExecRef.current) return;
+    syncPreview();
+    scheduleSyncActiveFormats();
   };
 
-  /* ── 工具栏按钮 ── */
-  const ToolBtn = ({ label, title, onClick }: { label: React.ReactNode; title: string; onClick: () => void }) => (
-    <button
-      type="button"
-      className="tne-tool-btn"
-      title={title}
-      // 关键：mousedown 阶段阻止默认，避免点击按钮时编辑区失焦、选区丢失，
-      // 否则紧接的 execCommand(formatBlock/bold...) 因无有效选区而无效（工具栏点了没反应）。
-      onMouseDown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }}
-      onClick={(e) => {
-        e.preventDefault();
-        onClick();
-      }}
-    >
-      {label}
-    </button>
+  // 工具栏配置：用 useMemo 避免每次输入都重建配置对象，减少重渲染
+  const toolbarGroups = useMemo(
+    () => [
+      { label: <TneIconHeading level={1} />, title: '一级标题 (Ctrl+Alt+1)', cmd: 'formatBlock', value: 'H1' },
+      { label: <TneIconHeading level={2} />, title: '二级标题 (Ctrl+Alt+2)', cmd: 'formatBlock', value: 'H2' },
+      { label: <TneIconHeading level={3} />, title: '三级标题 (Ctrl+Alt+3)', cmd: 'formatBlock', value: 'H3' },
+      { label: <span style={{ fontSize: 12, fontWeight: 500 }}>正文</span>, title: '正文段落', cmd: 'formatBlock', value: 'P' },
+      null,
+      { label: <><b>B</b></>, title: '粗体 (Ctrl+B)', cmd: 'bold' },
+      { label: <em>I</em>, title: '斜体 (Ctrl+I)', cmd: 'italic' },
+      { label: <u>U</u>, title: '下划线 (Ctrl+U)', cmd: 'underline' },
+      { label: <s>S</s>, title: '删除线', cmd: 'strikeThrough' },
+      null,
+      { label: <TneIconList ordered={false} />, title: '无序列表', cmd: 'insertUnorderedList' },
+      { label: <TneIconList ordered />, title: '有序列表', cmd: 'insertOrderedList' },
+      null,
+      { label: <>"</>, title: '引用块', cmd: 'formatBlock', value: 'BLOCKQUOTE' },
+      { label: <><code style={{ fontSize: 11 }}>&lt;/&gt;</code></>, title: '行内代码', cmd: 'formatBlock', value: 'PRE' },
+      { label: <>—</>, title: '分割线', cmd: 'insertHorizontalRule' },
+      null,
+      { label: <span className="tne-color-dot" style={{ background: '#1fa2dc' }} />, title: '蓝色', cmd: 'foreColor', value: '#1fa2dc' },
+      { label: <span className="tne-color-dot" style={{ background: '#e74c3c' }} />, title: '红色', cmd: 'foreColor', value: '#e74c3c' },
+      { label: <span className="tne-color-dot" style={{ background: '#27ae60' }} />, title: '绿色', cmd: 'foreColor', value: '#27ae60' },
+      { label: <span className="tne-color-dot" style={{ background: '#f39c12' }} />, title: '橙色', cmd: 'foreColor', value: '#f39c12' },
+      { label: <span className="tne-color-dot" style={{ background: '#111111' }} />, title: '黑色', cmd: 'foreColor', value: '#111111' },
+    ],
+    []
   );
 
   return (
@@ -132,7 +283,7 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
       closable={true}
       maskClosable={false}
       className="text-node-editor-modal"
-      destroyOnClose
+      destroyOnHidden
       styles={{
         body: { padding: 0, overflow: 'hidden' },
         header: {
@@ -162,53 +313,41 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
     >
       {/* 工具栏 */}
       <div className="tne-toolbar">
-        <div className="tne-toolbar-group">
-          <ToolBtn label={<TneIconHeading level={1} />} title="一级标题 (Ctrl+Alt+1)" onClick={() => exec('formatBlock', 'H1')} />
-          <ToolBtn label={<TneIconHeading level={2} />} title="二级标题 (Ctrl+Alt+2)" onClick={() => exec('formatBlock', 'H2')} />
-          <ToolBtn label={<TneIconHeading level={3} />} title="三级标题 (Ctrl+Alt+3)" onClick={() => exec('formatBlock', 'H3')} />
-          <ToolBtn label={<span style={{ fontSize: 12, fontWeight: 500 }}>正文</span>} title="正文段落" onClick={() => exec('formatBlock', 'P')} />
-        </div>
-        <div className="tne-toolbar-sep" />
-        <div className="tne-toolbar-group">
-          <ToolBtn label={<><b>B</b></>} title="粗体 (Ctrl+B)" onClick={() => exec('bold')} />
-          <ToolBtn label={<em>I</em>} title="斜体 (Ctrl+I)" onClick={() => exec('italic')} />
-          <ToolBtn label={<u>U</u>} title="下划线 (Ctrl+U)" onClick={() => exec('underline')} />
-          <ToolBtn label={<s>S</s>} title="删除线" onClick={() => exec('strikeThrough')} />
-        </div>
-        <div className="tne-toolbar-sep" />
-        <div className="tne-toolbar-group">
-          <ToolBtn label={<TneIconList ordered={false} />} title="无序列表" onClick={() => exec('insertUnorderedList')} />
-          <ToolBtn label={<TneIconList ordered />} title="有序列表" onClick={() => exec('insertOrderedList')} />
-        </div>
-        <div className="tne-toolbar-sep" />
-        <div className="tne-toolbar-group">
-          <ToolBtn label={<>"</>} title="引用块" onClick={() => exec('formatBlock', 'BLOCKQUOTE')} />
-          <ToolBtn label={<><code style={{ fontSize: 11 }}>&lt;/&gt;</code></>} title="行内代码" onClick={() => exec('formatBlock', 'PRE')} />
-          <ToolBtn label={<>—</>} title="分割线" onClick={() => exec('insertHorizontalRule')} />
-        </div>
-        <div className="tne-toolbar-spacer" />
-        <div className="tne-toolbar-group">
-          <ToolBtn
-            label={<span className="tne-color-dot" style={{ background: '#1fa2dc' }} />}
-            title="蓝色"
-            onClick={() => exec('foreColor', '#1fa2dc')}
-          />
-          <ToolBtn
-            label={<span className="tne-color-dot" style={{ background: '#e74c3c' }} />}
-            title="红色"
-            onClick={() => exec('foreColor', '#e74c3c')}
-          />
-          <ToolBtn
-            label={<span className="tne-color-dot" style={{ background: '#27ae60' }} />}
-            title="绿色"
-            onClick={() => exec('foreColor', '#27ae60')}
-          />
-          <ToolBtn
-            label={<span className="tne-color-dot" style={{ background: '#f39c12' }} />}
-            title="橙色"
-            onClick={() => exec('foreColor', '#f39c12')}
-          />
-        </div>
+        {toolbarGroups.map((item, idx) =>
+          item ? (
+            <ToolBtn
+              key={item.title}
+              label={item.label}
+              title={item.title}
+              cmd={item.cmd}
+              value={item.value}
+              active={item.value ? activeBlock === item.value.toLowerCase() : !!activeInline[item.cmd]}
+              onExec={exec}
+            />
+          ) : (
+            <div key={`sep-${idx}`} className="tne-toolbar-sep" />
+          )
+        )}
+        <button
+          type="button"
+          className="tne-tool-btn tne-tool-btn--color-picker"
+          title="自定义颜色"
+          aria-label="自定义颜色"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            openColorPicker();
+          }}
+        >
+          <span className="tne-color-ring" />
+        </button>
+        <input
+          ref={colorInputRef}
+          type="color"
+          className="tne-color-input"
+          onInput={handleColorChange}
+          onBlur={() => { savedRangeRef.current = null; }}
+          aria-hidden="true"
+        />
       </div>
 
       {/* 编辑区域 */}
@@ -225,6 +364,9 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
             suppressContentEditableWarning
             onInput={handleInput}
             onKeyDown={handleKeyDown}
+            onKeyUp={scheduleSyncActiveFormats}
+            onMouseUp={scheduleSyncActiveFormats}
+            onClick={scheduleSyncActiveFormats}
           />
         </div>
 
@@ -237,7 +379,7 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>
             <span>预览</span>
           </div>
-          <div className="tne-preview-content" dangerouslySetInnerHTML={{ __html: html }} />
+          <div className="tne-preview-content" ref={previewRef} />
         </div>
       </div>
 
@@ -248,6 +390,131 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
     </Modal>
   );
 }
+
+/* ── 内联命令集合 ── */
+const INLINE_CMDS = new Set(['bold', 'italic', 'underline', 'strikeThrough', 'foreColor']);
+
+/* ── 块级标签集合 ── */
+const BLOCK_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'blockquote', 'pre', 'div']);
+
+/* ── 需要查询激活态的 inline 命令 ── */
+const INLINE_STATE_CMDS = ['bold', 'italic', 'underline', 'strikeThrough'];
+
+/**
+ * 应用块级格式：按选区包装，或在折叠选区处插入空块等待输入。
+ * 替代原生 document.execCommand('formatBlock')，避免「一点按钮整段都变」的问题。
+ */
+function applyBlockFormat(editor: HTMLElement, tagName: string) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+
+  editor.focus();
+  const range = sel.getRangeAt(0);
+  const tag = tagName.toLowerCase();
+
+  // 选区若漂到编辑区外，兜底放到末尾
+  if (!editor.contains(range.commonAncestorContainer)) {
+    const fallback = document.createRange();
+    fallback.selectNodeContents(editor);
+    fallback.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(fallback);
+  }
+
+  const block = findCurrentBlock(editor, range.commonAncestorContainer);
+
+  if (range.collapsed) {
+    // 折叠选区：光标已在同类型块内 → toggle 解除；否则插入空目标块，后续输入继承格式
+    if (block && block.tagName.toLowerCase() === tag) {
+      unwrapBlock(block);
+    } else {
+      // 折叠选区：在光标处插入一个带 <br> 占位符的空目标块，并把选区移入块内。
+      // 这样后续输入会落在块标签里，自然继承格式；若用完全空标签，浏览器容易把光标「漏」到块外。
+      const wrapper = document.createElement(tag);
+      const br = document.createElement('br');
+      wrapper.appendChild(br);
+      range.insertNode(wrapper);
+      const newRange = document.createRange();
+      newRange.setStartBefore(br);
+      newRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+    }
+  } else {
+    // 有选区：若选区完全位于同类型块内 → toggle 解除；否则只包装选区内容
+    if (block && block.tagName.toLowerCase() === tag && isRangeInside(range, block)) {
+      unwrapBlock(block);
+    } else {
+      const wrapper = document.createElement(tag);
+      const content = range.extractContents();
+      wrapper.appendChild(content);
+      range.insertNode(wrapper);
+      const newRange = document.createRange();
+      newRange.selectNodeContents(wrapper);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+    }
+  }
+}
+
+/** 查找 node 在 editor 内的最近块级祖先 */
+function findCurrentBlock(editor: HTMLElement, node: Node): HTMLElement | null {
+  let cur: Node | null = node;
+  while (cur && cur !== editor) {
+    if (cur.nodeType === Node.ELEMENT_NODE) {
+      const el = cur as HTMLElement;
+      if (BLOCK_TAGS.has(el.tagName.toLowerCase())) return el;
+    }
+    cur = cur.parentNode;
+  }
+  return null;
+}
+
+/** 判断 range 是否完全在 el 内部 */
+function isRangeInside(range: Range, el: HTMLElement): boolean {
+  return el.contains(range.startContainer) && el.contains(range.endContainer);
+}
+
+/** 解除块级包装，保留子内容并合并文本节点 */
+function unwrapBlock(block: HTMLElement) {
+  const parent = block.parentNode;
+  if (!parent) return;
+  while (block.firstChild) {
+    parent.insertBefore(block.firstChild, block);
+  }
+  parent.removeChild(block);
+  if (parent.nodeType === Node.ELEMENT_NODE) {
+    (parent as HTMLElement).normalize();
+  }
+}
+
+/* ── 工具栏按钮（提取为顶层 memo 组件，禁止在父组件内定义，避免每次输入都 remount） ── */
+interface ToolBtnProps {
+  label: React.ReactNode;
+  title: string;
+  cmd: string;
+  value?: string;
+  active?: boolean;
+  onExec: (cmd: string, value?: string) => void;
+}
+
+const ToolBtn = memo(({ label, title, cmd, value, active, onExec }: ToolBtnProps) => (
+  <button
+    type="button"
+    className={`tne-tool-btn${active ? ' tne-tool-btn--active' : ''}`}
+    title={title}
+    aria-label={title}
+    aria-pressed={active}
+    data-active={active ? '1' : undefined}
+    onMouseDown={(e) => {
+      e.preventDefault();
+      onExec(cmd, value);
+    }}
+  >
+    {label}
+  </button>
+));
+ToolBtn.displayName = 'ToolBtn';
 
 /* ── 内联 SVG 图标组件 ── */
 

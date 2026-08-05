@@ -225,6 +225,87 @@ def _is_agnes(base_url: str) -> bool:
     return "agnes" in (base_url or "").lower()
 
 
+# ── 参考图过大自愈 (被动防线) ────────────────────────────────────────────────
+# 主动防线在 param_adapters (按 env 配置的预算, 发出前先压)。但上游的规矩我们**无法
+# 稳定观测** (Agnes 的 10MB 限制时灵时不灵, 见 param_adapters 头部演进史), 所以再加
+# 一道被动防线: 上游明确回「图片超过10m / image too large / 413」时, 就地把参考图压到
+# 更保守的目标, 原样重试一次。
+#
+# 为什么值得做:
+#   - 不需要我们猜准阈值 —— 阈值错了也只是多打一次请求, 而不是任务直接失败+退款;
+#   - 只在**明确命中**大小类错误时触发 (looks_like_oversize_error 宁漏勿误),
+#     不会把无关错误吞掉重试, 白烧额度;
+#   - 只重试一次: 压完还被拒说明不是大小问题, 让真实错误浮出来。
+
+def _should_retry_oversize(resp, has_refs: bool) -> bool:
+    """判断这次失败是否属于「输入参考图太大」, 值得压缩后重试。"""
+    if not has_refs or not settings.ref_oversize_auto_compress:
+        return False
+    if resp is None or resp.status_code // 100 == 2:
+        return False
+    from app.image_compress import looks_like_oversize_error
+
+    body = ""
+    try:
+        body = resp.text[:500]
+    except Exception:  # noqa: BLE001
+        pass
+    # 413 是标准语义, 报文可能为空 HTML, 单独判。
+    return resp.status_code == 413 or looks_like_oversize_error(body)
+
+
+def _compress_refs_for_retry(refs: list[str], wire_budget: int) -> tuple[list[str], int]:
+    """把参考图压到「线上 base64 字节 ≤ wire_budget」, 返回 (新 refs, 实际压缩张数)。
+
+    - data: URI  -> 解码后就地压缩, 仍以内联投递 (不经公网, 保隐私);
+    - http(s) URL -> 下载后压缩并转成内联 data URI (图像接口两种都吃, 内联更可控);
+    - 单张失败一律 fail-open 保留原样 —— 压缩是补救手段, 不该反过来把任务弄挂。
+    """
+    from app.image_compress import (
+        build_data_uri,
+        compress_data_uri_to_wire_budget,
+        compress_to_budget,
+        raw_budget_from_wire,
+    )
+
+    out: list[str] = []
+    compressed = 0
+    for r in refs:
+        try:
+            if r.startswith("data:"):
+                new_uri, res = compress_data_uri_to_wire_budget(
+                    r, wire_budget, max_edge=settings.ref_compress_max_edge,
+                )
+                if res is not None:
+                    compressed += 1
+                    logger.warning("[agnes][oversize-retry] 内联参考图已压缩: %s", res.summary())
+                out.append(new_uri)
+                continue
+            if r.startswith("http"):
+                got = requests.get(
+                    r, timeout=(settings.provider_http_connect_timeout_s, 60),
+                    proxies={"http": None, "https": None},
+                )
+                got.raise_for_status()
+                raw = got.content
+                res = compress_to_budget(
+                    raw, raw_budget_from_wire(wire_budget),
+                    max_edge=settings.ref_compress_max_edge,
+                )
+                compressed += 1
+                logger.warning(
+                    "[agnes][oversize-retry] URL 参考图已下载压缩并内联: %s | %s",
+                    r[:100], res.summary(),
+                )
+                out.append(build_data_uri(res.data, res.mime))
+                continue
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[agnes][oversize-retry] 参考图压缩失败(保留原图): %s | %s",
+                           r[:100], exc)
+        out.append(r)
+    return out, compressed
+
+
 def _clamp_int(v: Any, lo: int, hi: int, default: int) -> int:
     try:
         n = int(v)
@@ -336,6 +417,25 @@ class OpenAICompatibleProvider:
             max_attempts=settings.provider_image_retry_attempts,
             fallback_url=fb,
         )
+        # 被动防线: 上游明确回「图太大」-> 压缩参考图后重试一次 (最多一次)。
+        if _should_retry_oversize(resp, bool(norm.reference_images)):
+            new_refs, n = _compress_refs_for_retry(
+                norm.reference_images, settings.ref_oversize_retry_wire_bytes,
+            )
+            if n:
+                norm.reference_images = new_refs
+                payload = adapter.build(norm, self)
+                logger.warning(
+                    "[agnes] 上游报「参考图过大」, 已压缩 %d 张后重试一次 (HTTP %d)",
+                    n, resp.status_code,
+                )
+                resp = _post_with_retry(
+                    url, payload, self._headers(),
+                    timeout=(settings.provider_http_connect_timeout_s,
+                             settings.provider_image_timeout_s),
+                    max_attempts=settings.provider_image_retry_attempts,
+                    fallback_url=fb,
+                )
         _raise_for_provider(resp, "image")
         return self._build_image_result(resp.json(), self.provider_name)
 
@@ -361,6 +461,26 @@ class OpenAICompatibleProvider:
             max_attempts=settings.provider_image_retry_attempts,
             fallback_url=fb,
         )
+        # 被动防线: 同 _generate_image。压缩是 CPU 密集 (Pillow 解码/重编码),
+        # 放 to_thread 执行, 避免阻塞事件循环拖慢同批其它在途生成。
+        if _should_retry_oversize(resp, bool(norm.reference_images)):
+            new_refs, n = await asyncio.to_thread(
+                _compress_refs_for_retry,
+                norm.reference_images,
+                settings.ref_oversize_retry_wire_bytes,
+            )
+            if n:
+                norm.reference_images = new_refs
+                payload = adapter.build(norm, self)
+                logger.warning(
+                    "[agnes] 上游报「参考图过大」, 已压缩 %d 张后重试一次 (HTTP %d)",
+                    n, resp.status_code,
+                )
+                resp = await _apost_with_retry(
+                    client, url, payload, self._headers(), timeout,
+                    max_attempts=settings.provider_image_retry_attempts,
+                    fallback_url=fb,
+                )
         _raise_for_provider(resp, "image")
         return self._build_image_result(resp.json(), self.provider_name)
 
