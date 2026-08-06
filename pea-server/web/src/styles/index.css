@@ -7522,11 +7522,15 @@ html:not(.dark) .text-node-toolbar {
   pointer-events: none;
 }
 
-/* 裁剪框外区域：半透明遮罩，能看到底图以方便裁切 */
+/* 裁剪框外区域：半透明遮罩，能看到底图以方便裁切。
+   基准尺寸=整张图(inset:0)，运行时用 transform 的 scale/translate 切出对应区域（GPU 合成，无布局抖动） */
 .pea-crop-mask {
   position: absolute;
+  inset: 0;
   background: rgba(0, 0, 0, 0.5);
   pointer-events: none;
+  transform-origin: top left;
+  will-change: transform;
 }
 /* 裁剪框：白色描边 + 三分网格线，四角把手可拖拽缩放。
    z-index:1 盖在 img-clip 之上，确保 handle 事件不被底层拦截。
@@ -7539,7 +7543,9 @@ html:not(.dark) .text-node-toolbar {
   cursor: move;
   pointer-events: auto;
   touch-action: none;
+  user-select: none;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  will-change: transform;
   background-color: rgba(0, 0, 0, 0);       /* 透明实心填充：确保整区接收 pointer 事件 */
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.28) 1px, transparent 1px),
@@ -7550,6 +7556,15 @@ html:not(.dark) .text-node-toolbar {
 /* 拖动期间禁用 frame 上的 selection，防止误选文本 */
 .pea-crop-frame:active {
   user-select: none;
+}
+/* 拖动态：关闭过渡 + 提升合成层，rAF 写 DOM 时不产生动画滞后 → 顺滑无抖动 */
+.pea-crop-frame--dragging {
+  transition: none !important;
+  will-change: transform;
+  cursor: grabbing;
+}
+.pea-crop-frame--dragging .pea-crop-handle {
+  transition: none !important;
 }
 /* 四角拖拽把手：z-index:2 高于 frame 本体，确保 pointer 事件优先于 frame 的 move 行为。
    加大到 18x18 并用 transform 居中，让热区更大更好点中。
@@ -7580,12 +7595,14 @@ html:not(.dark) .text-node-toolbar {
 .pea-crop-handle.ne { top: -9px; right: -9px; cursor: nesw-resize; }
 .pea-crop-handle.sw { bottom: -9px; left: -9px; cursor: nesw-resize; }
 .pea-crop-handle.se { bottom: -9px; right: -9px; cursor: nwse-resize; }
-/* 四边中点把手：细长条形，位于每条边中央 */
+/* 四边中点把手：细长条形，位于每条边中央；拖动该边单独移动（不缩放） */
 .pea-crop-handle.edge { width: 24px; height: 10px; border-radius: 3px; }
-.pea-crop-handle.edge.n { top: -5px; left: 50%; margin-left: -12px; cursor: ns-resize; }
-.pea-crop-handle.edge.s { bottom: -5px; left: 50%; margin-left: -12px; cursor: ns-resize; }
-.pea-crop-handle.edge.w { left: -5px; top: 50%; margin-top: -5px; width: 10px; height: 24px; cursor: ew-resize; }
-.pea-crop-handle.edge.e { right: -5px; top: 50%; margin-top: -5px; width: 10px; height: 24px; cursor: ew-resize; }
+.pea-crop-handle.edge.n, .pea-crop-handle.edge.s { cursor: ns-resize; }
+.pea-crop-handle.edge.e, .pea-crop-handle.edge.w { cursor: ew-resize; }
+.pea-crop-handle.edge.n { top: -5px; left: 50%; margin-left: -12px; }
+.pea-crop-handle.edge.s { bottom: -5px; left: 50%; margin-left: -12px; }
+.pea-crop-handle.edge.w { left: -5px; top: 50%; margin-top: -5px; width: 10px; height: 24px; }
+.pea-crop-handle.edge.e { right: -5px; top: 50%; margin-top: -5px; width: 10px; height: 24px; }
 
 /* 裁剪功能条：图片正下方的独立 bar（不压在裁剪框内） */
 .pea-crop-toolbar {
@@ -7645,6 +7662,65 @@ html:not(.dark) .text-node-toolbar {
 .pea-crop-ratio-label {
   font-size: 13px;
   white-space: nowrap;
+}
+/* 自定义比例输入：宽 / 高 */
+.pea-crop-custom-ratio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+.pea-crop-custom-input {
+  width: 56px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  text-align: center;
+  outline: none;
+  -moz-appearance: textfield;
+}
+.pea-crop-custom-input::-webkit-outer-spin-button,
+.pea-crop-custom-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.pea-crop-custom-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+.pea-crop-custom-input:focus {
+  border-color: var(--pea-brand, #38e1ff);
+  background: rgba(0, 0, 0, 0.4);
+}
+.pea-crop-custom-colon {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  user-select: none;
+}
+html:not(.dark) .pea-crop-custom-ratio {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+html:not(.dark) .pea-crop-custom-input {
+  background: #fff;
+  border-color: rgba(0, 0, 0, 0.12);
+  color: var(--pea-text-primary);
+}
+html:not(.dark) .pea-crop-custom-input::placeholder {
+  color: rgba(0, 0, 0, 0.35);
+}
+html:not(.dark) .pea-crop-custom-input:focus {
+  border-color: var(--pea-brand, #3b9eff);
+}
+html:not(.dark) .pea-crop-custom-colon {
+  color: var(--pea-text-secondary);
 }
 .pea-crop-confirm {
   padding: 0 14px;

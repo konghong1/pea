@@ -2,10 +2,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from 'react-dom';
 import { Dropdown } from 'antd';
 import { toast } from '../store/toast';
+import { updateCrop, clamp, MIN_CROP, type Rect, type CropDragType } from './cropMath';
 
 export type CropRatio = 'original' | '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '21:9' | 'custom';
 
-type Rect = { x: number; y: number; w: number; h: number };
 type Disp = { w: number; h: number; scale: number };
 
 interface Props {
@@ -25,18 +25,15 @@ const RATIO_LABELS: Record<CropRatio, string> = {
   custom: '自定义…',
 };
 
-const RATIO_VALUES: Record<CropRatio, number | null> = {
-  original: null,
+const RATIO_VALUES: Record<Exclude<CropRatio, 'original' | 'custom'>, number> = {
   '1:1': 1,
   '4:3': 4 / 3,
   '3:4': 3 / 4,
   '16:9': 16 / 9,
   '9:16': 9 / 16,
   '21:9': 21 / 9,
-  custom: null,
 };
 
-const MIN_CROP = 32;
 const INSET = 0.10;
 
 /** 计算图片在视口中的显示尺寸：等比 contain 到 (0.84vw, 0.72vh) 区域内。
@@ -66,10 +63,6 @@ function centerFitRect(W: number, H: number, ratio: number | null) {
   let w = clamp(W * inset, MIN_CROP, W);
   let h = clamp(H * inset, MIN_CROP, H);
   return { x: (W - w) / 2, y: (H - h) / 2, w, h };
-}
-
-function clamp(v: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(hi, v));
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -104,24 +97,16 @@ function syncDomStyles(
   frameEl: HTMLDivElement | null,
   masks: { top: HTMLDivElement | null; bottom: HTMLDivElement | null; left: HTMLDivElement | null; right: HTMLDivElement | null },
 ) {
+  // 全部用 transform 驱动（GPU 合成，无布局抖动）。遮罩基准尺寸 = 整张图(W×H)，用 scale/translate 切出对应区域
   if (frameEl) {
-    frameEl.style.left = `${rect.x}px`;
-    frameEl.style.top = `${rect.y}px`;
+    frameEl.style.transform = `translate3d(${rect.x}px, ${rect.y}px, 0)`;
     frameEl.style.width = `${rect.w}px`;
     frameEl.style.height = `${rect.h}px`;
   }
-  if (masks.top) masks.top.style.height = `${rect.y}px`;
-  if (masks.bottom) masks.bottom.style.height = `${H - rect.y - rect.h}px`;
-  if (masks.left) {
-    masks.left.style.width = `${rect.x}px`;
-    masks.left.style.top = `${rect.y}px`;
-    masks.left.style.height = `${rect.h}px`;
-  }
-  if (masks.right) {
-    masks.right.style.width = `${W - rect.x - rect.w}px`;
-    masks.right.style.top = `${rect.y}px`;
-    masks.right.style.height = `${rect.h}px`;
-  }
+  if (masks.top) masks.top.style.transform = `scale(1, ${rect.y / H})`;
+  if (masks.bottom) masks.bottom.style.transform = `translate(0px, ${rect.y + rect.h}px) scale(1, ${(H - rect.y - rect.h) / H})`;
+  if (masks.left) masks.left.style.transform = `scale(${rect.x / W}, 1)`;
+  if (masks.right) masks.right.style.transform = `translate(${rect.x + rect.w}px, 0) scale(${(W - rect.x - rect.w) / W}, 1)`;
 }
 
 export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
@@ -129,7 +114,9 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
   const [crop, setCrop] = useState<Rect | null>(null);
   const [ratioKey, setRatioKey] = useState<CropRatio>('original');
   const [customRatio, setCustomRatio] = useState<number | null>(null);
+  const [originalRatio, setOriginalRatio] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   const naturalRef = useRef<{ w: number; h: number } | null>(null);
   const dispRef = useRef<Disp | null>(null);
@@ -140,16 +127,14 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
   const maskBottomRef = useRef<HTMLDivElement | null>(null);
   const maskLeftRef = useRef<HTMLDivElement | null>(null);
   const maskRightRef = useRef<HTMLDivElement | null>(null);
-  // 拖动标记：拖动期间跳过 React 渲染的 DOM 同步（避免闪回）
-  const draggingRef = useRef(false);
-
   const W = disp?.w ?? 0;
   const H = disp?.h ?? 0;
 
   const ratioValue = useMemo(() => {
     if (ratioKey === 'custom') return customRatio;
+    if (ratioKey === 'original') return originalRatio;
     return RATIO_VALUES[ratioKey];
-  }, [ratioKey, customRatio]);
+  }, [ratioKey, customRatio, originalRatio]);
 
   // 加载图片 → 计算显示尺寸 → 初始化裁剪框
   useEffect(() => {
@@ -161,6 +146,8 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
         naturalRef.current = nat;
         const d = fitDisplay(nat.w, nat.h);
         dispRef.current = d;
+        // 原图比例使用自然尺寸计算，避免窗口缩放后显示比例四舍五入导致漂移
+        setOriginalRatio(nat.w / nat.h);
         setDisp(d);
       })
       .catch(() => {
@@ -173,9 +160,10 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
   // 显示尺寸就绪后，默认展示「图片 + 居中的裁剪框」
   useEffect(() => {
     if (!disp || crop) return;
-    setCrop(centerFitRect(disp.w, disp.h, ratioValue));
+    // 默认进入：裁剪框居中，四周留 10% 边距（参考用户截图样式）
+    setCrop(centerFitRect(disp.w, disp.h, null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [disp, ratioValue]);
+  }, [disp]);
 
   // 窗口缩放：等比重算显示尺寸，并同步缩放当前裁剪框，避免坐标错位
   const onResize = useCallback(() => {
@@ -207,25 +195,38 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
 
   const applyRatio = (r: CropRatio) => {
     if (!crop || !W || !H) return;
+    if (r === 'original') {
+      setRatioKey('original');
+      // 原图比例：裁剪框完整覆盖底图
+      setCrop({ x: 0, y: 0, w: W, h: H });
+      return;
+    }
     if (r === 'custom') {
-      const raw = window.prompt('请输入自定义宽高比，例如 2:1 或 1.85:1', customRatio ? formatRatio(customRatio) : '');
-      if (raw == null) return;
-      const parsed = parseRatio(raw);
-      if (parsed == null || parsed <= 0) {
-        toast.error('宽高比格式错误');
-        return;
-      }
-      setCustomRatio(parsed);
       setRatioKey('custom');
-      setCrop(centerFitRect(W, H, parsed));
+      // 自定义：保持当前裁剪框中心，按现有尺寸推算宽高比作为默认值
+      const nextCustom = customRatio ?? clamp(crop.w / crop.h, 0.01, 100);
+      setCustomRatio(nextCustom);
+      setCrop(centerFitRect(W, H, nextCustom));
       return;
     }
     setRatioKey(r);
     setCrop(centerFitRect(W, H, RATIO_VALUES[r]));
   };
 
-  // ── 拖动核心：直接操作 DOM，绕过 React 重渲染实现 60fps 丝滑体验 ──
-  const startDrag = (type: 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'n' | 's' | 'e' | 'w', e: React.PointerEvent) => {
+  const applyCustomSize = (wVal: number, hVal: number) => {
+    if (!W || !H) return;
+    if (wVal <= 0 || hVal <= 0) {
+      toast.error('宽高必须大于 0');
+      return;
+    }
+    const r = wVal / hVal;
+    setCustomRatio(r);
+    setRatioKey('custom');
+    setCrop(centerFitRect(W, H, r));
+  };
+
+  // ── 拖动核心：直接操作 DOM，绕过 React 重渲染；rAF 合并 + 指针捕获实现稳定 60fps ──
+  const startDrag = (type: CropDragType, e: React.PointerEvent) => {
     e.stopPropagation();
     e.preventDefault();
     if (!crop) return;
@@ -233,9 +234,13 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
     const startRect = { ...crop };
     const startX = e.clientX;
     const startY = e.clientY;
+    const target = e.currentTarget as HTMLElement;
 
-    draggingRef.current = true;
+    // 指针捕获：拖出元素也能稳定接收事件，避免丢失光标导致的卡顿/跳变
+    try { target.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    setIsDragging(true);
 
+    const frameEl = frameRef.current;
     const masks = {
       top: maskTopRef.current,
       bottom: maskBottomRef.current,
@@ -243,40 +248,46 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
       right: maskRightRef.current,
     };
 
-    const move = (ev: PointerEvent) => {
-      if (!draggingRef.current) return;
-      const dx = ev.clientX - startX;
-      const dy = ev.clientY - startY;
+    // 用 rAF 合并同一帧内的多次 pointermove，每帧最多写一次 DOM → 稳定 60fps
+    let latestX = startX;
+    let latestY = startY;
+    let rafId = 0;
+
+    const apply = () => {
+      rafId = 0;
+      const dx = latestX - startX;
+      const dy = latestY - startY;
       const next = updateCrop(type, startRect, dx, dy, W, H, ratioValue);
-      // 直接写 DOM → 跳过 React 调度管线 → 无闪动
-      syncDomStyles(next, W, H, frameRef.current, masks);
+      syncDomStyles(next, W, H, frameEl, masks);
+    };
+    const schedule = () => {
+      if (!rafId) rafId = requestAnimationFrame(apply);
+    };
+
+    const move = (ev: PointerEvent) => {
+      latestX = ev.clientX;
+      latestY = ev.clientY;
+      schedule();
     };
 
     const up = () => {
-      draggingRef.current = false;
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      try { target.releasePointerCapture(e.pointerId); } catch { /* noop */ }
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      // 松手后才同步到 React state → 触发一次性重渲染
-      if (!crop) return;
-      // 从 DOM 读取最终位置（更准确，避免闭包陈旧）
-      const f = frameRef.current;
-      if (f) {
-        const rect = f.getBoundingClientRect();
-        const parent = f.parentElement?.getBoundingClientRect();
-        if (parent) {
-          const finalX = rect.left - parent.left;
-          const finalY = rect.top - parent.top;
-          setCrop({ x: finalX, y: finalY, w: rect.width, h: rect.height });
-          return;
-        }
-      }
-      // fallback：用最后一次计算的值
-      // 注意：这里用不到最新的 dx/dy，所以直接保持当前 crop 即可
-      // （因为 DOM 已经被直接更新了，React state 需要同步）
+      window.removeEventListener('pointercancel', up);
+      // 用最终计算值提交 React state（精确、无 getBoundingClientRect 舍入），与 DOM 完全一致 → 无回跳
+      const dx = latestX - startX;
+      const dy = latestY - startY;
+      const next = updateCrop(type, startRect, dx, dy, W, H, ratioValue);
+      syncDomStyles(next, W, H, frameEl, masks);
+      setIsDragging(false);
+      setCrop(next);
     };
 
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   };
 
   const handleConfirm = async () => {
@@ -324,6 +335,8 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
 
   const isReady = W > 0 && H > 0 && crop != null;
 
+  // 四边中点把手：拖动时该边单独移动（对边固定）；固定比例下保持比例等比缩放
+
   return createPortal(
     <div className="pea-crop-overlay" role="dialog" aria-label="图片裁剪">
       {/* 全屏遮罩：盖住整个画布，只展示图片本身（节点边框/连接点/徽章全部被遮住） */}
@@ -341,17 +354,17 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
               {/* 图片 + 遮罩裁剪在内部，避免描边/把手被裁切 */}
               <div className="pea-crop-img-clip">
                 <img className="pea-crop-image" src={url} alt="裁剪图片" draggable={false} />
-                <div ref={maskTopRef} className="pea-crop-mask pea-crop-mask-top" style={{ top: 0, left: 0, right: 0, height: crop.y }} />
-                <div ref={maskBottomRef} className="pea-crop-mask pea-crop-mask-bottom" style={{ bottom: 0, left: 0, right: 0, height: H - crop.y - crop.h }} />
-                <div ref={maskLeftRef} className="pea-crop-mask pea-crop-mask-left" style={{ top: crop.y, left: 0, width: crop.x, height: crop.h }} />
-                <div ref={maskRightRef} className="pea-crop-mask pea-crop-mask-right" style={{ top: crop.y, right: 0, width: W - crop.x - crop.w, height: crop.h }} />
+                <div ref={maskTopRef} className="pea-crop-mask" style={{ transform: `scale(1, ${crop.y / H})` }} />
+                <div ref={maskBottomRef} className="pea-crop-mask" style={{ transform: `translate(0px, ${crop.y + crop.h}px) scale(1, ${(H - crop.y - crop.h) / H})` }} />
+                <div ref={maskLeftRef} className="pea-crop-mask" style={{ transform: `scale(${crop.x / W}, 1)` }} />
+                <div ref={maskRightRef} className="pea-crop-mask" style={{ transform: `translate(${crop.x + crop.w}px, 0) scale(${(W - crop.x - crop.w) / W}, 1)` }} />
               </div>
 
               {/* 裁剪框：可拖动，四角可自由缩放（与图片同级，把手不被裁切） */}
               <div
                 ref={frameRef}
-                className="pea-crop-frame"
-                style={{ left: crop.x, top: crop.y, width: crop.w, height: crop.h }}
+                className={`pea-crop-frame${isDragging ? ' pea-crop-frame--dragging' : ''}`}
+                style={{ transform: `translate3d(${crop.x}px, ${crop.y}px, 0)`, left: 0, top: 0, width: crop.w, height: crop.h }}
                 onPointerDown={(e) => startDrag('move', e)}
                 role="button"
                 aria-label="拖动裁剪区"
@@ -367,7 +380,7 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
                     tabIndex={-1}
                   />
                 ))}
-                {/* 四边中点拖拽把手 */}
+                {/* 四边中点拖拽把手：选中一条边 → 该边单独移动（对边固定）；固定比例下保持比例 */}
                 {(['n', 's', 'e', 'w'] as const).map((h) => (
                   <span
                     key={h}
@@ -400,6 +413,7 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
                   <span className="pea-crop-ratio-label">{ratioLabel}</span>
                 </button>
               </Dropdown>
+              {ratioKey === 'custom' && <CustomRatioInput current={customRatio} onApply={applyCustomSize} />}
               <div className="pea-crop-toolbar-sep" />
               <button
                 type="button"
@@ -427,140 +441,78 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
   );
 }
 
-/* ──── 裁剪框拖拽/缩放逻辑 ──── */
-function updateCrop(
-  type: 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'n' | 's' | 'e' | 'w',
-  start: Rect,
-  dx: number,
-  dy: number,
-  W: number,
-  H: number,
-  ratio: number | null,
-): Rect {
-  if (type === 'move') {
-    return {
-      x: clamp(start.x + dx, 0, W - start.w),
-      y: clamp(start.y + dy, 0, H - start.h),
-      w: start.w,
-      h: start.h,
-    };
-  }
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 自定义比例输入：宽 / 高 两个输入框，按 Enter 或失焦应用
+ * ═════════════════════════════════════════════════════════════════════════════ */
+function CustomRatioInput({
+  current,
+  onApply,
+}: {
+  current: number | null;
+  onApply: (w: number, h: number) => void;
+}) {
+  const wRef = useRef<HTMLInputElement | null>(null);
+  const [wDraft, setWDraft] = useState(() => (current ? String(Math.round(current * 1000) / 1000) : '1'));
+  const [hDraft, setHDraft] = useState('1');
 
-  const next: Rect = { ...start };
-  const free = ratio == null;
-
-  // 自由模式：每条边/角独立移动
-  if (free) {
-    switch (type) {
-      case 'n':
-        next.y = clamp(start.y + dy, 0, start.y + start.h - MIN_CROP);
-        next.h = start.h + start.y - next.y;
-        break;
-      case 's':
-        next.h = clamp(start.h + dy, MIN_CROP, H - start.y);
-        break;
-      case 'w':
-        next.x = clamp(start.x + dx, 0, start.x + start.w - MIN_CROP);
-        next.w = start.w + start.x - next.x;
-        break;
-      case 'e':
-        next.w = clamp(start.w + dx, MIN_CROP, W - start.x);
-        break;
-      case 'nw':
-        next.x = clamp(start.x + dx, 0, start.x + start.w - MIN_CROP);
-        next.y = clamp(start.y + dy, 0, start.y + start.h - MIN_CROP);
-        next.w = start.w + start.x - next.x;
-        next.h = start.h + start.y - next.y;
-        break;
-      case 'ne':
-        next.y = clamp(start.y + dy, 0, start.y + start.h - MIN_CROP);
-        next.w = clamp(start.w + dx, MIN_CROP, W - start.x);
-        next.h = start.h + start.y - next.y;
-        break;
-      case 'sw':
-        next.x = clamp(start.x + dx, 0, start.x + start.w - MIN_CROP);
-        next.w = start.w + start.x - next.x;
-        next.h = clamp(start.h + dy, MIN_CROP, H - start.y);
-        break;
-      case 'se':
-        next.w = clamp(start.w + dx, MIN_CROP, W - start.x);
-        next.h = clamp(start.h + dy, MIN_CROP, H - start.y);
-        break;
+  useEffect(() => {
+    if (current) {
+      // 保持 3 位小数精度，避免过长
+      setWDraft(String(Math.round(current * 1000) / 1000));
     }
-    return next;
-  }
+  }, [current]);
 
-  // 锁定比例模式
-  // 边拖拽（n/s/e/w）：以该边方向为主轴，等比调整
-  // 角拖拽（nw/ne/sw/se）：以水平拖动为准，等比调整宽高
-  let w = start.w;
-  switch (type) {
-    case 'n':
-    case 'nw':
-    case 'sw':
-      w = clamp(start.w - dx, MIN_CROP, Math.min(start.x + start.w, W));
-      break;
-    case 's':
-    case 'ne':
-    case 'se':
-      w = clamp(start.w + dx, MIN_CROP, W - start.x);
-      break;
-    case 'e':
-      w = clamp(start.w + dx, MIN_CROP, W - start.x);
-      break;
-    case 'w':
-      w = clamp(start.w - dx, MIN_CROP, Math.min(start.x + start.w, W));
-      break;
-  }
-  let h = w / ratio;
+  const commit = () => {
+    const w = parseFloat(wDraft);
+    const h = parseFloat(hDraft);
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+      onApply(w, h);
+    }
+  };
 
-  if (h > H) {
-    h = H;
-    w = h * ratio;
-  }
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commit();
+      wRef.current?.blur();
+    }
+  };
 
-  switch (type) {
-    case 'nw':
-      next.x = start.x + start.w - w;
-      next.y = start.y + start.h - h;
-      break;
-    case 'n':
-    case 'ne':
-      next.y = start.y + start.h - h;
-      break;
-    case 'w':
-    case 'sw':
-      next.x = start.x + start.w - w;
-      break;
-    case 's':
-    case 'e':
-    case 'se':
-      break;
-  }
-  next.w = w;
-  next.h = h;
-
-  next.x = clamp(next.x, 0, W - MIN_CROP);
-  next.y = clamp(next.y, 0, H - MIN_CROP);
-  next.w = clamp(next.w, MIN_CROP, W - next.x);
-  next.h = clamp(next.h, MIN_CROP, H - next.y);
-  return next;
+  return (
+    <div className="pea-crop-custom-ratio" onClick={(e) => e.stopPropagation()}>
+      <input
+        ref={wRef}
+        type="number"
+        min="0.01"
+        step="0.1"
+        value={wDraft}
+        onChange={(e) => setWDraft(e.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={commit}
+        placeholder="宽"
+        aria-label="自定义宽"
+        className="pea-crop-custom-input"
+      />
+      <span className="pea-crop-custom-colon">:</span>
+      <input
+        type="number"
+        min="0.01"
+        step="0.1"
+        value={hDraft}
+        onChange={(e) => setHDraft(e.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={commit}
+        placeholder="高"
+        aria-label="自定义高"
+        className="pea-crop-custom-input"
+      />
+    </div>
+  );
 }
+
+/* 裁剪几何计算已抽到 ./cropMath（纯函数、可单测），本组件只负责 DOM/交互 */
 
 function formatRatio(n: number) {
   if (Math.abs(n - Math.round(n)) < 0.001) return `${Math.round(n)}:1`;
   return `${n.toFixed(2)}:1`;
-}
-
-function parseRatio(raw: string): number | null {
-  const s = raw.replace(/\s+/g, '');
-  const parts = s.split(':');
-  if (parts.length === 2) {
-    const w = parseFloat(parts[0]);
-    const h = parseFloat(parts[1]);
-    if (w > 0 && h > 0) return w / h;
-  }
-  const n = parseFloat(s);
-  if (n > 0) return n;
-  return null;
 }

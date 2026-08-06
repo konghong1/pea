@@ -752,7 +752,7 @@ function ResultMediaView({
     } as PeaNodeData, pos);
 
     if (newId) {
-      onConnect({ source: id, target: newId, sourceHandle: null, targetHandle: null });
+      onConnect({ source: id, target: newId, sourceHandle: 'out', targetHandle: 'in' });
       toast.success('已生成输出节点');
     }
   };
