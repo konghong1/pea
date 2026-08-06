@@ -35,6 +35,7 @@ import {
 import { toast } from '../store/toast';
 import { api } from '../api/client';
 import { useCanvas, PeaNodeData, cleanGraph } from '../store/canvas';
+import { getNodeSize } from '../lib/nodeSize';
 import { useUi } from '../store/ui';
 import { useAuth } from '../store/auth';
 import { useTheme } from '../store/theme';
@@ -1282,6 +1283,31 @@ function Flow() {
     window.addEventListener('pea:focus-node', onFocus as EventListener);
     return () => window.removeEventListener('pea:focus-node', onFocus as EventListener);
   }, [getViewport, setViewport]);
+
+  // 图片裁剪：点击「裁剪」后把目标节点居中并放大到合适尺寸。
+  // 由 PeaNode 发起 CustomEvent，CanvasEditor 作为唯一 useReactFlow 持有者执行视口动画。
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onCenter = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { id?: string; zoom?: number } | undefined;
+      const id = detail?.id;
+      if (!id) return;
+      const target = useCanvas.getState().nodes.find((n) => n.id === id);
+      if (!target) return;
+      const { width, height } = getNodeSize(target.data.aspectRatio, target.data.kind);
+      const cx = target.position.x + width / 2;
+      const cy = target.position.y + height / 2;
+      const container = flowRef.current;
+      const cw = container?.clientWidth ?? window.innerWidth;
+      const ch = container?.clientHeight ?? window.innerHeight;
+      const zoom = detail?.zoom ?? Math.min(2, Math.min((cw * 0.8) / width, (ch * 0.8) / height));
+      const nextX = cw / 2 - cx * zoom;
+      const nextY = ch / 2 - cy * zoom;
+      setViewport({ x: nextX, y: nextY, zoom }, { duration: 320 });
+    };
+    window.addEventListener('pea:center-node', onCenter as EventListener);
+    return () => window.removeEventListener('pea:center-node', onCenter as EventListener);
+  }, [setViewport]);
 
   const { message } = App.useApp();
   const saveTimer = useRef<number>();

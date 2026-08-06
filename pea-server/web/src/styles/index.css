@@ -7447,6 +7447,268 @@ html:not(.dark) .text-node-toolbar {
   border-color: rgba(255, 255, 255, 0.3);
 }
 
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 图片裁剪浮层（ImageCropOverlay）—— 直接渲染在节点图片上
+ * ═════════════════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 图片裁剪全屏浮层（portal 到 body）：
+ * 点击裁剪 → 画布放大 + 全屏遮罩盖住画布 → 只展示完整图片 + 裁剪框 + 图片下方功能条。
+ * 节点边框/连接点/徽章等画布元素全部被遮罩盖住，不污染裁剪视图。
+ * ═════════════════════════════════════════════════════════════════════════════ */
+.pea-crop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10030;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pea-crop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pea-crop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.pea-crop-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 14, 0.82);
+  backdrop-filter: blur(8px) saturate(120%);
+}
+.pea-crop-stage {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 92vw;
+}
+.pea-crop-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 220px;
+  min-height: 140px;
+}
+.pea-crop-loading-text {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+}
+
+/* 图片舞台：显示矩形（与图片同比例）。overflow:visible 让四角把手不被裁切。
+   isolation: isolate 防止内部子元素与外部发生意外的 stacking context 交叉。 */
+.pea-crop-image-stage {
+  position: relative;
+  overflow: visible;
+  border-radius: 4px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+/* 图片 + 遮罩裁剪在内部，避免描边/把手溢出舞台 */
+.pea-crop-img-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 4px;
+  z-index: 0; /* 底层：图片+遮罩 */
+}
+.pea-crop-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  -webkit-user-drag: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* 裁剪框外区域：半透明遮罩，能看到底图以方便裁切 */
+.pea-crop-mask {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+/* 裁剪框：白色描边 + 三分网格线，四角把手可拖拽缩放。
+   z-index:1 盖在 img-clip 之上，确保 handle 事件不被底层拦截。
+   background 用极淡透明色填充整个框体区域，保证边框线上 mousemove/pointer 事件
+   不会被"穿透"到下层元素，cursor: move 在整框范围内（含 1.5px 边框线）始终生效。 */
+.pea-crop-frame {
+  position: absolute;
+  z-index: 1;
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
+  cursor: move;
+  pointer-events: auto;
+  touch-action: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  background-color: rgba(0, 0, 0, 0);       /* 透明实心填充：确保整区接收 pointer 事件 */
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.28) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.28) 1px, transparent 1px);
+  background-size: 33.333% 33.333%;
+  background-position: 0 0;
+}
+/* 拖动期间禁用 frame 上的 selection，防止误选文本 */
+.pea-crop-frame:active {
+  user-select: none;
+}
+/* 四角拖拽把手：z-index:2 高于 frame 本体，确保 pointer 事件优先于 frame 的 move 行为。
+   加大到 18x18 并用 transform 居中，让热区更大更好点中。
+   拖动时移除 transition 避免把手动画与拖动冲突导致抖动。 */
+.pea-crop-handle {
+  position: absolute;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  pointer-events: auto;
+  touch-action: none;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0,0,0,0.15) inset;
+}
+.pea-crop-handle:hover {
+  transform: scale(1.2);
+  background: #e8f4ff;
+  box-shadow: 0 2px 8px rgba(56, 225, 255, 0.35), 0 0 0 1px rgba(0,0,0,0.15) inset;
+}
+/* 拖动中（:active）移除 transition，防止把手动画与拖动帧冲突导致抖动 */
+.pea-crop-handle:active,
+.pea-crop-handle:active:hover {
+  transition: none !important;
+  transform: scale(1.1);
+}
+.pea-crop-handle.nw { top: -9px; left: -9px; cursor: nwse-resize; }
+.pea-crop-handle.ne { top: -9px; right: -9px; cursor: nesw-resize; }
+.pea-crop-handle.sw { bottom: -9px; left: -9px; cursor: nesw-resize; }
+.pea-crop-handle.se { bottom: -9px; right: -9px; cursor: nwse-resize; }
+/* 四边中点把手：细长条形，位于每条边中央 */
+.pea-crop-handle.edge { width: 24px; height: 10px; border-radius: 3px; }
+.pea-crop-handle.edge.n { top: -5px; left: 50%; margin-left: -12px; cursor: ns-resize; }
+.pea-crop-handle.edge.s { bottom: -5px; left: 50%; margin-left: -12px; cursor: ns-resize; }
+.pea-crop-handle.edge.w { left: -5px; top: 50%; margin-top: -5px; width: 10px; height: 24px; cursor: ew-resize; }
+.pea-crop-handle.edge.e { right: -5px; top: 50%; margin-top: -5px; width: 10px; height: 24px; cursor: ew-resize; }
+
+/* 裁剪功能条：图片正下方的独立 bar（不压在裁剪框内） */
+.pea-crop-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: rgba(28, 28, 34, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px) saturate(140%);
+  pointer-events: auto;
+  white-space: nowrap;
+  animation: pea-crop-bar-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes pea-crop-bar-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.pea-crop-dropdown {
+  z-index: 10035 !important;
+}
+.pea-crop-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.pea-crop-toolbar-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.10);
+}
+.pea-crop-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pea-crop-toolbar-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.10);
+  flex: none;
+}
+.pea-crop-ratio-label {
+  font-size: 13px;
+  white-space: nowrap;
+}
+.pea-crop-confirm {
+  padding: 0 14px;
+  color: #08131a;
+  background: var(--pea-brand, #38e1ff);
+  font-weight: 600;
+}
+.pea-crop-confirm:hover {
+  color: #08131a;
+  background: color-mix(in srgb, var(--pea-brand, #38e1ff) 82%, #fff);
+}
+.pea-crop-confirm-text {
+  font-size: 13px;
+  white-space: nowrap;
+}
+.pea-crop-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: pea-spin 0.8s linear infinite;
+}
+@keyframes pea-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 裁剪模式下：隐藏节点下方编辑框 + 兜底隐藏遗留 hover 浮层（浮层在遮罩之下不可见，
+   这里进一步确保节点自身不抢焦点/不残留半透明边框）。 */
+.pea-node.is-cropping .pea-node-result-star,
+.pea-node.is-cropping .pea-node-result-replace,
+.pea-node.is-cropping .pea-node-image-badge,
+.pea-node.is-cropping .pea-node-result-overlay-tr {
+  display: none !important;
+}
+.pea-node.is-cropping .pea-node-editor-anchor {
+  display: none !important;
+}
+.pea-node.is-cropping .pea-node-body-card {
+  overflow: visible !important;
+}
+
+/* 浅色主题：裁剪功能条白玻璃胶囊 */
+html:not(.dark) .pea-crop-toolbar {
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+html:not(.dark) .pea-crop-toolbar-btn {
+  color: var(--pea-text-secondary);
+}
+html:not(.dark) .pea-crop-toolbar-btn:hover {
+  color: var(--pea-text-primary);
+  background: rgba(0, 0, 0, 0.06);
+}
+html:not(.dark) .pea-crop-toolbar-sep {
+  background: rgba(0, 0, 0, 0.10);
+}
+html:not(.dark) .pea-crop-confirm,
+html:not(.dark) .pea-crop-confirm:hover {
+  color: #fff;
+  background: var(--pea-brand, #3b9eff);
+}
+
 /* 顶部工具条：收藏、替换、下载（参考截图3） */
 .pea-node-lightbox-topbar {
   position: fixed;

@@ -19,6 +19,8 @@ import {
   isGeneratedMediaNode,
   isUserUploadedMediaNode,
 } from '../lib/nodeSemantics';
+import { getNodeSize } from '../lib/nodeSize';
+import ImageCropOverlay from './ImageCropOverlay';
 
 /** 数值夹取，用于连接点跟随鼠标的小范围限制 */
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -58,6 +60,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   // - 失焦 / 取消选中 → 自动退出编辑态
   const [editing, setEditing] = useState(false);
   const [editorModalOpen, setEditorModalOpen] = useState(false);
+  const [cropping, setCropping] = useState(false);
   const editRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const chromeRef = useRef<HTMLDivElement>(null);
@@ -114,31 +117,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   // - ⚠️ 关键改动：移除 hasMediaContent 守卫 → 无论空态/有内容，框尺寸永远由比例锁定，
   //   媒体用 object-fit:cover 填满锁定框，杜绝"有图后框被素材比例撑变形"导致的画布比例混乱
   //   （用户反馈"不同比例之间没有标准"）。整张画布上每个 kind 只对应 1~2 种可预期尺寸。
-  const KIND_DEFAULT_ASPECT: Record<string, string> = {
-    image: '9:16',
-    video: '16:9',
-    audio: '16:9',
-    text: '1:1',
-    generate: '1:1',
-    ref: '1:1',
-    agent: '1:1',
-    story: '1:1',
-    world3d: '1:1',
-    camera: '1:1',
-    light: '1:1',
-    playlist: '1:1',
-    replace: '1:1',
-    prompt: '1:1',
-  };
-  const LONG_EDGE = 340;
-  const nodeSize = useMemo(() => {
-    const ar = data.aspectRatio || KIND_DEFAULT_ASPECT[kind] || '1:1';
-    const [w, h] = ar.split(':').map(Number);
-    if (!w || !h) return { width: LONG_EDGE, height: LONG_EDGE };
-    return w >= h
-      ? { width: LONG_EDGE, height: Math.round(LONG_EDGE * (h / w)) }
-      : { width: Math.round(LONG_EDGE * (w / h)), height: LONG_EDGE };
-  }, [data.aspectRatio, kind]);
+  const nodeSize = useMemo(() => getNodeSize(data.aspectRatio, kind), [data.aspectRatio, kind]);
 
   const outerStyle = { '--pea-node-width': `${nodeSize.width}px` } as React.CSSProperties;
   const bodyStyle: React.CSSProperties = { height: nodeSize.height };
@@ -249,7 +228,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   return (
     <div
       ref={rootRef}
-      className={`pea-node ${selected && !isMulti ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''} ${data.generating ? 'is-generating' : ''}`}
+      className={`pea-node ${selected && !isMulti ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''} ${data.generating ? 'is-generating' : ''} ${cropping ? 'is-cropping' : ''}`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
         setHovered(false);
@@ -330,7 +309,8 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       style={{ ...outerStyle, '--pea-hx-l': '0px', '--pea-hy-l': '0px', '--pea-hx-r': '0px', '--pea-hy-r': '0px' } as React.CSSProperties}
     >
       {/* 左手柄：用户上传的图片/视频/音频不需要接收其他节点输入，隐藏（判定见 lib/nodeSemantics） */}
-      {acceptsUpstreamInput(data) && (
+      {/* 裁剪模式下隐藏连接手柄，避免遮挡裁剪交互 */}
+      {acceptsUpstreamInput(data) && !cropping && (
         <Handle
           type="target"
           id="in"
@@ -348,29 +328,31 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
           <HandleGlyph />
         </Handle>
       )}
-      <Handle
-        type="source"
-        id="out"
-        position={Position.Right}
-        className="pea-handle pea-handle-right"
-        onMouseEnter={() => setHovered(true)}
-        style={{
-          right: handleOffset,
-          top: '50%',
-          // 独立跟随变量：--pea-hx-r / --pea-hy-r
-          '--pea-hx': 'var(--pea-hx-r)',
-          '--pea-hy': 'var(--pea-hy-r)',
-        } as React.CSSProperties}
-      >
-        <HandleGlyph />
-      </Handle>
+      {!cropping && (
+        <Handle
+          type="source"
+          id="out"
+          position={Position.Right}
+          className="pea-handle pea-handle-right"
+          onMouseEnter={() => setHovered(true)}
+          style={{
+            right: handleOffset,
+            top: '50%',
+            // 独立跟随变量：--pea-hx-r / --pea-hy-r
+            '--pea-hx': 'var(--pea-hx-r)',
+            '--pea-hy': 'var(--pea-hy-r)',
+          } as React.CSSProperties}
+        >
+          <HandleGlyph />
+        </Handle>
+      )}
 
       {/* 节点 Chrome 层：标识、功能条（portal）、上传条统一放在节点框之外，
           不撑大 .react-flow__node 的 bounding box。
           - 外层不做 counter-scale → 标题徽章与节点框等比缩放（相对大小恒定）；
           - 内层 .pea-node-chrome-fixed 做 counter-scale → 交互控件屏幕大小恒定。 */}
       <div className="pea-node-chrome" ref={chromeRef} style={chromeStyle} data-zoom={zoom.toFixed(2)}>
-        <NodeBadge id={id} kind={kind} data={data} />
+        {!cropping && <NodeBadge id={id} kind={kind} data={data} />}
         <div className="pea-node-chrome-fixed" ref={chromeFixedRef}>
           {isText && isSingleSelected && (
             <TextNodeToolbar
@@ -445,7 +427,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
             />
           </div>
         ) : isMedia ? (
-          <MediaNodeBody id={id} kind={kind} data={data} hasImage={hasImage} onRequestUpload={() => fileRef.current?.click()} chromeRef={chromeFixedRef} />
+          <MediaNodeBody id={id} kind={kind} data={data} hasImage={hasImage} onRequestUpload={() => fileRef.current?.click()} chromeRef={chromeFixedRef} onCropChange={setCropping} />
         ) : (
           <GenericNodeBody id={id} data={data} tagLabel={tagLabel} kind={kind} />
         )}
@@ -477,6 +459,7 @@ function MediaNodeBody({
   hasImage,
   onRequestUpload,
   chromeRef,
+  onCropChange,
 }: {
   id: string;
   kind: PeaNodeKind;
@@ -484,6 +467,7 @@ function MediaNodeBody({
   hasImage: boolean;
   onRequestUpload: () => void;
   chromeRef: React.RefObject<HTMLDivElement | null>;
+  onCropChange?: (open: boolean) => void;
 }) {
   const update = useCanvas((s) => s.updateNodeData);
   const tagLabel = tagLabelOf(kind);
@@ -553,6 +537,7 @@ function MediaNodeBody({
         canReplace={false}
         showMediaLabel={showMediaLabel}
         chromeRef={chromeRef}
+        onCropChange={onCropChange}
       />
     );
   }
@@ -571,6 +556,7 @@ function MediaNodeBody({
         canReplace={true}
         showMediaLabel={showMediaLabel}
         chromeRef={chromeRef}
+        onCropChange={onCropChange}
       />
     );
   }
@@ -625,6 +611,7 @@ function ResultMediaView({
   canReplace,
   showMediaLabel,
   chromeRef,
+  onCropChange,
 }: {
   id: string;
   kind: PeaNodeKind;
@@ -637,15 +624,22 @@ function ResultMediaView({
   canReplace: boolean;
   showMediaLabel: boolean;
   chromeRef: React.RefObject<HTMLDivElement | null>;
+  onCropChange?: (open: boolean) => void;
 }) {
   const [chromeReady, setChromeReady] = useState(false);
   useLayoutEffect(() => { setChromeReady(true); }, []);
   const update = useCanvas((s) => s.updateNodeData);
+  const addNode = useCanvas((s) => s.addNode);
+  const onConnect = useCanvas((s) => s.onConnect);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [mediaError, setMediaError] = useState(false);
   const [savingToLibrary, setSavingToLibrary] = useState(false);
+  const [cropOpen, setCropOpen] = useState(false);
+  useEffect(() => {
+    onCropChange?.(cropOpen);
+  }, [cropOpen, onCropChange]);
   // 兼容性兜底：历史节点可能保存了外部模型视角的公网 CDN URL（如花生壳域名），
   // 当浏览器无法访问该域名时，fallback 到同域 /media/<key> 重试。
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
@@ -718,6 +712,51 @@ function ResultMediaView({
     setLightboxOpen(true);
   };
 
+  const handleCrop = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent('pea:center-node', { detail: { id } }));
+    setCropOpen(true);
+  };
+
+  const handleCropClose = () => {
+    setCropOpen(false);
+  };
+
+  const handleCropConfirm = async (croppedDataUrl: string, size: { width: number; height: number }) => {
+    setCropOpen(false);
+    let payload: Partial<PeaNodeData>;
+    try {
+      const blob = await (await fetch(croppedDataUrl)).blob();
+      const form = new FormData();
+      form.append('file', blob, 'clipping.png');
+      const { data: resp } = await api.post('/files/upload', form);
+      payload = { fileKey: resp.key as string };
+    } catch {
+      payload = { url: croppedDataUrl };
+      toast.warning('裁剪结果已使用本地预览保存（刷新后可能丢失）');
+    }
+
+    const g = useCanvas.getState();
+    const src = g.nodes.find((n) => n.id === id);
+    const srcSize = getNodeSize(src?.data.aspectRatio, src?.data.kind);
+    // 输出节点使用裁剪结果的实际宽高比，不继承源节点的 aspectRatio
+    const aspectRatio = simplifyRatio(size.width, size.height);
+    const pos = { x: (src?.position.x ?? 0) + srcSize.width + 80, y: src?.position.y ?? 0 };
+
+    const newId = addNode({
+      kind: 'image',
+      label: 'Clipping diagram',
+      aspectRatio,
+      meta: { fileName: 'clipping.png' },
+      ...payload,
+    } as PeaNodeData, pos);
+
+    if (newId) {
+      onConnect({ source: id, target: newId, sourceHandle: null, targetHandle: null });
+      toast.success('已生成输出节点');
+    }
+  };
+
   const handleReplace = (e: React.MouseEvent) => {
     e.stopPropagation();
     onReplace();
@@ -755,27 +794,29 @@ function ResultMediaView({
           </span>
         )}
 
-        {/* 左上角收藏星标（一键收藏到素材库） */}
-        <button
-          type="button"
-          className={`pea-node-result-star ${data.isFavorite ? 'saved' : ''} ${savingToLibrary ? 'saving' : ''}`}
-          onClick={handleSaveToLibrary}
-          aria-label="收藏"
-          title={data.isFavorite ? '已收藏' : savingToLibrary ? '收藏中…' : '收藏'}
-          disabled={savingToLibrary}
-        >
-          {savingToLibrary ? (
-            <span className="pea-node-result-star-spinner" aria-hidden />
-          ) : (
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none">
-              <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
-            </svg>
-          )}
-        </button>
+        {/* 左上角收藏星标（一键收藏到素材库）——裁剪时隐藏 */}
+        {!cropOpen && (
+          <button
+            type="button"
+            className={`pea-node-result-star ${data.isFavorite ? 'saved' : ''} ${savingToLibrary ? 'saving' : ''}`}
+            onClick={handleSaveToLibrary}
+            aria-label="收藏"
+            title={data.isFavorite ? '已收藏' : savingToLibrary ? '收藏中…' : '收藏'}
+            disabled={savingToLibrary}
+          >
+            {savingToLibrary ? (
+              <span className="pea-node-result-star-spinner" aria-hidden />
+            ) : (
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" stroke="none">
+                <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
+              </svg>
+            )}
+          </button>
+        )}
 
-        {/* 右上角：上传媒体显示"替换"按钮（始终可见）；多结果时追加数量角标 */}
+        {/* 右上角：上传媒体显示"替换"按钮；多结果时追加数量角标——裁剪时隐藏 */}
         <div className="pea-node-result-overlay-tr">
-          {canReplace && (
+          {canReplace && !cropOpen && (
             <button
               type="button"
               className="pea-node-result-replace"
@@ -791,7 +832,7 @@ function ResultMediaView({
               <span>替换</span>
             </button>
           )}
-          {urls.length > 1 && (
+          {urls.length > 1 && !cropOpen && (
             <div className="pea-node-image-badge">
               <button
                 type="button"
@@ -865,15 +906,27 @@ function ResultMediaView({
             onError={() => handleMediaError(currentUrl)}
           />
         )}
+
+        {/* 图片裁剪浮层：portal 到 document.body 的全屏模态（见 ImageCropOverlay）。
+            全屏遮罩盖住整个画布，只展示完整图片 + 裁剪框 + 图片下方独立功能条，
+            节点边框/连接点/徽章等画布元素全部被遮罩盖住，不污染裁剪视图。 */}
+        {kind === 'image' && cropOpen && (
+          <ImageCropOverlay
+            url={currentUrl}
+            onClose={handleCropClose}
+            onConfirm={handleCropConfirm}
+          />
+        )}
       </div>
 
-      {/* 功能条：portal 到节点 Chrome 层，与标识/上传条统一堆叠在节点框外 */}
-      {chromeReady && chromeRef.current && createPortal(
+      {/* 功能条：portal 到节点 Chrome 层，与标识/上传条统一堆叠在节点框外；裁剪时隐藏 */}
+      {chromeReady && chromeRef.current && !cropOpen && createPortal(
         <ResultToolbar
           currentUrl={currentUrl}
           onSave={handleToolbarSave}
           saved={!!data.savedToLibrary}
           onFullscreen={handleFullscreen}
+          onCrop={handleCrop}
         />,
         chromeRef.current
       )}
@@ -910,11 +963,13 @@ function ResultToolbar({
   onSave,
   saved,
   onFullscreen,
+  onCrop,
 }: {
   currentUrl: string;
   onSave: (e: React.MouseEvent) => void;
   saved: boolean;
   onFullscreen: (e: React.MouseEvent) => void;
+  onCrop: (e: React.MouseEvent) => void;
 }) {
   const soon = (label: string) => (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -923,7 +978,7 @@ function ResultToolbar({
 
   return (
     <div className="pea-node-result-toolbar" onClick={(e) => e.stopPropagation()}>
-      <ToolbarButton label="裁剪" muted onClick={soon('裁剪')}>
+      <ToolbarButton label="裁剪" onClick={onCrop}>
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6">
           <path d="M6 2v14a2 2 0 0 0 2 2h14" />
           <path d="M2 6h14a2 2 0 0 1 2 2v14" />
@@ -1670,4 +1725,11 @@ function HandleGlyph() {
 function tagLabelOf(k: string): string {
   // 与 nodeTypes.ts 的中文标签保持一致，作为徽章默认名称的唯一来源
   return NODE_DEF_OF(k).label;
+}
+
+function simplifyRatio(w: number, h: number) {
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const g = gcd(Math.round(w), Math.round(h));
+  if (!g) return '1:1';
+  return `${Math.round(w) / g}:${Math.round(h) / g}`;
 }

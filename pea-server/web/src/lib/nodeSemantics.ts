@@ -61,13 +61,18 @@ export function acceptsUpstreamInput(data?: Partial<PeaNodeData> | null): boolea
 /**
  * 选中该节点时，是否隐藏「节点下方编辑框」(NodeChatPrompt)。
  *
- * 规则：用户自己上传的素材节点 → 隐藏（用户诉求：上传的东西不是生成任务，不该弹输入框）。
+ * 规则：用户自己上传的素材节点 → 隐藏（上传的东西不是生成任务，不该弹输入框）。
  *
  * ⚠️ 必须保留的例外（历史回归，勿删）：
  *   generating === true 时一律显示。
  *   - v6：生成中编辑框是「停止」按钮的唯一入口，隐藏后无法取消任务；
  *   - v7/v8：生成开始瞬间 resultUrl 被清空，若此时按"上传态"隐藏，编辑框会被
  *     卸载并带走用户刚输入的提示词（用户连续两轮反馈"提示词消失"的直接原因）。
+ *
+ * 注意：裁切模式下的编辑框隐藏【不】在此处理，而是由 CSS
+ * （.pea-node.is-cropping .pea-node-editor-anchor { display:none }）负责。
+ * 该 class 由本地 cropOpen 实时驱动，不再读取会持久化写脏的 data.isCropping，
+ * 避免「点过裁切的节点编辑框永远消失」这类回归。
  */
 export function shouldHideNodeEditor(data?: Partial<PeaNodeData> | null): boolean {
   if (!data) return false;
