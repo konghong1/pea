@@ -6709,6 +6709,19 @@ html:not(.dark) .text-node-toolbar {
   overflow: hidden;
 }
 
+/* 裁切模式锁定：禁用画布所有交互（缩放/平移/拖拽/框选） */
+.pea-canvas-locked {
+  cursor: default !important;
+}
+.pea-canvas-locked .react-flow__pane,
+.pea-canvas-locked .react-flow__viewport,
+.pea-canvas-locked .react-flow__renderer {
+  pointer-events: none !important;
+}
+.pea-canvas-locked .react-flow__node {
+  pointer-events: auto !important; /* 节点本身仍可接收事件（如关闭裁切） */
+}
+
 .pea-canvas-flow {
   position: absolute;
   inset: 0;
@@ -7448,32 +7461,34 @@ html:not(.dark) .text-node-toolbar {
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
- * 图片裁剪浮层（ImageCropOverlay）—— 直接渲染在节点图片上
+ * 图片裁剪全屏浮层（portal 到 body）：
+ * 点击裁切 → 全屏纯色暗化遮罩盖住画布 → 居中展示放大图片 + 裁剪框 + 下方功能条。
+ * 风格对齐 Photopea/PS：扁平、一层、干净。无模糊、无重投影、无多余特效。
  * ═════════════════════════════════════════════════════════════════════════════ */
 /* ═════════════════════════════════════════════════════════════════════════════
- * 图片裁剪全屏浮层（portal 到 body）：
- * 点击裁剪 → 画布放大 + 全屏遮罩盖住画布 → 只展示完整图片 + 裁剪框 + 图片下方功能条。
- * 节点边框/连接点/徽章等画布元素全部被遮罩盖住，不污染裁剪视图。
+ * 图片裁切 — 原地覆盖模式（无全屏暗化）
+ *
+ * 设计原则：
+ *  - pea-crop-overlay: absolute 填满图片容器（position:relative;overflow:visible）
+ *  - 无全屏 backdrop — 画布其他内容完全不受影响
+ *  - pea-crop-stage: 居中浮动卡片，自身深色背景只包围图片+工具栏
+ *  - 单层结构，扁平风格，无 blur/多层阴影
  * ═════════════════════════════════════════════════════════════════════════════ */
+
+/* 裁切覆盖层：填满图片容器（absolute），不固定到视口。
+   z-index 盖住节点内所有内容（原图 visibility:hidden 但仍占位） */
 .pea-crop-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  z-index: 10030;
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: pea-crop-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  background: transparent; /* 无背景 — 画布不被暗化 */
 }
-@keyframes pea-crop-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-.pea-crop-backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(10, 10, 14, 0.82);
-  backdrop-filter: blur(8px) saturate(120%);
-}
+
+/* 居中舞台：浮动卡片，深色半透明背景只包围图片+工具栏区域。
+   border-radius + 微妙阴影让它在视觉上"浮"在画布之上，但不暗化画布 */
 .pea-crop-stage {
   position: relative;
   z-index: 1;
@@ -7481,7 +7496,10 @@ html:not(.dark) .text-node-toolbar {
   flex-direction: column;
   align-items: center;
   gap: 16px;
-  max-width: 92vw;
+  padding: 20px;
+  background: rgba(24, 24, 28, 0.92);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
 .pea-crop-loading {
   display: flex;
@@ -7496,19 +7514,17 @@ html:not(.dark) .text-node-toolbar {
 }
 
 /* 图片舞台：显示矩形（与图片同比例）。overflow:visible 让四角把手不被裁切。
-   isolation: isolate 防止内部子元素与外部发生意外的 stacking context 交叉。 */
+   扁平风格：不设 border-radius、不设 box-shadow，避免"多层感" */
 .pea-crop-image-stage {
   position: relative;
   overflow: visible;
-  border-radius: 4px;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
 }
-/* 图片 + 遮罩裁剪在内部，避免描边/把手溢出舞台 */
+/* 图片 + 遮罩裁剪在内部，避免描边/把手溢出舞台。
+   不设 border-radius：保持完全矩形，消除四角"双重裁切"导致的暗区分割带 */
 .pea-crop-img-clip {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  border-radius: 4px;
   z-index: 0; /* 底层：图片+遮罩 */
 }
 .pea-crop-image {
@@ -7604,17 +7620,17 @@ html:not(.dark) .text-node-toolbar {
 .pea-crop-handle.edge.w { left: -5px; top: 50%; margin-top: -5px; width: 10px; height: 24px; }
 .pea-crop-handle.edge.e { right: -5px; top: 50%; margin-top: -5px; width: 10px; height: 24px; }
 
-/* 裁剪功能条：图片正下方的独立 bar（不压在裁剪框内） */
+/* 裁剪功能条：图片正下方的独立 bar。扁平风格，无模糊滤镜 */
 .pea-crop-toolbar {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 6px 10px;
+  margin-top: 10px;
   background: rgba(28, 28, 34, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 14px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(14px) saturate(140%);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   pointer-events: auto;
   white-space: nowrap;
   animation: pea-crop-bar-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -7759,15 +7775,21 @@ html:not(.dark) .pea-crop-custom-colon {
 .pea-node.is-cropping .pea-node-editor-anchor {
   display: none !important;
 }
-.pea-node.is-cropping .pea-node-body-card {
+.pea-node.is-cropping .pea-node-body-card,
+.pea-node.is-cropping .pea-node-media-card {
   overflow: visible !important;
 }
 
+/* 浅色主题：裁剪浮动卡片白玻璃 */
+html:not(.dark) .pea-crop-stage {
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+}
 /* 浅色主题：裁剪功能条白玻璃胶囊 */
 html:not(.dark) .pea-crop-toolbar {
   background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10), 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
 html:not(.dark) .pea-crop-toolbar-btn {
   color: var(--pea-text-secondary);

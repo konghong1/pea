@@ -637,6 +637,7 @@ function ResultMediaView({
   const [mediaError, setMediaError] = useState(false);
   const [savingToLibrary, setSavingToLibrary] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
+  const imageWrapRef = useRef<HTMLDivElement>(null);  // 图片容器 ref，裁切组件用它测量尺寸并原地覆盖
   useEffect(() => {
     onCropChange?.(cropOpen);
   }, [cropOpen, onCropChange]);
@@ -787,7 +788,7 @@ function ResultMediaView({
 
   return (
     <>
-      <div className={wrapClass}>
+      <div className={wrapClass} ref={imageWrapRef}>
         {showMediaLabel && (
           <span className="pea-node-media-label">
             <NodeIcon kind={kind} size={12} /> {tagLabelOf(kind)}
@@ -897,6 +898,8 @@ function ResultMediaView({
         ) : kind === 'audio' ? (
           <audio src={currentUrl} controls className="pea-node-media-preview" />
         ) : (
+          // 裁切时保留原图占位（visibility:hidden）以维持节点高度，裁切浮层叠在其上；
+          // 视觉上只有裁切浮层的图片，不会出现"多张图"感，也不会因高度塌陷导致裁切框尺寸错乱
           <img
             src={currentUrl}
             alt={data.prompt || '生成结果'}
@@ -904,15 +907,17 @@ function ResultMediaView({
             loading="lazy"
             draggable={false}
             onError={() => handleMediaError(currentUrl)}
+            style={cropOpen ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}
           />
         )}
 
-        {/* 图片裁剪浮层：portal 到 document.body 的全屏模态（见 ImageCropOverlay）。
-            全屏遮罩盖住整个画布，只展示完整图片 + 裁剪框 + 图片下方独立功能条，
-            节点边框/连接点/徽章等画布元素全部被遮罩盖住，不污染裁剪视图。 */}
+        {/* 图片裁剪浮层：原地渲染在图片容器内，无全屏暗化遮罩。
+            覆盖整个容器（position:absolute;inset:0），内部居中显示放大图片+裁切框+工具栏。
+            节点原图已设 visibility:hidden 避免重复显示。 */}
         {kind === 'image' && cropOpen && (
           <ImageCropOverlay
             url={currentUrl}
+            containerRef={imageWrapRef}
             onClose={handleCropClose}
             onConfirm={handleCropConfirm}
           />

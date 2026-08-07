@@ -1348,6 +1348,8 @@ function Flow() {
   const rfInstanceRef = useRef<any>(null);
   // 【修复】待恢复的视口缓存：canvasId 异步到达时先存，onInit 就绪后消费
   const pendingVpRef = useRef<Viewport | null>(null);
+  // 裁切模式锁定：裁切打开时禁止画布缩放/平移/框选
+  const cropActiveRef = useRef(false);
   // 退出画布时立即持久化视口（不等 onMove 防抖），下次进入原样恢复，不再回到初始态。
   useEffect(() => {
     return () => {
@@ -1373,6 +1375,25 @@ function Flow() {
       window.removeEventListener('beforeunload', flush);
       window.removeEventListener('pagehide', flush);
     };
+  }, []);
+
+  // ── 裁切模式锁定：监听 ImageCropOverlay 派发的 crop-mode-change 事件 ──
+  // 裁切打开时禁止画布的所有交互（缩放/平移/框选/拖拽），防止误操作
+  // 通过在画布容器上添加 .pea-canvas-locked 类，CSS 层禁用所有 pointer 事件
+  useEffect(() => {
+    const onCropModeChange = (e: Event) => {
+      const active = (e as CustomEvent).detail?.active === true;
+      cropActiveRef.current = active;
+      const el = flowRef.current;
+      if (!el) return;
+      if (active) {
+        el.classList.add('pea-canvas-locked');
+      } else {
+        el.classList.remove('pea-canvas-locked');
+      }
+    };
+    window.addEventListener('crop-mode-change', onCropModeChange);
+    return () => window.removeEventListener('crop-mode-change', onCropModeChange);
   }, []);
 
   useEffect(() => {
@@ -1741,10 +1762,16 @@ function Flow() {
   // 阻止浏览器默认缩放；但【不】 stopPropagation，所以 ReactFlow 内部的 wheel
   // 监听仍能收到该事件、继续完成画布缩放。两者互不干扰。
   // 普通滚轮（无 Ctrl）不拦截，保留 panOnScroll 的画布平移手势。
+  // 裁切模式（cropActiveRef）下：完全阻止所有 wheel 事件，锁定画布缩放/平移。
   useEffect(() => {
     const el = flowRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      if (cropActiveRef.current) {
+        e.stopPropagation();
+        e.preventDefault();
+        return;
+      }
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
       }

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Dropdown } from 'antd';
 import { toast } from '../store/toast';
 import { updateCrop, clamp, MIN_CROP, type Rect, type CropDragType } from './cropMath';
@@ -10,6 +9,7 @@ type Disp = { w: number; h: number; scale: number };
 
 interface Props {
   url: string;
+  containerRef: React.RefObject<HTMLDivElement | null>;
   onClose: () => void;
   onConfirm: (dataUrl: string, size: { width: number; height: number }) => void;
 }
@@ -36,30 +36,42 @@ const RATIO_VALUES: Record<Exclude<CropRatio, 'original' | 'custom'>, number> = 
 
 const INSET = 0.10;
 
-/** 计算图片在视口中的显示尺寸：等比 contain 到 (0.84vw, 0.72vh) 区域内。
- *  显示矩形与图片原图严格同比例（scale 均匀），因此裁剪坐标可按 scale 直接映射回原图。 */
-function fitDisplay(natW: number, natH: number): Disp {
-  const maxW = Math.min(window.innerWidth * 0.84, 1100);
-  const maxH = window.innerHeight * 0.72;
-  const scale = Math.min(maxW / natW, maxH / natH);
-  return { w: Math.round(natW * scale), h: Math.round(natH * scale), scale };
+/** Calculate crop image display size.
+ *
+ *  Core rule: crop image = the node's actual rendered pixel size on screen (×1.0).
+ *  We read the container's getBoundingClientRect() to get the real pixel dimensions
+ *  the user sees on canvas, then use that directly — no scaling, no viewport ratios.
+ *  This means the crop image is ALWAYS the same size as the node the user clicked.
+ *
+ *  Safety: if container measurement fails, fall back to a reasonable default (400×300)
+ *  and clamp to max 90% of viewport to prevent overflow in edge cases.
+ */
+function fitDisplay(natW: number, natH: number, containerEl: HTMLDivElement | null): Disp {
+  const rect = containerEl?.getBoundingClientRect();
+  const baseW = rect?.width ?? 400;
+  const baseH = rect?.height ?? 300;
+
+  // Use node's actual screen pixels as-is (×1.0 scale factor)
+  // But clamp to 90% viewport as safety net for extreme cases
+  const viewMaxW = window.innerWidth * 0.90;
+  const viewMaxH = window.innerHeight * 0.90;
+  const finalW = Math.min(baseW, viewMaxW);
+  const finalH = Math.min(baseH, viewMaxH);
+
+  // Scale must map display pixels back to original image coordinates
+  const scale = Math.min(finalW / natW, finalH / natH);
+  return { w: Math.round(finalW), h: Math.round(finalH), scale };
 }
 
-/** 计算裁剪框初始位置和尺寸。
- *  - ratio=null（自由模式）：留 INSET 边距，居中显示
- *  - ratio!=null（锁定比例）：contain 到图片全尺寸，占满宽度或高度（取较小溢出方向）
- */
+/** Calculate initial crop rectangle position and size. */
 function centerFitRect(W: number, H: number, ratio: number | null) {
   if (ratio != null) {
-    // 比例模式：裁剪框尽可能大，contain 在图片边界内，占满一边
-    const byWidth = { w: W, h: W / ratio };   // 以宽为准
-    const byHeight = { w: H * ratio, h: H };   // 以高为准
-    // 选那个能完整放进图片的方案
+    const byWidth = { w: W, h: W / ratio };
+    const byHeight = { w: H * ratio, h: H };
     const use = byWidth.h <= H ? byWidth : byHeight;
     return { x: (W - use.w) / 2, y: (H - use.h) / 2, w: use.w, h: use.h };
   }
-  // 自由模式：留 10% 边距
-  const inset = 1 - INSET * 2; // 0.8
+  const inset = 1 - INSET * 2;
   let w = clamp(W * inset, MIN_CROP, W);
   let h = clamp(H * inset, MIN_CROP, H);
   return { x: (W - w) / 2, y: (H - h) / 2, w, h };
@@ -89,7 +101,7 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
-/** 将裁剪 Rect 同步到 DOM 节点的 style（拖动期间使用，绕过 React 重渲染） */
+/** Sync crop Rect to DOM node styles (used during drag to bypass React re-render) */
 function syncDomStyles(
   rect: Rect,
   W: number,
@@ -97,7 +109,6 @@ function syncDomStyles(
   frameEl: HTMLDivElement | null,
   masks: { top: HTMLDivElement | null; bottom: HTMLDivElement | null; left: HTMLDivElement | null; right: HTMLDivElement | null },
 ) {
-  // 全部用 transform 驱动（GPU 合成，无布局抖动）。遮罩基准尺寸 = 整张图(W×H)，用 scale/translate 切出对应区域
   if (frameEl) {
     frameEl.style.transform = `translate3d(${rect.x}px, ${rect.y}px, 0)`;
     frameEl.style.width = `${rect.w}px`;
@@ -109,7 +120,17 @@ function syncDomStyles(
   if (masks.right) masks.right.style.transform = `translate(${rect.x + rect.w}px, 0) scale(${(W - rect.x - rect.w) / W}, 1)`;
 }
 
-export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
+/** In-place image crop overlay component.
+ *
+ *  Design points:
+ *  - No createPortal — renders directly inside the node's image container (position:absolute fills parent)
+ *  - No full-screen darkening mask — canvas content completely unaffected
+ *  - Image centered and enlarged in container, with its own dark background card
+ *  - Four-side semi-transparent darkening mask outside crop area (pea-crop-mask)
+ *  - Toolbar right below the image
+ *  - Single-layer structure: overlay > stage > [image-stage + toolbar]
+ */
+export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm }: Props) {
   const [disp, setDisp] = useState<Disp | null>(null);
   const [crop, setCrop] = useState<Rect | null>(null);
   const [ratioKey, setRatioKey] = useState<CropRatio>('original');
@@ -121,12 +142,13 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
   const naturalRef = useRef<{ w: number; h: number } | null>(null);
   const dispRef = useRef<Disp | null>(null);
 
-  // ── DOM refs：拖动期间直接操作 style，绕过 React 重渲染 ──
+  // DOM refs for direct style manipulation during drag
   const frameRef = useRef<HTMLDivElement | null>(null);
   const maskTopRef = useRef<HTMLDivElement | null>(null);
   const maskBottomRef = useRef<HTMLDivElement | null>(null);
   const maskLeftRef = useRef<HTMLDivElement | null>(null);
   const maskRightRef = useRef<HTMLDivElement | null>(null);
+
   const W = disp?.w ?? 0;
   const H = disp?.h ?? 0;
 
@@ -136,7 +158,7 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
     return RATIO_VALUES[ratioKey];
   }, [ratioKey, customRatio, originalRatio]);
 
-  // 加载图片 → 计算显示尺寸 → 初始化裁剪框
+  // Load image → measure container via getBoundingClientRect → calc display size → init crop rect
   useEffect(() => {
     let alive = true;
     loadImage(url)
@@ -144,10 +166,10 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
         if (!alive) return;
         const nat = { w: img.naturalWidth, h: img.naturalHeight };
         naturalRef.current = nat;
-        const d = fitDisplay(nat.w, nat.h);
-        dispRef.current = d;
-        // 原图比例使用自然尺寸计算，避免窗口缩放后显示比例四舍五入导致漂移
         setOriginalRatio(nat.w / nat.h);
+
+        const d = fitDisplay(nat.w, nat.h, containerRef.current);
+        dispRef.current = d;
         setDisp(d);
       })
       .catch(() => {
@@ -155,21 +177,20 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
         onClose();
       });
     return () => { alive = false; };
-  }, [url, onClose]);
+  }, [url, onClose, containerRef]);
 
-  // 显示尺寸就绪后，默认展示「图片 + 居中的裁剪框」
+  // Init crop rect once display size is ready
   useEffect(() => {
     if (!disp || crop) return;
-    // 默认进入：裁剪框居中，四周留 10% 边距（参考用户截图样式）
     setCrop(centerFitRect(disp.w, disp.h, null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp]);
 
-  // 窗口缩放：等比重算显示尺寸，并同步缩放当前裁剪框，避免坐标错位
+  // Window resize: recalc display size and sync crop rect
   const onResize = useCallback(() => {
     const nat = naturalRef.current;
     if (!nat) return;
-    const next = fitDisplay(nat.w, nat.h);
+    const next = fitDisplay(nat.w, nat.h, containerRef.current);
     const prev = dispRef.current;
     dispRef.current = next;
     setDisp(next);
@@ -178,7 +199,7 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
       const ry = next.h / prev.h;
       setCrop((c) => (c ? { x: c.x * rx, y: c.y * ry, w: c.w * rx, h: c.h * ry } : c));
     }
-  }, []);
+  }, [containerRef]);
 
   useLayoutEffect(() => {
     window.addEventListener('resize', onResize);
@@ -197,13 +218,11 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
     if (!crop || !W || !H) return;
     if (r === 'original') {
       setRatioKey('original');
-      // 原图比例：裁剪框完整覆盖底图
       setCrop({ x: 0, y: 0, w: W, h: H });
       return;
     }
     if (r === 'custom') {
       setRatioKey('custom');
-      // 自定义：保持当前裁剪框中心，按现有尺寸推算宽高比作为默认值
       const nextCustom = customRatio ?? clamp(crop.w / crop.h, 0.01, 100);
       setCustomRatio(nextCustom);
       setCrop(centerFitRect(W, H, nextCustom));
@@ -225,7 +244,7 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
     setCrop(centerFitRect(W, H, r));
   };
 
-  // ── 拖动核心：直接操作 DOM，绕过 React 重渲染；rAF 合并 + 指针捕获实现稳定 60fps ──
+  // Drag core: direct DOM manipulation + rAF merge + pointer capture for stable 60fps
   const startDrag = (type: CropDragType, e: React.PointerEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -236,7 +255,6 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
     const startY = e.clientY;
     const target = e.currentTarget as HTMLElement;
 
-    // 指针捕获：拖出元素也能稳定接收事件，避免丢失光标导致的卡顿/跳变
     try { target.setPointerCapture(e.pointerId); } catch { /* noop */ }
     setIsDragging(true);
 
@@ -248,7 +266,6 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
       right: maskRightRef.current,
     };
 
-    // 用 rAF 合并同一帧内的多次 pointermove，每帧最多写一次 DOM → 稳定 60fps
     let latestX = startX;
     let latestY = startY;
     let rafId = 0;
@@ -276,7 +293,6 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
-      // 用最终计算值提交 React state（精确、无 getBoundingClientRect 舍入），与 DOM 完全一致 → 无回跳
       const dx = latestX - startX;
       const dy = latestY - startY;
       const next = updateCrop(type, startRect, dx, dy, W, H, ratioValue);
@@ -335,15 +351,17 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
 
   const isReady = W > 0 && H > 0 && crop != null;
 
-  // 四边中点把手：拖动时该边单独移动（对边固定）；固定比例下保持比例等比缩放
+  // Block wheel events from bubbling to canvas
+  const onWheel = useCallback((e: React.WheelEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+  }, []);
 
-  return createPortal(
-    <div className="pea-crop-overlay" role="dialog" aria-label="图片裁剪">
-      {/* 全屏遮罩：盖住整个画布，只展示图片本身（节点边框/连接点/徽章全部被遮住） */}
-      <div className="pea-crop-backdrop" onClick={onClose} aria-hidden />
-
-      {/* 居中舞台：图片在上，功能条在下（独立 bar，不压在裁剪框内） */}
-      <div className="pea-crop-stage" onClick={stop}>
+  // Render: in-place overlay, single layer
+  return (
+    <div className="pea-crop-overlay" role="dialog" aria-label="图片裁剪" onWheel={onWheel}>
+      {/* Centered stage: dark card wrapping image + toolbar */}
+      <div className="pea-crop-stage" onClick={stop} onWheel={onWheel}>
         {!isReady ? (
           <div className="pea-crop-loading">
             <span className="pea-crop-loading-text">准备裁剪…</span>
@@ -351,7 +369,7 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
         ) : (
           <>
             <div className="pea-crop-image-stage" style={{ width: W, height: H }}>
-              {/* 图片 + 遮罩裁剪在内部，避免描边/把手被裁切 */}
+              {/* Image + four-side masking */}
               <div className="pea-crop-img-clip">
                 <img className="pea-crop-image" src={url} alt="裁剪图片" draggable={false} />
                 <div ref={maskTopRef} className="pea-crop-mask" style={{ transform: `scale(1, ${crop.y / H})` }} />
@@ -360,14 +378,14 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
                 <div ref={maskRightRef} className="pea-crop-mask" style={{ transform: `translate(${crop.x + crop.w}px, 0) scale(${(W - crop.x - crop.w) / W}, 1)` }} />
               </div>
 
-              {/* 裁剪框：可拖动，四角可自由缩放（与图片同级，把手不被裁切） */}
+              {/* Crop frame */}
               <div
                 ref={frameRef}
                 className={`pea-crop-frame${isDragging ? ' pea-crop-frame--dragging' : ''}`}
                 style={{ transform: `translate3d(${crop.x}px, ${crop.y}px, 0)`, left: 0, top: 0, width: crop.w, height: crop.h }}
                 onPointerDown={(e) => startDrag('move', e)}
                 role="button"
-                aria-label="拖动裁剪区"
+                aria-label="拖动裁切区"
                 tabIndex={0}
               >
                 {(['nw', 'ne', 'sw', 'se'] as const).map((h) => (
@@ -380,7 +398,6 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
                     tabIndex={-1}
                   />
                 ))}
-                {/* 四边中点拖拽把手：选中一条边 → 该边单独移动（对边固定）；固定比例下保持比例 */}
                 {(['n', 's', 'e', 'w'] as const).map((h) => (
                   <span
                     key={h}
@@ -394,12 +411,12 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
               </div>
             </div>
 
-            {/* 裁剪功能条：图片正下方的独立 bar */}
+            {/* Toolbar */}
             <div className="pea-crop-toolbar" onClick={stop}>
               <button type="button" className="pea-crop-toolbar-btn" onClick={onClose} aria-label="取消裁剪" title="取消">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
                   <path d="M18 6L6 18" />
-                  <path d="M6 6l12 12" />
+                  <path d="M 6 6l12 12" />
                 </svg>
               </button>
               <div className="pea-crop-toolbar-sep" />
@@ -436,13 +453,12 @@ export default function ImageCropOverlay({ url, onClose, onConfirm }: Props) {
           </>
         )}
       </div>
-    </div>,
-    document.body,
+    </div>
   );
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
- * 自定义比例输入：宽 / 高 两个输入框，按 Enter 或失焦应用
+ * Custom ratio input
  * ═════════════════════════════════════════════════════════════════════════════ */
 function CustomRatioInput({
   current,
@@ -457,7 +473,6 @@ function CustomRatioInput({
 
   useEffect(() => {
     if (current) {
-      // 保持 3 位小数精度，避免过长
       setWDraft(String(Math.round(current * 1000) / 1000));
     }
   }, [current]);
@@ -510,7 +525,7 @@ function CustomRatioInput({
   );
 }
 
-/* 裁剪几何计算已抽到 ./cropMath（纯函数、可单测），本组件只负责 DOM/交互 */
+/* Crop math extracted to ./cropHash (pure functions, testable). This component handles only DOM/interaction. */
 
 function formatRatio(n: number) {
   if (Math.abs(n - Math.round(n)) < 0.001) return `${Math.round(n)}:1`;
