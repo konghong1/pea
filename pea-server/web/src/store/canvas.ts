@@ -138,6 +138,13 @@ interface CanvasState {
   /** 批量添加边（用于多选插入节点后的自动连线）。 */
   addEdges: (newEdges: Edge[]) => void;
   /**
+   * 将一个新节点插入到 sourceId 的输出链路中。
+   * - 若源节点没有下游边：直接建立 source -> newNode 的连线。
+   * - 若源节点已有下游边：断开旧边，改为 source -> newNode -> 原下游目标，
+   *   保证源节点始终只有一条输出边，避免裁剪后“双输出链接”的错乱。
+   */
+  insertNodeAfter: (sourceId: string, newNodeId: string) => void;
+  /**
    * 多选插入节点：在选中节点集合的中心位置创建新节点，
    * 并将所有从选中节点出发的 source 边重连到新节点的 target（左 handle）。
    * 返回新创建的节点 ID。
@@ -1096,6 +1103,50 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     });
 
     return nid;
+  },
+
+  insertNodeAfter: (sourceId, newNodeId) => {
+    const s = get();
+    const sourceEdges = s.edges.filter((e) => e.source === sourceId);
+    get().takeSnapshot();
+
+    if (sourceEdges.length === 0) {
+      set({
+        edges: addEdge(
+          { source: sourceId, target: newNodeId, sourceHandle: 'out', targetHandle: 'in', type: 'pea' },
+          s.edges,
+        ),
+        dirty: true,
+      });
+      return;
+    }
+
+    // 源节点已有下游边：把新节点串进链路，保持原下游连接。
+    const originalTargets = [...new Set(sourceEdges.map((e) => e.target))];
+    const oldEdgeIds = new Set(sourceEdges.map((e) => e.id));
+    let nextEdges = s.edges.filter((e) => !oldEdgeIds.has(e.id));
+
+    nextEdges = addEdge(
+      { source: sourceId, target: newNodeId, sourceHandle: 'out', targetHandle: 'in', type: 'pea' },
+      nextEdges,
+    );
+    originalTargets.forEach((tgt) => {
+      nextEdges = addEdge(
+        { source: newNodeId, target: tgt, sourceHandle: 'out', targetHandle: 'in', type: 'pea' },
+        nextEdges,
+      );
+    });
+
+    set({
+      edges: nextEdges,
+      // 断线回收：原下游 target 不再直连 sourceId，需清理残留的引用缩略图 / @ token。
+      nodes: pruneDetachedRefs(
+        s.nodes,
+        nextEdges,
+        sourceEdges.map((e) => ({ source: e.source, target: e.target })),
+      ),
+      dirty: true,
+    });
   },
 
   // ═══════════════════════════════════════════════════════════════

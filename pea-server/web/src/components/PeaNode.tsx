@@ -630,7 +630,7 @@ function ResultMediaView({
   useLayoutEffect(() => { setChromeReady(true); }, []);
   const update = useCanvas((s) => s.updateNodeData);
   const addNode = useCanvas((s) => s.addNode);
-  const onConnect = useCanvas((s) => s.onConnect);
+  const insertNodeAfter = useCanvas((s) => s.insertNodeAfter);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -742,7 +742,30 @@ function ResultMediaView({
     const srcSize = getNodeSize(src?.data.aspectRatio, src?.data.kind);
     // 输出节点使用裁剪结果的实际宽高比，不继承源节点的 aspectRatio
     const aspectRatio = simplifyRatio(size.width, size.height);
-    const pos = { x: (src?.position.x ?? 0) + srcSize.width + 80, y: src?.position.y ?? 0 };
+    const newSize = getNodeSize(aspectRatio, 'image');
+
+    // 若源节点已有下游输出，把裁剪节点串进链路（避免源节点出现“双输出链接”）；
+    // 否则放在源节点右侧作为新的输出节点。
+    const downstreamEdges = g.edges.filter((e) => e.source === id);
+    let pos: { x: number; y: number };
+    if (downstreamEdges.length > 0) {
+      const firstTarget = g.nodes.find((n) => n.id === downstreamEdges[0].target);
+      if (firstTarget) {
+        const tgtSize = getNodeSize(firstTarget.data.aspectRatio, firstTarget.data.kind);
+        const srcRight = (src?.position.x ?? 0) + srcSize.width;
+        const tgtLeft = firstTarget.position.x;
+        const gap = tgtLeft - srcRight;
+        const idealX = srcRight + gap / 2 - newSize.width / 2;
+        pos = {
+          x: Math.max(idealX, srcRight + 40),
+          y: src?.position.y ?? 0,
+        };
+      } else {
+        pos = { x: (src?.position.x ?? 0) + srcSize.width + 80, y: src?.position.y ?? 0 };
+      }
+    } else {
+      pos = { x: (src?.position.x ?? 0) + srcSize.width + 80, y: src?.position.y ?? 0 };
+    }
 
     const newId = addNode({
       kind: 'image',
@@ -753,7 +776,7 @@ function ResultMediaView({
     } as PeaNodeData, pos);
 
     if (newId) {
-      onConnect({ source: id, target: newId, sourceHandle: 'out', targetHandle: 'in' });
+      insertNodeAfter(id, newId);
       toast.success('已生成输出节点');
     }
   };

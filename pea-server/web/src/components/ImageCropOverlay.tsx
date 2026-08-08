@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useStore } from 'reactflow';
 import { Dropdown } from 'antd';
 import { toast } from '../store/toast';
 import { updateCrop, clamp, MIN_CROP, type Rect, type CropDragType } from './cropMath';
@@ -13,7 +14,6 @@ interface Props {
   onClose: () => void;
   onConfirm: (dataUrl: string, size: { width: number; height: number }) => void;
 }
-
 const RATIO_LABELS: Record<CropRatio, string> = {
   original: '原图比例',
   '1:1': '1 : 1',
@@ -38,28 +38,66 @@ const INSET = 0.10;
 
 /** Calculate crop image display size.
  *
- *  Core rule: crop image = the node's actual rendered pixel size on screen (×1.0).
- *  We read the container's getBoundingClientRect() to get the real pixel dimensions
- *  the user sees on canvas, then use that directly — no scaling, no viewport ratios.
- *  This means the crop image is ALWAYS the same size as the node the user clicked.
+ *  Core rule: crop image's visual size = the node's actual rendered pixel size
+ *  on screen (×1.0). We read the container's getBoundingClientRect() to get the
+ *  real screen pixels the user sees on canvas, then use that directly — no
+ *  scaling, no viewport ratios.
  *
- *  Safety: if container measurement fails, fall back to a reasonable default (400×300)
- *  and clamp to max 90% of viewport to prevent overflow in edge cases.
+ *  ⚠️ Critical: getBoundingClientRect() returns *visual* (post-transform)
+ *  pixels. The container lives inside ReactFlow's viewport which applies
+ *  `transform: scale(zoom)`, so a CSS pixel we write as inline `width: W`
+ *  will be visually multiplied by zoom. To make the crop image visually equal
+ *  to the node (i.e. visualSize = baseW × zoom / zoom = baseW), we convert
+ *  the visual pixel target back to a flow coordinate by dividing by zoom.
+ *  This is purely a coordinate-space conversion, NOT a "scale factor"
+ *  amplification — it cancels the transform ReactFlow would otherwise apply.
+ *
+ *  Safety: clamp to max 90% of viewport as safety net for extreme cases.
  */
-function fitDisplay(natW: number, natH: number, containerEl: HTMLDivElement | null): Disp {
+function fitDisplay(natW: number, natH: number, containerEl: HTMLDivElement | null, zoom: number): Disp {
   const rect = containerEl?.getBoundingClientRect();
   const baseW = rect?.width ?? 400;
   const baseH = rect?.height ?? 300;
 
-  // Use node's actual screen pixels as-is (×1.0 scale factor)
-  // But clamp to 90% viewport as safety net for extreme cases
+  // Preserve the original image aspect ratio. The crop UI shows the full,
+  // uncropped image, so its display bounds must match the image ratio — not
+  // the node's ratio. Fit the largest such rectangle inside the node bounds.
+  const imageRatio = natW / natH;
+  const nodeRatio = baseW / baseH;
+  let visualW: number;
+  let visualH: number;
+  if (nodeRatio > imageRatio) {
+    // Node is wider than the image -> height is the limiting axis.
+    visualH = baseH;
+    visualW = visualH * imageRatio;
+  } else {
+    // Node is taller than or equal to the image -> width is the limiting axis.
+    visualW = baseW;
+    visualH = visualW / imageRatio;
+  }
+
+  // Clamp to 90% viewport as safety net, maintaining aspect ratio.
   const viewMaxW = window.innerWidth * 0.90;
   const viewMaxH = window.innerHeight * 0.90;
-  const finalW = Math.min(baseW, viewMaxW);
-  const finalH = Math.min(baseH, viewMaxH);
+  if (visualW > viewMaxW) {
+    visualW = viewMaxW;
+    visualH = visualW / imageRatio;
+  }
+  if (visualH > viewMaxH) {
+    visualH = viewMaxH;
+    visualW = visualH * imageRatio;
+  }
 
-  // Scale must map display pixels back to original image coordinates
-  const scale = Math.min(finalW / natW, finalH / natH);
+  // Convert visual pixel target to flow coordinate (÷ zoom) so the rendered
+  // size after ReactFlow's `transform: scale(zoom)` equals the intended visual
+  // pixels. Guard zoom=0 just in case.
+  const safeZoom = zoom > 0 ? zoom : 1;
+  const finalW = visualW / safeZoom;
+  const finalH = visualH / safeZoom;
+
+  // Scale maps display pixels back to original image coordinates.
+  // Because aspect ratio is preserved, visualW/natW == visualH/natH.
+  const scale = visualW / natW;
   return { w: Math.round(finalW), h: Math.round(finalH), scale };
 }
 
@@ -75,6 +113,25 @@ function centerFitRect(W: number, H: number, ratio: number | null) {
   let w = clamp(W * inset, MIN_CROP, W);
   let h = clamp(H * inset, MIN_CROP, H);
   return { x: (W - w) / 2, y: (H - h) / 2, w, h };
+}
+
+/** Default crop rectangle on first open: preserve image ratio with a small inset,
+ *  so the frame does not hug the image edges (matches the reference design). */
+function initialCropRect(W: number, H: number, ratio: number | null) {
+  const inset = 1 - INSET * 2; // 80% of the display area
+  if (ratio == null) {
+    const w = clamp(W * inset, MIN_CROP, W);
+    const h = clamp(H * inset, MIN_CROP, H);
+    return { x: (W - w) / 2, y: (H - h) / 2, w, h };
+  }
+  // Fit a ratio-locked rectangle inside the 80% display area.
+  let w = W * inset;
+  let h = w / ratio;
+  if (h > H * inset) {
+    h = H * inset;
+    w = h * ratio;
+  }
+  return { x: (W - w) / 2, y: (H - h) / 2, w: clamp(w, MIN_CROP, W), h: clamp(h, MIN_CROP, H) };
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -139,6 +196,10 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   const [loading, setLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
+  // Subscribe to ReactFlow viewport zoom so the crop image's visual size matches
+  // the node's visual size regardless of canvas zoom level.
+  const zoom = useStore((s) => s.transform[2]) || 1;
+
   const naturalRef = useRef<{ w: number; h: number } | null>(null);
   const dispRef = useRef<Disp | null>(null);
 
@@ -158,6 +219,21 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     return RATIO_VALUES[ratioKey];
   }, [ratioKey, customRatio, originalRatio]);
 
+  // ── Lock canvas while crop overlay is open ────────────────────────────────
+  // CanvasEditor listens for `crop-mode-change` to disable canvas pan/zoom and
+  // add `.pea-canvas-locked`. We dispatch on mount/unmount so the lock is always
+  // released even if the component is unmounted by an external route change.
+  useEffect(() => {
+    try {
+      window.dispatchEvent(new CustomEvent('crop-mode-change', { detail: { active: true } }));
+    } catch { /* noop */ }
+    return () => {
+      try {
+        window.dispatchEvent(new CustomEvent('crop-mode-change', { detail: { active: false } }));
+      } catch { /* noop */ }
+    };
+  }, []);
+
   // Load image → measure container via getBoundingClientRect → calc display size → init crop rect
   useEffect(() => {
     let alive = true;
@@ -168,7 +244,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
         naturalRef.current = nat;
         setOriginalRatio(nat.w / nat.h);
 
-        const d = fitDisplay(nat.w, nat.h, containerRef.current);
+        const d = fitDisplay(nat.w, nat.h, containerRef.current, zoom);
         dispRef.current = d;
         setDisp(d);
       })
@@ -177,20 +253,22 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
         onClose();
       });
     return () => { alive = false; };
-  }, [url, onClose, containerRef]);
+  }, [url, onClose, containerRef, zoom]);
 
-  // Init crop rect once display size is ready
+  // Init crop rect once display size is ready.
+  // Default ratio is 'original' -> crop frame preserves the image ratio with a small inset,
+  // so it does not hug the image edges on first open.
   useEffect(() => {
     if (!disp || crop) return;
-    setCrop(centerFitRect(disp.w, disp.h, null));
+    setCrop(initialCropRect(disp.w, disp.h, originalRatio ?? null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [disp]);
+  }, [disp, originalRatio]);
 
   // Window resize: recalc display size and sync crop rect
   const onResize = useCallback(() => {
     const nat = naturalRef.current;
     if (!nat) return;
-    const next = fitDisplay(nat.w, nat.h, containerRef.current);
+    const next = fitDisplay(nat.w, nat.h, containerRef.current, zoom);
     const prev = dispRef.current;
     dispRef.current = next;
     setDisp(next);
@@ -199,12 +277,31 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       const ry = next.h / prev.h;
       setCrop((c) => (c ? { x: c.x * rx, y: c.y * ry, w: c.w * rx, h: c.h * ry } : c));
     }
-  }, [containerRef]);
+  }, [containerRef, zoom]);
 
   useLayoutEffect(() => {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [onResize]);
+
+  // Re-fit when canvas zoom changes (covers cases where the user pans/zooms
+  // the canvas while crop is open, or zoom is set asynchronously after mount).
+  // The crop overlay is locked against canvas panning/zoom, but Pro features
+  // (e.g. modal overlays that change viewport) can still trigger a zoom change.
+  useEffect(() => {
+    const nat = naturalRef.current;
+    if (!nat) return;
+    const next = fitDisplay(nat.w, nat.h, containerRef.current, zoom);
+    const prev = dispRef.current;
+    dispRef.current = next;
+    setDisp(next);
+    if (prev && prev.w > 0 && prev.h > 0) {
+      const rx = next.w / prev.w;
+      const ry = next.h / prev.h;
+      setCrop((c) => (c ? { x: c.x * rx, y: c.y * ry, w: c.w * rx, h: c.h * ry } : c));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -214,11 +311,33 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Close crop when clicking outside the overlay: other nodes, canvas blank area,
+  // or the current node's chrome (badge/toolbar). Keep open for the overlay itself
+  // and its antd dropdown menu so ratio selection and drag interactions work.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (
+        target.closest('[data-cropping-overlay="true"]') ||
+        target.closest('.pea-crop-dropdown') ||
+        target.closest('.ant-dropdown-menu')
+      ) {
+        return;
+      }
+      onCloseRef.current();
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, []);
+
   const applyRatio = (r: CropRatio) => {
     if (!crop || !W || !H) return;
     if (r === 'original') {
       setRatioKey('original');
-      setCrop({ x: 0, y: 0, w: W, h: H });
+      setCrop(initialCropRect(W, H, originalRatio ?? null));
       return;
     }
     if (r === 'custom') {
@@ -311,16 +430,17 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     setLoading(true);
     try {
       const img = await loadImage(url);
-      const { scale } = disp;
-      let sx = crop.x / scale;
-      let sy = crop.y / scale;
-      let sw = crop.w / scale;
-      let sh = crop.h / scale;
+      const { w: dispW, h: dispH, scale } = disp;
       const nat = naturalRef.current;
-      sx = clamp(sx, 0, nat.w);
-      sy = clamp(sy, 0, nat.h);
-      sw = clamp(sw, 0, nat.w - sx);
-      sh = clamp(sh, 0, nat.h - sy);
+      // crop is in FLOW coordinate of stage (which is disp.w × disp.h).
+      // To map to natural image pixels: visual px = flow px × zoom,
+      // natural px = visual px × (natW / visualW) = flow px × zoom × (natW / (disp.w * zoom))
+      //          = flow px × (natW / disp.w).
+      // Multiply, don't divide — scale is "visual px per natural px".
+      const sx = clamp(crop.x * (nat.w / dispW), 0, nat.w);
+      const sy = clamp(crop.y * (nat.h / dispH), 0, nat.h);
+      const sw = clamp(crop.w * (nat.w / dispW), 0, nat.w - sx);
+      const sh = clamp(crop.h * (nat.h / dispH), 0, nat.h - sy);
       if (sw < 1 || sh < 1) {
         toast.error('裁剪区域过小');
         return;
@@ -359,100 +479,100 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
 
   // Render: in-place overlay, single layer
   return (
-    <div className="pea-crop-overlay" role="dialog" aria-label="图片裁剪" onWheel={onWheel}>
-      {/* Centered stage: dark card wrapping image + toolbar */}
+    <div className="pea-crop-overlay" data-cropping-overlay="true" role="dialog" aria-label="图片裁剪" onWheel={onWheel}>
+      {/* Stage: transparent container that exactly matches the node wrap */}
       <div className="pea-crop-stage" onClick={stop} onWheel={onWheel}>
         {!isReady ? (
           <div className="pea-crop-loading">
             <span className="pea-crop-loading-text">准备裁剪…</span>
           </div>
         ) : (
-          <>
-            <div className="pea-crop-image-stage" style={{ width: W, height: H }}>
-              {/* Image + four-side masking */}
-              <div className="pea-crop-img-clip">
-                <img className="pea-crop-image" src={url} alt="裁剪图片" draggable={false} />
-                <div ref={maskTopRef} className="pea-crop-mask" style={{ transform: `scale(1, ${crop.y / H})` }} />
-                <div ref={maskBottomRef} className="pea-crop-mask" style={{ transform: `translate(0px, ${crop.y + crop.h}px) scale(1, ${(H - crop.y - crop.h) / H})` }} />
-                <div ref={maskLeftRef} className="pea-crop-mask" style={{ transform: `scale(${crop.x / W}, 1)` }} />
-                <div ref={maskRightRef} className="pea-crop-mask" style={{ transform: `translate(${crop.x + crop.w}px, 0) scale(${(W - crop.x - crop.w) / W}, 1)` }} />
-              </div>
-
-              {/* Crop frame */}
-              <div
-                ref={frameRef}
-                className={`pea-crop-frame${isDragging ? ' pea-crop-frame--dragging' : ''}`}
-                style={{ transform: `translate3d(${crop.x}px, ${crop.y}px, 0)`, left: 0, top: 0, width: crop.w, height: crop.h }}
-                onPointerDown={(e) => startDrag('move', e)}
-                role="button"
-                aria-label="拖动裁切区"
-                tabIndex={0}
-              >
-                {(['nw', 'ne', 'sw', 'se'] as const).map((h) => (
-                  <span
-                    key={h}
-                    className={`pea-crop-handle ${h}`}
-                    onPointerDown={(e) => startDrag(h, e)}
-                    role="button"
-                    aria-label={`调整 ${h}`}
-                    tabIndex={-1}
-                  />
-                ))}
-                {(['n', 's', 'e', 'w'] as const).map((h) => (
-                  <span
-                    key={h}
-                    className={`pea-crop-handle edge ${h}`}
-                    onPointerDown={(e) => startDrag(h, e)}
-                    role="button"
-                    aria-label={`调整 ${h} 边`}
-                    tabIndex={-1}
-                  />
-                ))}
-              </div>
+          <div className="pea-crop-image-stage" style={{ width: W, height: H }}>
+            {/* Image + four-side masking */}
+            <div className="pea-crop-img-clip">
+              <img className="pea-crop-image" src={url} alt="裁剪图片" draggable={false} />
+              <div ref={maskTopRef} className="pea-crop-mask" style={{ transform: `scale(1, ${crop.y / H})` }} />
+              <div ref={maskBottomRef} className="pea-crop-mask" style={{ transform: `translate(0px, ${crop.y + crop.h}px) scale(1, ${(H - crop.y - crop.h) / H})` }} />
+              <div ref={maskLeftRef} className="pea-crop-mask" style={{ transform: `scale(${crop.x / W}, 1)` }} />
+              <div ref={maskRightRef} className="pea-crop-mask" style={{ transform: `translate(${crop.x + crop.w}px, 0) scale(${(W - crop.x - crop.w) / W}, 1)` }} />
             </div>
 
-            {/* Toolbar */}
-            <div className="pea-crop-toolbar" onClick={stop}>
-              <button type="button" className="pea-crop-toolbar-btn" onClick={onClose} aria-label="取消裁剪" title="取消">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
-                  <path d="M18 6L6 18" />
-                  <path d="M 6 6l12 12" />
-                </svg>
-              </button>
-              <div className="pea-crop-toolbar-sep" />
-              <Dropdown menu={{ items: dropdownItems }} placement="top" arrow overlayClassName="pea-crop-dropdown">
-                <button type="button" className="pea-crop-toolbar-btn pea-crop-ratio-btn" aria-label="选择裁剪比例" title="裁剪比例">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <path d="M3 9h18" />
-                    <path d="M9 21V9" />
-                  </svg>
-                  <span className="pea-crop-ratio-label">{ratioLabel}</span>
-                </button>
-              </Dropdown>
-              {ratioKey === 'custom' && <CustomRatioInput current={customRatio} onApply={applyCustomSize} />}
-              <div className="pea-crop-toolbar-sep" />
-              <button
-                type="button"
-                className="pea-crop-toolbar-btn pea-crop-confirm"
-                onClick={handleConfirm}
-                disabled={loading}
-                aria-label="确认裁剪"
-                title="确认裁剪"
-              >
-                {loading ? (
-                  <span className="pea-crop-spinner" aria-hidden />
-                ) : (
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M20 6L9 17l-5-5" />
-                  </svg>
-                )}
-                <span className="pea-crop-confirm-text">确认裁剪</span>
-              </button>
+            {/* Crop frame */}
+            <div
+              ref={frameRef}
+              className={`pea-crop-frame${isDragging ? ' pea-crop-frame--dragging' : ''}`}
+              style={{ transform: `translate3d(${crop.x}px, ${crop.y}px, 0)`, left: 0, top: 0, width: crop.w, height: crop.h }}
+              onPointerDown={(e) => startDrag('move', e)}
+              role="button"
+              aria-label="拖动裁切区"
+              tabIndex={0}
+            >
+              {(['nw', 'ne', 'sw', 'se'] as const).map((h) => (
+                <span
+                  key={h}
+                  className={`pea-crop-handle ${h}`}
+                  onPointerDown={(e) => startDrag(h, e)}
+                  role="button"
+                  aria-label={`调整 ${h}`}
+                  tabIndex={-1}
+                />
+              ))}
+              {(['n', 's', 'e', 'w'] as const).map((h) => (
+                <span
+                  key={h}
+                  className={`pea-crop-handle edge ${h}`}
+                  onPointerDown={(e) => startDrag(h, e)}
+                  role="button"
+                  aria-label={`调整 ${h} 边`}
+                  tabIndex={-1}
+                />
+              ))}
             </div>
-          </>
+          </div>
         )}
       </div>
+
+      {/* Toolbar: floats below the image stage, outside the node bounds */}
+      {isReady && (
+        <div className="pea-crop-toolbar" onClick={stop}>
+          <button type="button" className="pea-crop-toolbar-btn" onClick={onClose} aria-label="取消裁剪" title="取消">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M18 6L6 18" />
+              <path d="M 6 6l12 12" />
+            </svg>
+          </button>
+          <div className="pea-crop-toolbar-sep" />
+          <Dropdown menu={{ items: dropdownItems }} placement="top" arrow overlayClassName="pea-crop-dropdown">
+            <button type="button" className="pea-crop-toolbar-btn pea-crop-ratio-btn" aria-label="选择裁剪比例" title="裁剪比例">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M3 9h18" />
+                <path d="M9 21V9" />
+              </svg>
+              <span className="pea-crop-ratio-label">{ratioLabel}</span>
+            </button>
+          </Dropdown>
+          {ratioKey === 'custom' && <CustomRatioInput current={customRatio} onApply={applyCustomSize} />}
+          <div className="pea-crop-toolbar-sep" />
+          <button
+            type="button"
+            className="pea-crop-toolbar-btn pea-crop-confirm"
+            onClick={handleConfirm}
+            disabled={loading}
+            aria-label="确认裁剪"
+            title="确认裁剪"
+          >
+            {loading ? (
+              <span className="pea-crop-spinner" aria-hidden />
+            ) : (
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+            )}
+            <span className="pea-crop-confirm-text">确认裁剪</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
