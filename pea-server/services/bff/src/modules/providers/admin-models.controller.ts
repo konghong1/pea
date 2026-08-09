@@ -12,7 +12,7 @@ import {
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { AdminGuard } from '../../common/guards/admin.guard';
 import { ModelsService } from './models.service';
-import { CreateModelDto, UpdateModelDto } from './models.dto';
+import { CreateModelDto, PreviewCostDto, UpdateModelDto } from './models.dto';
 
 /** 管理员: 模型 CRUD (含动态定价 pricing / 门槛 min_plan_level)。 */
 @Controller('admin/models')
@@ -28,6 +28,15 @@ export class AdminModelsController {
   @Post()
   create(@Body() dto: CreateModelDto) {
     return this.models.createModel(dto);
+  }
+
+  /**
+   * 定价试算 (草稿态)。管理端可视化定价编辑器边配边调, 无需先保存模型。
+   * 返回逐项明细, 让"这单为什么这么贵"在配置界面就说得清。
+   */
+  @Post('preview-cost')
+  previewCost(@Body() dto: PreviewCostDto) {
+    return this.models.previewCost(dto.pricing, dto.params ?? {});
   }
 
   @Patch(':id')

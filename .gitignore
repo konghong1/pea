@@ -33,6 +33,9 @@ scripts/shots/
 coverage/
 .playwright-cli/
 pea-server/.playwright-cli/
+# 前端单测编译产物：统一由 verify/run-ts-tests.mjs 输出到 .workbuddy/artifacts/ts-test-build/。
+# pea-server/web/tmp/ 是早期手工 esbuild 编译测试留下的散落产物，已被 runner 取代，可安全删除。
+pea-server/web/tmp/
 
 # ===== OS / Editor =====
 .DS_Store

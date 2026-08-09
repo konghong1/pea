@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   App,
   AutoComplete,
@@ -52,6 +52,14 @@ import {
 } from '../../api/admin';
 import type { PlanView, PricingRule } from '../../api/catalog';
 import { AdminOrdersPane, AdminQrcodesPane } from './AdminPaymentsPane';
+import PricingEditor from '../admin/PricingEditor';
+import {
+  toFormValue,
+  toWire,
+  validateForm,
+  summarizePricing,
+  type PricingFormValue,
+} from '../admin/pricingForm';
 
 /**
  * 管理员控制台 (Phase 4)：AI 提供商 / 模型(动态定价) / 套餐 的可视化 CRUD。
@@ -750,19 +758,10 @@ function ModelsPane() {
 
 function PricingSummary({ pricing }: { pricing: PricingRule | null }) {
   if (!pricing) return <span style={{ color: '#bbb' }}>默认</span>;
-  const parts: string[] = [`基础 ${pricing.base ?? 10}`];
-  if (pricing.tiers) {
-    for (const [dim, table] of Object.entries(pricing.tiers)) {
-      const items = Object.entries(table || {})
-        .map(([k, v]) => `${k}+${v}`)
-        .join(' ');
-      if (items) parts.push(`${dim}: ${items}`);
-    }
-  }
-  if (pricing.multiplier) parts.push(`×${pricing.multiplier}`);
+  const text = summarizePricing(pricing);
   return (
-    <span style={{ fontSize: 12 }} title={parts.join(' / ')}>
-      💎 {parts.join(' · ')}
+    <span style={{ fontSize: 12 }} title={text}>
+      💎 {text}
     </span>
   );
 }
@@ -784,6 +783,18 @@ function ModelModal({
   const [remoteModels, setRemoteModels] = useState<RemoteModel[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const isEdit = !!record;
+
+  // 定价不走 antd Form（它是一棵结构化的树，不是单个字段），单独持有受控状态。
+  const [pricingForm, setPricingForm] = useState<PricingFormValue>(() =>
+    toFormValue(record?.pricing ?? null, record?.paramsSchema ?? null, record?.modelType ?? 'image'),
+  );
+  // 新建模型且管理员尚未动过定价时，切换模型类型可自动套用该类型的推荐维度；
+  // 一旦动过就不再覆盖，避免辛苦配好的档位被一次误点清空。
+  const pricingTouched = useRef(false);
+  const onPricingChange = useCallback((v: PricingFormValue) => {
+    pricingTouched.current = true;
+    setPricingForm(v);
+  }, []);
 
   // 监听「提供商」变化, 自动加载该提供商的远端模型清单 (按类型) 作为下拉选项。
   const providerId = Form.useWatch('providerId', form);
@@ -851,11 +862,22 @@ function ModelModal({
       isDefault: record?.isDefault ?? false,
       sortOrder: record?.sortOrder ?? 0,
       description: record?.description ?? '',
-      pricingText: record?.pricing
-        ? JSON.stringify(record.pricing, null, 2)
-        : JSON.stringify({ base: 10, tiers: { size: { '2K': 5, '4K': 20 } }, multiplier: 'n' }, null, 2),
     });
+    pricingTouched.current = false;
+    setPricingForm(
+      toFormValue(
+        record?.pricing ?? null,
+        record?.paramsSchema ?? null,
+        record?.modelType ?? 'image',
+      ),
+    );
   }, [record, providers, form]);
+
+  const modelType = Form.useWatch('modelType', form);
+  useEffect(() => {
+    if (isEdit || pricingTouched.current || !modelType) return;
+    setPricingForm(toFormValue(null, null, modelType));
+  }, [modelType, isEdit]);
 
   const submit = async () => {
     let v: any;
@@ -864,17 +886,15 @@ function ModelModal({
     } catch {
       return;
     }
-    // 解析定价 JSON（客户端仅做结构校验；最终价永远由服务端 PricingService 计算）
-    let pricing: PricingRule | null = null;
-    const text = (v.pricingText ?? '').trim();
-    if (text) {
-      try {
-        pricing = JSON.parse(text);
-      } catch {
-        message.error('定价 JSON 格式错误');
-        return;
-      }
+    // 定价来自可视化编辑器：先做人话校验，再序列化成 pricing + paramsSchema 两份 JSON。
+    // 客户端校验只为即时反馈；结构合法性与数值边界由服务端 DTO + normalizeRule 再兜一层，
+    // 最终价永远由服务端 PricingService 计算。
+    const pricingErrors = validateForm(pricingForm);
+    if (pricingErrors.length) {
+      message.error(pricingErrors[0]);
+      return;
     }
+    const { pricing, paramsSchema } = toWire(pricingForm);
     setSaving(true);
     try {
       const payload = {
@@ -888,6 +908,7 @@ function ModelModal({
         sortOrder: v.sortOrder ?? 0,
         description: v.description ?? '',
         pricing,
+        paramsSchema,
       };
       if (isEdit) {
         await adminUpdateModel(record!.id, payload);
@@ -906,7 +927,8 @@ function ModelModal({
   return (
     <Modal
       open
-      width={640}
+      width={900}
+      style={{ top: 40 }}
       title={isEdit ? `编辑模型 · ${record!.displayName}` : '新建模型'}
       onCancel={onClose}
       onOk={submit}
@@ -987,14 +1009,8 @@ function ModelModal({
             <Switch />
           </Form.Item>
         </Space>
-        <Form.Item
-          label="定价 (pricing_json)"
-          name="pricingText"
-          tooltip="base 基础价；tiers 按参数加价（如 size 2K/4K）；multiplier 数量倍率参数名。最终价由服务端权威计算。"
-        >
-          <Input.TextArea rows={7} spellCheck={false} style={{ fontFamily: 'monospace', fontSize: 12 }} />
-        </Form.Item>
-        <Form.Item label="描述" name="description">
+        <PricingEditor value={pricingForm} onChange={onPricingChange} />
+        <Form.Item label="描述" name="description" style={{ marginTop: 12 }}>
           <Input.TextArea rows={2} />
         </Form.Item>
       </Form>

@@ -52,9 +52,11 @@ export function isGeneratedMediaNode(data?: Partial<PeaNodeData> | null): boolea
 
 /**
  * 是否接受上游入边（= 是否渲染左侧 target Handle）。
- * 用户上传的素材节点内容由文件决定，不接受任何上游输入。
+ * 用户上传的素材节点内容由文件决定，不接受任何上游输入；
+ * 但裁剪产物节点（clipped=true）需要接收来自源节点的连线，作为例外放行。
  */
 export function acceptsUpstreamInput(data?: Partial<PeaNodeData> | null): boolean {
+  if (data?.clipped) return true;
   return !isUserUploadedMediaNode(data);
 }
 

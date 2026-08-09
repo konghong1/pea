@@ -133,6 +133,35 @@ export const adminUpdateModel = (id: string, dto: UpsertModelInput) =>
 export const adminDeleteModel = (id: string) =>
   api.delete<{ ok: true }>(`/admin/models/${id}`).then((r) => r.data);
 
+/** 定价试算明细单项 (后端 CostBreakdownItem 的镜像)。 */
+export interface CostBreakdownItem {
+  dim: string;
+  value: string;
+  delta: number;
+  hit: boolean;
+}
+
+export interface CostPreview {
+  cost: number;
+  base: number;
+  items: CostBreakdownItem[];
+  subtotal: number;
+  multiplierParam: string | null;
+  multiplier: number;
+  /** 后端清洗后的规则 —— 管理员能看到"实际会存成什么" */
+  normalizedPricing: PricingRule | null;
+  maxMultiplier: number;
+}
+
+/**
+ * 草稿定价试算: 不需要模型已落库, 直接把编辑器当前规则发给后端算价。
+ * 用的是与真实扣费同一段引擎, 所以配置界面看到的价 = 用户实际被扣的价。
+ */
+export const adminPreviewCost = (pricing: PricingRule | null, params: Record<string, unknown>) =>
+  api
+    .post<CostPreview>('/admin/models/preview-cost', { pricing, params })
+    .then((r) => r.data);
+
 /* ═══════════════════════════ 套餐 CRUD ═══════════════════════════ */
 
 export const adminListPlans = () =>

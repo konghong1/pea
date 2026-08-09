@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { UsersService } from '../users/users.service';
-import { PricingService } from './pricing.service';
+import { MAX_MULTIPLIER, PricingService } from './pricing.service';
 
 export interface ModelView {
   id: string;
@@ -95,9 +95,9 @@ export class ModelsService {
         [
           id, input.providerId, input.modelName, input.displayName ?? input.modelName, type,
           input.enabled === false ? 0 : 1, input.isDefault ? 1 : 0,
-          input.pricing != null ? JSON.stringify(input.pricing) : null,
+          serializeRule(this.pricing.normalizeRule(input.pricing)),
           Number.isFinite(input.minPlanLevel as number) ? input.minPlanLevel : 0,
-          input.paramsSchema != null ? JSON.stringify(input.paramsSchema) : null,
+          serializeRule(this.pricing.normalizeParamsSchema(input.paramsSchema)),
           input.description ?? '', input.sortOrder ?? 0,
         ],
       );
@@ -116,8 +116,8 @@ export class ModelsService {
       if (input.modelType !== undefined) { sets.push('model_type = ?'); vals.push(input.modelType); }
       if (input.enabled !== undefined) { sets.push('enabled = ?'); vals.push(input.enabled ? 1 : 0); }
       if (input.minPlanLevel !== undefined) { sets.push('min_plan_level = ?'); vals.push(input.minPlanLevel); }
-      if (input.pricing !== undefined) { sets.push('pricing_json = ?'); vals.push(input.pricing != null ? JSON.stringify(input.pricing) : null); }
-      if (input.paramsSchema !== undefined) { sets.push('params_schema_json = ?'); vals.push(input.paramsSchema != null ? JSON.stringify(input.paramsSchema) : null); }
+      if (input.pricing !== undefined) { sets.push('pricing_json = ?'); vals.push(serializeRule(this.pricing.normalizeRule(input.pricing))); }
+      if (input.paramsSchema !== undefined) { sets.push('params_schema_json = ?'); vals.push(serializeRule(this.pricing.normalizeParamsSchema(input.paramsSchema))); }
       if (input.description !== undefined) { sets.push('description = ?'); vals.push(input.description); }
       if (input.sortOrder !== undefined) { sets.push('sort_order = ?'); vals.push(input.sortOrder); }
       if (sets.length) {
@@ -225,6 +225,18 @@ export class ModelsService {
     return this.pricing.computeCost(pricingJson, params);
   }
 
+  /**
+   * 管理端草稿试算: 不读库、不校验用户权益, 直接对表单当前规则算价并返回明细。
+   *
+   * 走的是与真实扣费完全相同的 PricingService, 所以"配置时看到的价"= "用户实际被扣的价",
+   * 这是把手写 JSON 换成可视化表单后仍能让人放心的前提。
+   */
+  previewCost(pricing: unknown, params: Record<string, any> = {}) {
+    const rule = this.pricing.normalizeRule(pricing);
+    const detail = this.pricing.computeCostDetailed(rule, params ?? {});
+    return { ...detail, normalizedPricing: rule, maxMultiplier: MAX_MULTIPLIER };
+  }
+
   private async getRaw(id: string): Promise<any> {
     const rows = await this.db.query<any[]>('SELECT * FROM ai_models WHERE id = ?', [id]);
     if (!rows.length) throw new NotFoundException('model not found');
@@ -251,6 +263,11 @@ function toView(r: any): ModelView {
     description: r.description,
     sortOrder: r.sort_order,
   };
+}
+
+/** 清洗结果落库: null 存 SQL NULL (计价回落默认基础价), 否则存紧凑 JSON。 */
+function serializeRule(rule: unknown): string | null {
+  return rule != null ? JSON.stringify(rule) : null;
 }
 
 function parseJson(v: unknown): any {

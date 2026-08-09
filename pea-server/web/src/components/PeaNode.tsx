@@ -206,7 +206,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       resultIndex: 0,
       savedToLibrary: false,
       isFavorite: false,
-      meta: { ...nodeMeta, fileName: f.name },
+      meta: { ...nodeMeta, fileName: f.name, fileSize: f.size, uploadAt: new Date().toISOString() },
     });
     if (!fileKey) toast.error('上传失败，已用本地预览（刷新后可能丢失）');
   };
@@ -739,13 +739,14 @@ function ResultMediaView({
 
     const g = useCanvas.getState();
     const src = g.nodes.find((n) => n.id === id);
-    const srcSize = getNodeSize(src?.data.aspectRatio, src?.data.kind);
     // 输出节点使用裁剪结果的实际宽高比，不继承源节点的 aspectRatio
     const aspectRatio = simplifyRatio(size.width, size.height);
     const newSize = getNodeSize(aspectRatio, 'image');
+    const srcSize = getNodeSize(src?.data.aspectRatio, src?.data.kind ?? 'image');
 
-    // 若源节点已有下游输出，把裁剪节点串进链路（避免源节点出现“双输出链接”）；
-    // 否则放在源节点右侧作为新的输出节点。
+    // 裁切结果作为源节点的【下游输出】：放在源节点右侧，并从源节点连入新节点左侧 in 手柄。
+    //  - 若源节点已有下游(右)节点，把新节点串到「源 → 下游」之间；
+    //  - 否则直接放在源节点右侧、连入新节点的 in 手柄。
     const downstreamEdges = g.edges.filter((e) => e.source === id);
     let pos: { x: number; y: number };
     if (downstreamEdges.length > 0) {
@@ -758,7 +759,7 @@ function ResultMediaView({
         const idealX = srcRight + gap / 2 - newSize.width / 2;
         pos = {
           x: Math.max(idealX, srcRight + 40),
-          y: src?.position.y ?? 0,
+          y: src?.position.y ?? firstTarget.position.y,
         };
       } else {
         pos = { x: (src?.position.x ?? 0) + srcSize.width + 80, y: src?.position.y ?? 0 };
@@ -772,12 +773,13 @@ function ResultMediaView({
       label: 'Clipping diagram',
       aspectRatio,
       meta: { fileName: 'clipping.png' },
+      clipped: true, // 让裁剪产物节点显示左侧输入 handle，接收来自源节点的连线
       ...payload,
     } as PeaNodeData, pos);
 
     if (newId) {
       insertNodeAfter(id, newId);
-      toast.success('已生成输出节点');
+      toast.success('已生成裁剪节点');
     }
   };
 
@@ -1138,7 +1140,10 @@ function MediaLightbox({
 }) {
   const [current, setCurrent] = useState(index);
   const [fileSize, setFileSize] = useState<string>('-');
+  const [imgDims, setImgDims] = useState<{ width: number; height: number } | null>(null);
   const currentUrl = urls[current] || urls[0];
+  const isUserUploaded = isUserUploadedMediaNode(data);
+  const meta = (data.meta ?? {}) as Record<string, unknown>;
 
   const handleSave = () => {
     if (saved) return;
@@ -1155,7 +1160,14 @@ function MediaLightbox({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, urls.length]);
 
+  // 文件大小：优先使用上传时记录的 meta.fileSize；否则尝试 HEAD 读取 content-length。
   useEffect(() => {
+    setFileSize('-');
+    const cachedSize = typeof meta.fileSize === 'number' ? meta.fileSize : undefined;
+    if (cachedSize != null) {
+      setFileSize(formatBytes(cachedSize));
+      return;
+    }
     let cancelled = false;
     fetch(currentUrl, { method: 'HEAD', mode: 'cors' })
       .then((r) => {
@@ -1166,7 +1178,13 @@ function MediaLightbox({
         // 跨域/失败时静默保持 -
       });
     return () => { cancelled = true; };
-  }, [currentUrl]);
+  }, [currentUrl, meta.fileSize]);
+
+  // 真实图片尺寸：加载后读取 naturalWidth/Height，用于用户上传素材或兜底生成图比例。
+  const handleImgLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    setImgDims({ width: img.naturalWidth, height: img.naturalHeight });
+  };
 
   // 主媒体与缩略图按类型渲染（图片用 <img>，视频/音频用对应控件）
   const renderMain = (url: string) =>
@@ -1175,8 +1193,49 @@ function MediaLightbox({
     ) : kind === 'audio' ? (
       <audio className="pea-node-lightbox-audio" src={url} controls />
     ) : (
-      <img className="pea-node-lightbox-img" src={url} alt="生成结果" />
+      <img className="pea-node-lightbox-img" src={url} alt="生成结果" onLoad={handleImgLoad} />
     );
+
+  // 宽高比展示：上传图用真实尺寸比例；生成图用 meta/params 中的配置，缺失时按真实尺寸兜底。
+  const realAspectRatio = useMemo(() => {
+    if (imgDims) return simplifyRatio(imgDims.width, imgDims.height);
+    return undefined;
+  }, [imgDims]);
+
+  const displayAspectRatio = isUserUploaded
+    ? (realAspectRatio || '—')
+    : String(meta.aspectRatio || data.params?.aspectRatio || realAspectRatio || '—');
+
+  // 模型/质量仅对 AI 生成结果有意义；用户上传素材不应显示 Agnes AI / 1K 等默认值。
+  const displayModel = isUserUploaded
+    ? '—'
+    : String(meta.modelName || meta.model || '—');
+  const displayResolution = isUserUploaded
+    ? '—'
+    : String(meta.resolution || data.params?.resolution || '—');
+
+  // 创建者：用户上传显示当前用户；生成结果显示 meta.creator。
+  const user = useAuth((s) => s.user);
+  const displayCreator = isUserUploaded
+    ? (user?.displayName || '我')
+    : String(meta.creator || '—');
+
+  // 日期：上传时间优先，否则生成时间 / 当前时间。
+  const displayDate = useMemo(() => {
+    const raw = meta.uploadAt || meta.createdAt || meta.generatedAt;
+    if (typeof raw === 'string') {
+      const d = new Date(raw);
+      if (!Number.isNaN(d.getTime())) return d.toLocaleDateString('zh-CN');
+    }
+    if (typeof raw === 'number') return new Date(raw).toLocaleDateString('zh-CN');
+    return new Date().toLocaleDateString('zh-CN');
+  }, [meta]);
+
+  // 用户上传时把「提示词」区域改为文件名，避免空白提示词显得信息缺失。
+  const promptHeader = isUserUploaded ? '文件名' : '提示词';
+  const promptValue = isUserUploaded
+    ? String(meta.fileName || data.label || '—')
+    : (data.prompt || '—');
 
   return createPortal(
     <div className="pea-node-lightbox" onClick={onClose}>
@@ -1238,16 +1297,16 @@ function MediaLightbox({
 
       {/* 右侧：信息面板 */}
       <div className="pea-node-lightbox-info" onClick={(e) => e.stopPropagation()}>
-        <div className="pea-node-lightbox-info-header">提示词</div>
-        <div className="pea-node-lightbox-prompt">{data.prompt || '—'}</div>
+        <div className="pea-node-lightbox-info-header">{promptHeader}</div>
+        <div className="pea-node-lightbox-prompt">{promptValue}</div>
 
         <div className="pea-node-lightbox-info-header" style={{ marginTop: 24 }}>信息</div>
-        <InfoRow label="模型" value={String(data.meta?.modelName || data.meta?.model || 'Agnes AI')} />
-        <InfoRow label="质量" value={String(data.meta?.resolution || data.params?.resolution || '1K')} />
-        <InfoRow label="宽高比" value={String(data.meta?.aspectRatio || data.params?.aspectRatio || '1:1')} />
+        <InfoRow label="模型" value={displayModel} />
+        <InfoRow label="质量" value={displayResolution} />
+        <InfoRow label="宽高比" value={displayAspectRatio} />
         <InfoRow label="文件大小" value={fileSize} />
-        <InfoRow label="日期" value={new Date().toLocaleDateString('zh-CN')} />
-        <InfoRow label="创建者" value={String(data.meta?.creator || '—')} />
+        <InfoRow label="日期" value={displayDate} />
+        <InfoRow label="创建者" value={displayCreator} />
 
         <div className="pea-node-lightbox-actions">
           <button

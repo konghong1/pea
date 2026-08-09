@@ -643,6 +643,7 @@ export default function NodeChatPrompt() {
   const submittingLockRef = useRef(false);
   const [hasInput, setHasInput] = useState(false);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
+  const [launchClicked, setLaunchClicked] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   // 触发按钮的实时视口坐标（浮层打开期间每帧跟随节点移动）
@@ -1397,7 +1398,10 @@ useEffect(() => {
           prompt: finalPrompt,
           model: modelId,
           onMeta: (m) => {
-            if (m.costTapies != null) toast.success(`已受理，预估 ${m.costTapies} Tapies`);
+            // 优先使用前端预估的 est.cost，确保按钮展示与提示消耗一致。
+            if (est?.cost != null) toast.success(`已受理，预估 ${est.cost} Tapies`);
+            else if (m.costTapies != null) toast.success(`已受理，预估 ${m.costTapies} Tapies`);
+            else toast.success('已受理');
           },
           onDelta: (txt) => {
             acc += txt;
@@ -1706,12 +1710,20 @@ useEffect(() => {
             </div>
           )}
           <span
-            className={`pe-launcher${submitting ? ' submitting' : ''}${isGenerating ? ' is-stopping' : ''}${(!canSend && !isGenerating) ? ' disabled' : ''}`}
+            className={`pe-launcher${submitting ? ' submitting' : ''}${isGenerating ? ' is-stopping' : ''}${(!canSend && !isGenerating) ? ' disabled' : ''}${launchClicked ? ' clicked' : ''}`}
             title={isGenerating ? '停止生成' : (submitting ? '正在生成…' : `本次预计消耗 ${costLabel} Tapies`)}
             aria-label={isGenerating ? '停止生成' : (submitting ? '正在生成' : '发送')}
             aria-busy={submitting}
             style={{ pointerEvents: 'auto', cursor: isGenerating ? 'pointer' : (!canSend || submitting ? 'not-allowed' : 'pointer') }}
-            onClick={isGenerating ? cancelGeneration : (!canSend || submitting ? undefined : submit)}
+            onClick={() => {
+              if (isGenerating) {
+                cancelGeneration();
+              } else if (canSend && !submitting) {
+                setLaunchClicked(true);
+                setTimeout(() => setLaunchClicked(false), 320);
+                submit();
+              }
+            }}
           >
             {/* 左侧: 消耗数字 (无图标 / 无单位标签)；生成中显示「停止」文案 */}
             <span className="pe-cost">

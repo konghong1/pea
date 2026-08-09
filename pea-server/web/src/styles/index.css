@@ -4990,6 +4990,40 @@ html:not(.dark) .pea-node-prompt-echo-params {
   transform: translateY(0) scale(0.98);
 }
 
+/* 点击发送时的视觉脉冲反馈 */
+.pe-launcher.clicked {
+  animation: pe-launcher-click 0.32s ease-out;
+}
+@keyframes pe-launcher-click {
+  0% {
+    transform: scale(1);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+      0 0 0 1px rgba(125, 221, 255, 0.35),
+      0 6px 16px -2px rgba(30, 141, 239, 0.5),
+      0 2px 8px -1px rgba(0, 0, 0, 0.6);
+  }
+  40% {
+    transform: scale(0.96);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+      0 0 0 2px rgba(125, 221, 255, 0.6),
+      0 0 24px 4px rgba(30, 141, 239, 0.55),
+      0 0 12px 2px rgba(125, 221, 255, 0.35);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+      0 0 0 1px rgba(125, 221, 255, 0.35),
+      0 6px 16px -2px rgba(30, 141, 239, 0.5),
+      0 2px 8px -1px rgba(0, 0, 0, 0.6);
+  }
+}
+
 /* 消耗区域 (仅数字, 无图标 / 无单位标签) */
 .pe-cost {
   display: inline-flex;
@@ -7593,6 +7627,9 @@ html:not(.dark) .text-node-toolbar {
   transition: none !important;
   will-change: transform;
   cursor: grabbing;
+  /* 拖动期间移除 3000px 全屏 box-shadow vignette：超大阴影随框移动会被重新
+     光栅化导致掉帧。移除后拖动过程零重绘 → 60fps 顺滑，松手后自动恢复遮罩。 */
+  box-shadow: none;
 }
 .pea-crop-frame--dragging .pea-crop-handle {
   transition: none !important;

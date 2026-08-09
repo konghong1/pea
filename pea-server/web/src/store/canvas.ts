@@ -12,6 +12,7 @@ import {
 import { api } from '../api/client';
 import { PeaNodeKind } from '../constants/nodeTypes';
 import { useUi } from './ui';
+import { wireAsUpstream } from '../lib/cropWire';
 
 export type PeaNodeData = {
   label: string;
@@ -29,6 +30,9 @@ export type PeaNodeData = {
   /** 最近一次生成任务的 jobId（受理成功后写入）。
    *  关键：用于加载画布时与后端核对真实状态，防止 WS 事件丢失后节点永远卡在 generating。 */
   lastJobId?: string;
+  /** 裁剪产物节点标记：需要显示左侧输入 handle 以接收来自源节点的连线，
+   *  但仍保留上传媒体的替换按钮语义。 */
+  clipped?: boolean;
   error?: string;         // 生成失败原因（终态写回节点，用于节点内失败卡展示）
   /** 新建节点时的画幅比例（如 "9:16"、"16:9"），用于空白节点框比例。
       有内容后节点按实际媒体比例包裹，此字段不再影响显示。 */
@@ -144,6 +148,8 @@ interface CanvasState {
    *   保证源节点始终只有一条输出边，避免裁剪后“双输出链接”的错乱。
    */
   insertNodeAfter: (sourceId: string, newNodeId: string) => void;
+  /** 把 newNodeId 作为 targetId 的上游输入串接（裁切结果插入到源节点左侧/输入侧）。 */
+  insertNodeBefore: (targetId: string, newNodeId: string) => void;
   /**
    * 多选插入节点：在选中节点集合的中心位置创建新节点，
    * 并将所有从选中节点出发的 source 边重连到新节点的 target（左 handle）。
@@ -1144,6 +1150,28 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         s.nodes,
         nextEdges,
         sourceEdges.map((e) => ({ source: e.source, target: e.target })),
+      ),
+      dirty: true,
+    });
+  },
+
+  // 裁切结果作为源节点的【上游输入】：把新节点串接到源节点的输入侧（左侧）。
+  // 与 insertNodeAfter 镜像——前者把新节点塞进「源 → 下游」，后者塞进「上游 → 源」。
+  insertNodeBefore: (targetId, newNodeId) => {
+    const s = get();
+    const incoming = s.edges.filter((e) => e.target === targetId);
+    get().takeSnapshot();
+
+    const nextEdges = wireAsUpstream(s.edges, targetId, newNodeId);
+
+    set({
+      edges: nextEdges,
+      // 断线回收：原上游 source 不再直连 targetId（改连 newNodeId），
+      // 需清理 target 上对旧上游的引用缩略图 / @ token。
+      nodes: pruneDetachedRefs(
+        s.nodes,
+        nextEdges,
+        incoming.map((e) => ({ source: e.source, target: e.target })),
       ),
       dirty: true,
     });

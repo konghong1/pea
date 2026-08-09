@@ -1,4 +1,10 @@
-name: pea CI
+# ⚠️ 已失效（DEPRECATED）：本文件不在 git 仓库根目录，GitHub Actions 不会读取它。
+# 本仓库 git 根是 pea/，Actions 只识别 pea/.github/workflows/ 下的 workflow。
+# 生效版本已迁移至：<repo-root>/.github/workflows/ci.yml
+#   （working-directory 已修正为 pea-server/ 前缀，并新增 web 前端单测 job）
+# 保留本文件仅作历史参考，请勿在此处修改 CI 配置。
+
+name: pea CI (DEPRECATED - 见仓库根 .github/workflows/ci.yml)
 
 on:
   push:

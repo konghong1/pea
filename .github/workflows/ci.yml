@@ -1,0 +1,67 @@
+name: pea CI
+
+# 注意路径基准：本仓库的 git 根是 pea/（含 pea-server/、pea-design/、verify/），
+# GitHub Actions 只会读取【仓库根】的 .github/workflows/。
+# 早先存在的 pea-server/.github/workflows/ci.yml 因不在仓库根而从未被触发，
+# 其内容已迁移到本文件，并把 working-directory 修正为 pea-server/ 前缀。
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+jobs:
+  bff:
+    name: BFF (NestJS) 构建 + 单测
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pea-server/services/bff
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 安装依赖
+        run: npm install
+      - name: 类型检查 / 构建 (nest build)
+        run: npm run build
+      - name: 单元测试 (jest)
+        run: npm test
+
+  orchestrator:
+    name: Generation Orchestrator (FastAPI) 单测
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pea-server/services/generation-orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 安装依赖
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: 单元测试 (pytest)
+        run: python -m pytest
+
+  web:
+    name: Web (React) 类型检查 + 构建 + 前端单测
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 安装依赖
+        working-directory: pea-server/web
+        run: npm install
+      - name: 类型检查 + 构建 (tsc -b && vite build)
+        working-directory: pea-server/web
+        run: npm run build
+      # 前端纯逻辑单测：零依赖手写断言，直接 import 生产源码，
+      # 由 verify/run-ts-tests.mjs 复用 web 的 esbuild 编译执行。
+      # 覆盖裁剪几何(cropMath)、连线(cropWire)、拖拽命中(cropDrag)、
+      # 以及裁剪导出超采样防模糊(cropExport)。
+      - name: 前端单测 (verify/*.test.ts)
+        run: node verify/run-ts-tests.mjs

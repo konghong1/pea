@@ -3,6 +3,8 @@ import { useStore } from 'reactflow';
 import { Dropdown } from 'antd';
 import { toast } from '../store/toast';
 import { updateCrop, clamp, MIN_CROP, type Rect, type CropDragType } from './cropMath';
+import { resolveDragType } from '../lib/cropDrag';
+import { computeCropExportPlan } from './cropExport';
 
 export type CropRatio = 'original' | '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '21:9' | 'custom';
 
@@ -134,6 +136,12 @@ function initialCropRect(W: number, H: number, ratio: number | null) {
   return { x: (W - w) / 2, y: (H - h) / 2, w: clamp(w, MIN_CROP, W), h: clamp(h, MIN_CROP, H) };
 }
 
+/** 根据按下点在裁切框内的相对位置，判定拖拽类型（实现见 ./lib/cropDrag，纯函数便于单测）。
+ *  band：边框命中带宽度（屏幕 px），任意缩放下都用屏幕 px 判定，抓取手感一致。
+ *  - 同时贴近两条边 → 角点(nw/ne/sw/se)
+ *  - 仅贴近一条边 → 对应边(n/s/e/w)（整条边都可抓，不再只有中点把手）
+ *  - 都不贴近 → 整体平移(move)
+ * 这样「点哪条边，就拖哪条边」，鼠标始终锁在按下那条边上。 */
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -161,20 +169,17 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 /** Sync crop Rect to DOM node styles (used during drag to bypass React re-render) */
 function syncDomStyles(
   rect: Rect,
-  W: number,
-  H: number,
+  _W: number,
+  _H: number,
   frameEl: HTMLDivElement | null,
-  masks: { top: HTMLDivElement | null; bottom: HTMLDivElement | null; left: HTMLDivElement | null; right: HTMLDivElement | null },
 ) {
   if (frameEl) {
     frameEl.style.transform = `translate3d(${rect.x}px, ${rect.y}px, 0)`;
     frameEl.style.width = `${rect.w}px`;
     frameEl.style.height = `${rect.h}px`;
   }
-  if (masks.top) masks.top.style.transform = `scale(1, ${rect.y / H})`;
-  if (masks.bottom) masks.bottom.style.transform = `translate(0px, ${rect.y + rect.h}px) scale(1, ${(H - rect.y - rect.h) / H})`;
-  if (masks.left) masks.left.style.transform = `scale(${rect.x / W}, 1)`;
-  if (masks.right) masks.right.style.transform = `translate(${rect.x + rect.w}px, 0) scale(${(W - rect.x - rect.w) / W}, 1)`;
+  // Masks removed: v4 uses box-shadow vignette on .pea-crop-frame instead of
+  // 4 independent mask divs (no corner overlap / alpha doubling issues).
 }
 
 /** In-place image crop overlay component.
@@ -205,10 +210,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
 
   // DOM refs for direct style manipulation during drag
   const frameRef = useRef<HTMLDivElement | null>(null);
-  const maskTopRef = useRef<HTMLDivElement | null>(null);
-  const maskBottomRef = useRef<HTMLDivElement | null>(null);
-  const maskLeftRef = useRef<HTMLDivElement | null>(null);
-  const maskRightRef = useRef<HTMLDivElement | null>(null);
 
   const W = disp?.w ?? 0;
   const H = disp?.h ?? 0;
@@ -364,37 +365,57 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   };
 
   // Drag core: direct DOM manipulation + rAF merge + pointer capture for stable 60fps
+  // Drag core: 直接从真实 DOM 测量 stage 矩形反算 flow 坐标（不依赖 zoom 变量），
+  // 并用「鼠标按下时的 grab offset」保持鼠标与裁切框的相对位置恒定 —— 任意画布缩放下都不偏移。
   const startDrag = (type: CropDragType, e: React.PointerEvent) => {
     e.stopPropagation();
     e.preventDefault();
     if (!crop) return;
 
     const startRect = { ...crop };
-    const startX = e.clientX;
-    const startY = e.clientY;
     const target = e.currentTarget as HTMLElement;
 
     try { target.setPointerCapture(e.pointerId); } catch { /* noop */ }
     setIsDragging(true);
 
     const frameEl = frameRef.current;
-    const masks = {
-      top: maskTopRef.current,
-      bottom: maskBottomRef.current,
-      left: maskLeftRef.current,
-      right: maskRightRef.current,
-    };
+    const stageEl = frameEl?.parentElement ?? null;
+    if (!frameEl || !stageEl) return;
 
-    let latestX = startX;
-    let latestY = startY;
+    // 直接从真实 DOM 测量 stage 的屏幕矩形，反算「屏幕 px → flow px」比例。
+    // 关键：不看 useStore 的 zoom 变量，避免其与裁切框实际渲染 scale 不同步导致偏移。
+    const stageRect = stageEl.getBoundingClientRect();
+    const sx = W > 0 ? stageRect.width / W : 1;
+    const sy = H > 0 ? stageRect.height / H : 1;
+
+    // 鼠标按下瞬间在 stage 坐标系(flow)中的位置
+    const startMouseFx = (e.clientX - stageRect.left) / sx;
+    const startMouseFy = (e.clientY - stageRect.top) / sy;
+    // 鼠标相对裁切框左上角的 flow 偏移（grab offset）—— move 拖拽全程保持此偏移
+    const grabX = startMouseFx - startRect.x;
+    const grabY = startMouseFy - startRect.y;
+
+    let latestX = e.clientX;
+    let latestY = e.clientY;
     let rafId = 0;
+
+    const compute = (clientX: number, clientY: number): Rect => {
+      const curFx = (clientX - stageRect.left) / sx;
+      const curFy = (clientY - stageRect.top) / sy;
+      if (type === 'move') {
+        const x = clamp(curFx - grabX, 0, W - startRect.w);
+        const y = clamp(curFy - grabY, 0, H - startRect.h);
+        return { x, y, w: startRect.w, h: startRect.h };
+      }
+      // 边/角拖拽：用当前鼠标相对按下点的 flow 位移，走原 updateCrop（保持单方向/比例锁语义）
+      const dx = curFx - startMouseFx;
+      const dy = curFy - startMouseFy;
+      return updateCrop(type, startRect, dx, dy, W, H, ratioValue);
+    };
 
     const apply = () => {
       rafId = 0;
-      const dx = latestX - startX;
-      const dy = latestY - startY;
-      const next = updateCrop(type, startRect, dx, dy, W, H, ratioValue);
-      syncDomStyles(next, W, H, frameEl, masks);
+      syncDomStyles(compute(latestX, latestY), W, H, frameEl);
     };
     const schedule = () => {
       if (!rafId) rafId = requestAnimationFrame(apply);
@@ -412,10 +433,8 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
-      const dx = latestX - startX;
-      const dy = latestY - startY;
-      const next = updateCrop(type, startRect, dx, dy, W, H, ratioValue);
-      syncDomStyles(next, W, H, frameEl, masks);
+      const next = compute(latestX, latestY);
+      syncDomStyles(next, W, H, frameEl);
       setIsDragging(false);
       setCrop(next);
     };
@@ -425,33 +444,79 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     window.addEventListener('pointercancel', up);
   };
 
+  // 整框按下时，按点击位置判定拖拽类型：
+  //  - 落在边框 band 内 → 对应边/角拖拽（整条边都可抓，不再只有中点把手）；
+  //  - 否则 → 整体平移(move)。
+  // 这样「点哪条边，鼠标就锁在那条边上」：边拖拽用按下点的精确 flow 坐标，
+  // 拖动时该边始终跟随鼠标，不会因误触整框 move 而让鼠标跑进框内。
+  const onFramePointerDown = (e: React.PointerEvent) => {
+    const frameEl = frameRef.current;
+    if (!frameEl) {
+      startDrag('move', e);
+      return;
+    }
+    const rect = frameEl.getBoundingClientRect();
+    const type = resolveDragType(rect, e.clientX, e.clientY);
+    startDrag(type, e);
+  };
+
   const handleConfirm = async () => {
     if (!crop || !disp || !naturalRef.current) return;
     setLoading(true);
     try {
       const img = await loadImage(url);
-      const { w: dispW, h: dispH, scale } = disp;
       const nat = naturalRef.current;
-      // crop is in FLOW coordinate of stage (which is disp.w × disp.h).
-      // To map to natural image pixels: visual px = flow px × zoom,
-      // natural px = visual px × (natW / visualW) = flow px × zoom × (natW / (disp.w * zoom))
-      //          = flow px × (natW / disp.w).
-      // Multiply, don't divide — scale is "visual px per natural px".
-      const sx = clamp(crop.x * (nat.w / dispW), 0, nat.w);
-      const sy = clamp(crop.y * (nat.h / dispH), 0, nat.h);
-      const sw = clamp(crop.w * (nat.w / dispW), 0, nat.w - sx);
-      const sh = clamp(crop.h * (nat.h / dispH), 0, nat.h - sy);
-      if (sw < 1 || sh < 1) {
+
+      // ── High-resolution crop export (no upscaling blur) ──────────────────
+      // All decision logic lives in ./cropExport (pure, unit-tested in
+      // verify/crop_export.test.ts). Here we only execute the plan.
+      //
+      // Why: 「裁小图后变模糊」的根因不是坐标算错，而是 1:1 导出的位图像素
+      // 不足以支撑新节点在画布上的显示尺寸，浏览器只能插值拉伸。方案是从
+      // 原图真实像素采样 + 按 DPR 超采样（封顶 2×），同时兜底 canvas 面积
+      // 上限，避免 Safari/iOS 上 toDataURL 静默返回空白图。
+      const plan = computeCropExportPlan({
+        crop,
+        disp: { w: disp.w, h: disp.h },
+        nat,
+        dpr: window.devicePixelRatio,
+      });
+
+      if (plan.status === 'too-small') {
         toast.error('裁剪区域过小');
         return;
       }
+
+      const { source, outWidth, outHeight } = plan;
       const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(sw));
-      canvas.height = Math.max(1, Math.round(sh));
+      canvas.width = outWidth;
+      canvas.height = outHeight;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('canvas context');
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-      onConfirm(canvas.toDataURL('image/png'), { width: canvas.width, height: canvas.height });
+      // High-quality resampling when supersampling.
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(
+        img,
+        source.sx,
+        source.sy,
+        source.sw,
+        source.sh,
+        0,
+        0,
+        outWidth,
+        outHeight,
+      );
+
+      // Honest warning: if the crop's own source pixels are already small,
+      // no frontend trick can invent detail — only a higher-res source image
+      // or AI super-resolution can help. Tell the user instead of silently
+      // shipping a blurry node.
+      if (plan.lowResSource) {
+        toast.warning('裁剪区域在原图中分辨率偏低，放大显示可能仍会模糊（建议选用原图更大区域或更高清的源图）');
+      }
+
+      onConfirm(canvas.toDataURL('image/png'), { width: outWidth, height: outHeight });
     } catch {
       toast.error('裁剪失败');
     } finally {
@@ -477,9 +542,23 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     e.preventDefault();
   }, []);
 
+  // 裁切区域内禁止触发节点的右键菜单（复制/添加并连接/删除等），同时阻止浏览器默认菜单。
+  // 否则在裁切框内右击会冒泡到 ReactFlow 节点，误弹节点上下文菜单并导致裁切被取消。
+  const onCtxMenu = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+  }, []);
+
   // Render: in-place overlay, single layer
   return (
-    <div className="pea-crop-overlay" data-cropping-overlay="true" role="dialog" aria-label="图片裁剪" onWheel={onWheel}>
+    <div
+      className="pea-crop-overlay"
+      data-cropping-overlay="true"
+      role="dialog"
+      aria-label="图片裁剪"
+      onWheel={onWheel}
+      onContextMenu={onCtxMenu}
+    >
       {/* Stage: transparent container that exactly matches the node wrap */}
       <div className="pea-crop-stage" onClick={stop} onWheel={onWheel}>
         {!isReady ? (
@@ -488,13 +567,9 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
           </div>
         ) : (
           <div className="pea-crop-image-stage" style={{ width: W, height: H }}>
-            {/* Image + four-side masking */}
+            {/* Image + vignette mask via frame box-shadow */}
             <div className="pea-crop-img-clip">
               <img className="pea-crop-image" src={url} alt="裁剪图片" draggable={false} />
-              <div ref={maskTopRef} className="pea-crop-mask" style={{ transform: `scale(1, ${crop.y / H})` }} />
-              <div ref={maskBottomRef} className="pea-crop-mask" style={{ transform: `translate(0px, ${crop.y + crop.h}px) scale(1, ${(H - crop.y - crop.h) / H})` }} />
-              <div ref={maskLeftRef} className="pea-crop-mask" style={{ transform: `scale(${crop.x / W}, 1)` }} />
-              <div ref={maskRightRef} className="pea-crop-mask" style={{ transform: `translate(${crop.x + crop.w}px, 0) scale(${(W - crop.x - crop.w) / W}, 1)` }} />
             </div>
 
             {/* Crop frame */}
@@ -502,7 +577,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
               ref={frameRef}
               className={`pea-crop-frame${isDragging ? ' pea-crop-frame--dragging' : ''}`}
               style={{ transform: `translate3d(${crop.x}px, ${crop.y}px, 0)`, left: 0, top: 0, width: crop.w, height: crop.h }}
-              onPointerDown={(e) => startDrag('move', e)}
+              onPointerDown={onFramePointerDown}
               role="button"
               aria-label="拖动裁切区"
               tabIndex={0}
