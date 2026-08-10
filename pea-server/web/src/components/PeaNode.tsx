@@ -630,7 +630,6 @@ function ResultMediaView({
   useLayoutEffect(() => { setChromeReady(true); }, []);
   const update = useCanvas((s) => s.updateNodeData);
   const addNode = useCanvas((s) => s.addNode);
-  const insertNodeAfter = useCanvas((s) => s.insertNodeAfter);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
@@ -726,12 +725,15 @@ function ResultMediaView({
   const handleCropConfirm = async (croppedDataUrl: string, size: { width: number; height: number }) => {
     setCropOpen(false);
     let payload: Partial<PeaNodeData>;
+    let cropMeta: Record<string, unknown> = { fileName: 'clipping.png' };
     try {
       const blob = await (await fetch(croppedDataUrl)).blob();
       const form = new FormData();
       form.append('file', blob, 'clipping.png');
       const { data: resp } = await api.post('/files/upload', form);
       payload = { fileKey: resp.key as string };
+      // 截图产物记录原始文件大小，lightbox 信息面板才能正确显示「文件大小」
+      cropMeta = { ...cropMeta, fileSize: blob.size };
     } catch {
       payload = { url: croppedDataUrl };
       toast.warning('裁剪结果已使用本地预览保存（刷新后可能丢失）');
@@ -744,41 +746,28 @@ function ResultMediaView({
     const newSize = getNodeSize(aspectRatio, 'image');
     const srcSize = getNodeSize(src?.data.aspectRatio, src?.data.kind ?? 'image');
 
-    // 裁切结果作为源节点的【下游输出】：放在源节点右侧，并从源节点连入新节点左侧 in 手柄。
-    //  - 若源节点已有下游(右)节点，把新节点串到「源 → 下游」之间；
-    //  - 否则直接放在源节点右侧、连入新节点的 in 手柄。
-    const downstreamEdges = g.edges.filter((e) => e.source === id);
-    let pos: { x: number; y: number };
-    if (downstreamEdges.length > 0) {
-      const firstTarget = g.nodes.find((n) => n.id === downstreamEdges[0].target);
-      if (firstTarget) {
-        const tgtSize = getNodeSize(firstTarget.data.aspectRatio, firstTarget.data.kind);
-        const srcRight = (src?.position.x ?? 0) + srcSize.width;
-        const tgtLeft = firstTarget.position.x;
-        const gap = tgtLeft - srcRight;
-        const idealX = srcRight + gap / 2 - newSize.width / 2;
-        pos = {
-          x: Math.max(idealX, srcRight + 40),
-          y: src?.position.y ?? firstTarget.position.y,
-        };
-      } else {
-        pos = { x: (src?.position.x ?? 0) + srcSize.width + 80, y: src?.position.y ?? 0 };
-      }
-    } else {
-      pos = { x: (src?.position.x ?? 0) + srcSize.width + 80, y: src?.position.y ?? 0 };
-    }
+    // 裁切结果作为源节点的【独立下游】：每次截图都新建一个并列节点，从源节点右侧连出，
+    // 不把新节点串进「源 → 旧下游」之间（旧逻辑会把第一次截图节点连到新节点下游，造成误解）。
+    const siblingCount = g.edges.filter((e) => e.source === id).length;
+    const srcRight = (src?.position.x ?? 0) + srcSize.width;
+    const pos: { x: number; y: number } = {
+      // 多次截图沿源节点右侧横向错开排列，避免重叠
+      x: srcRight + 80 + siblingCount * (newSize.width + 80),
+      y: src?.position.y ?? 0,
+    };
 
     const newId = addNode({
       kind: 'image',
       label: 'Clipping diagram',
       aspectRatio,
-      meta: { fileName: 'clipping.png' },
+      meta: cropMeta,
       clipped: true, // 让裁剪产物节点显示左侧输入 handle，接收来自源节点的连线
       ...payload,
     } as PeaNodeData, pos);
 
     if (newId) {
-      insertNodeAfter(id, newId);
+      // 直接建立 source → 新节点的连线，保留源节点已有的其他下游边（并列而非串链）。
+      g.addEdges([{ id: `e-${id}-${newId}`, source: id, target: newId, sourceHandle: 'out', targetHandle: 'in', type: 'pea' }]);
       toast.success('已生成裁剪节点');
     }
   };
@@ -1160,23 +1149,36 @@ function MediaLightbox({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, urls.length]);
 
-  // 文件大小：优先使用上传时记录的 meta.fileSize；否则尝试 HEAD 读取 content-length。
+  // 文件大小：优先使用上传/截图时记录的 meta.fileSize；否则尝试 HEAD 读取 content-length。
   useEffect(() => {
     setFileSize('-');
-    const cachedSize = typeof meta.fileSize === 'number' ? meta.fileSize : undefined;
-    if (cachedSize != null) {
+    // 兼容 number 与 string（后端序列化/旧数据可能把 fileSize 存成字符串）
+    const rawSize = meta.fileSize;
+    const cachedSize = typeof rawSize === 'number' ? rawSize : typeof rawSize === 'string' ? Number(rawSize) : undefined;
+    if (cachedSize != null && !Number.isNaN(cachedSize)) {
       setFileSize(formatBytes(cachedSize));
       return;
     }
     let cancelled = false;
-    fetch(currentUrl, { method: 'HEAD', mode: 'cors' })
-      .then((r) => {
+    // HEAD 失败时fallback到 GET range=0-0，避免 MinIO 预签名 URL 的 CORS 限制导致大小拿不到
+    const fetchSize = async () => {
+      try {
+        const r = await fetch(currentUrl, { method: 'HEAD', mode: 'cors' });
         const len = r.headers.get('content-length');
         if (len && !cancelled) setFileSize(formatBytes(Number(len)));
-      })
-      .catch(() => {
+        return;
+      } catch {
+        // ignore HEAD failure
+      }
+      try {
+        const r = await fetch(currentUrl, { method: 'GET', mode: 'cors', headers: { Range: 'bytes=0-0' } });
+        const len = r.headers.get('content-range')?.split('/').pop() ?? r.headers.get('content-length');
+        if (len && !cancelled) setFileSize(formatBytes(Number(len)));
+      } catch {
         // 跨域/失败时静默保持 -
-      });
+      }
+    };
+    fetchSize();
     return () => { cancelled = true; };
   }, [currentUrl, meta.fileSize]);
 

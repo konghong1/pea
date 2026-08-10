@@ -64,6 +64,8 @@ import NodeChatPrompt from './NodeChatPrompt';
 import MultiSelectToolbar from './MultiSelectToolbar';
 import SelectionBoundsBox from './SelectionBoundsBox';
 import SearchPopover from './SearchPopover';
+import MiniMapNode from './MiniMapNode';
+import { kindColor } from './NodeIcon';
 import { acceptsUpstreamInput } from '../lib/nodeSemantics';
 import { resolveConnection } from '../lib/connectionOrientation';
 import {
@@ -103,6 +105,11 @@ function relTime(ts: number | null): string {
   const h = Math.floor(m / 60);
   if (h < 24) return `${h} 小时前`;
   return `${Math.floor(h / 24)} 天前`;
+}
+
+/** MiniMap 节点着色：优先使用节点 data.kind 对应的品牌色。 */
+function minimapNodeColor(node: Node<PeaNodeData>): string {
+  return kindColor(node.data?.kind ?? 'prompt');
 }
 
 /** 画布左上角：pea logo 圆形按钮（hover 提示画布名 + 修改时间，点击展开下拉）。 */
@@ -1322,6 +1329,15 @@ function Flow() {
   const [edgeMenu, setEdgeMenu] = useState<{ x: number; y: number; sourceId: string; handleType: 'source' | 'target'; spawn: { x: number; y: number } } | null>(null);
   const [showMinimap, setShowMinimap] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
+
+  /** 点击 MiniMap 节点：聚焦到该节点并把缩略图关闭。 */
+  const focusNodeFromMinimap = useCallback(
+    (_event: React.MouseEvent, node: Node<PeaNodeData>) => {
+      window.dispatchEvent(new CustomEvent('pea:focus-node', { detail: { id: node.id } }));
+      setShowMinimap(false);
+    },
+    [setShowMinimap],
+  );
   const pendingEdge = useRef<{ source: string | null; handleId: string | null; handleType: 'source' | 'target' | null } | null>(null);
   // 连线起点坐标：用于区分「单击连接点」与「拖拽连线」（位移阈值判定）。
   const startPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -2056,6 +2072,9 @@ function Flow() {
               pannable
               position="top-left"
               style={{ top: 78, left: 68 }}
+              nodeComponent={MiniMapNode}
+              nodeColor={minimapNodeColor}
+              onNodeClick={focusNodeFromMinimap}
             />
           )}
           <CanvasControls

@@ -1390,6 +1390,8 @@ useEffect(() => {
     if (genType === 'text') {
       push('user', `[${sel.data.label || cfg.label}] ${finalPrompt}`);
       setSubmitting(true);
+      // 文本节点也必须进入生成态，让发送按钮切换为「停止」态，否则用户无法感知任务正在运行。
+      update(single, { generating: true, error: undefined });
       let acc = '';
       try {
         await streamNodeChat({
@@ -1407,10 +1409,17 @@ useEffect(() => {
             acc += txt;
             update(single, { html: acc });
           },
-          onDone: () => toast.success('提示词已生成'),
-          onError: (e) => toast.error(e?.message || '生成失败'),
+          onDone: () => {
+            update(single, { generating: false });
+            toast.success('提示词已生成');
+          },
+          onError: (e) => {
+            update(single, { generating: false });
+            toast.error(e?.message || '生成失败');
+          },
         });
       } catch (e: any) {
+        update(single, { generating: false });
         toast.error(e?.message || '聊天失败');
       } finally {
         setSubmitting(false);

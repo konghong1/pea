@@ -194,6 +194,16 @@ const nextId = (nodes: Node<PeaNodeData>[]) => {
   return `n${max + 1}`;
 };
 
+/** 基于当前 edges 生成唯一边 ID，兼容 e1 / e1_xxx 等历史格式。 */
+const nextEdgeId = (edges: Edge[]) => {
+  let max = 0;
+  edges.forEach((e) => {
+    const m = /^e(\d+)(?:_.*)?$/.exec(e.id);
+    if (m) max = Math.max(max, Number(m[1]));
+  });
+  return `e${max + 1}`;
+};
+
 // ════════════════════════════════════════════════════════════════════════
 // 撤销 / 重做：基于快照的历史栈
 // 设计要点（团队代码质量基准）：
@@ -783,13 +793,29 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     const nid = nextId(get().nodes);
     const copy: Node<PeaNodeData> = {
       id: nid,
-      type: 'pea',
-      position: { x: src.position.x + 40, y: src.position.y + 40 },
-      data: { ...src.data },
+      type: src.type || 'pea',
+      position: { x: src.position.x + 140, y: src.position.y + 60 },
+      data: clone(src.data),
       selected: true,
     };
+
+    // 复制与原节点相关的连线：原节点作为 source/target 的端点替换为新节点 ID，
+    // 保持另一端的连接对象、handle、边类型不变，生成新的唯一边 ID。
+    const currentEdges = get().edges;
+    const duplicatedEdges: Edge[] = [];
+    currentEdges.forEach((e) => {
+      if (e.source !== id && e.target !== id) return;
+      duplicatedEdges.push({
+        ...e,
+        id: nextEdgeId([...currentEdges, ...duplicatedEdges]),
+        source: e.source === id ? nid : e.source,
+        target: e.target === id ? nid : e.target,
+      });
+    });
+
     set({
       nodes: [...get().nodes.map((n) => ({ ...n, selected: false })), copy],
+      edges: [...currentEdges, ...duplicatedEdges],
       selectedId: nid,
       selectedIds: [nid],
       dirty: true,
