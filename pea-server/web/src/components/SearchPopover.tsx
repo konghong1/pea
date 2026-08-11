@@ -151,6 +151,7 @@ export default function SearchPopover({ onClose }: { onClose: () => void }) {
   return createPortal(
     <div
       className="pea-search-backdrop"
+      data-pea-canvas-portal
       onMouseDown={(e) => {
         // mousedown 在 backdrop 上时关闭；面板内点击 stopPropagation 处理
         if (e.target === e.currentTarget) onClose();

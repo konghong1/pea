@@ -1227,7 +1227,9 @@ useEffect(() => {
   // hideEditor：用户自己上传的素材节点（image/video/audio/ref，非 AI 结果、非生成中）
   // 选中时不渲染下方编辑框。NodeChatPrompt 由 CanvasEditor 常驻挂载，这里 return null
   // 只卸载编辑框子树，组件自身的 draftRef 草稿仍在内存中，切回可生成节点即可续写。
-  if (!sel || !single || !anchorEl || hideEditor) return null;
+  // cubeOpen：角度魔方模式激活时，编辑框由 AngleCubeOverlay 替代，此处不渲染。
+  const cubeOpen = !!(sel?.data.meta?.cubeOpen);
+  if (!sel || !single || !anchorEl || hideEditor || cubeOpen) return null;
   const cfg = KIND_CFG[kind] ?? KIND_CFG.text;
 
   const hasImageRefs = refImageNodes.length > 0;
@@ -1776,6 +1778,7 @@ useEffect(() => {
       {/* ═════════ 卡片式模型选择浮层（参考截图2/3）═════════════ */}
       {/* 使用 Portal 渲染到 body，避免被父元素的 transform 影响 fixed 定位 */}
       {pickerOpen && genType && triggerRect && createPortal(
+        <div data-pea-canvas-portal>
         <ModelPickerPopup
           ref={pickerRef}
           rect={triggerRect}
@@ -1785,12 +1788,14 @@ useEffect(() => {
           est={est}
           onPick={(id) => { if (models.find(m => m.id === id)?.allowed) { onModelChange(id); setPickerOpen(false); } }}
           onClose={() => setPickerOpen(false)}
-        />,
+        />
+        </div>,
         document.body
       )}
 
       {/* ═════════ 图片/视频比例/参数浮层 ══════════════ */}
       {aspectOpen && (genType === 'image' || genType === 'video') && aspectTriggerRect && createPortal(
+        <div data-pea-canvas-portal>
         <AspectPickerPopup
           ref={aspectRef}
           rect={aspectTriggerRect}
@@ -1807,7 +1812,8 @@ useEffect(() => {
           onDuration={persistDuration}
           onAudio={persistAudio}
           onGenMode={persistGenMode}
-        />,
+        />
+        </div>,
         document.body
       )}
 
@@ -1815,6 +1821,7 @@ useEffect(() => {
       {countOpen && countTriggerRect && createPortal(
         <div
           ref={countDropdownRef}
+          data-pea-canvas-portal
           className="node-count-btn-dropdown"
           style={{
             position: 'fixed',
@@ -1902,6 +1909,7 @@ function VideoRefThumb({ url, label }: { url?: string; label: string }) {
       {showPopover && pos && createPortal(
         <div
           className="pea-ref-video-popover"
+          data-pea-canvas-portal
           style={{ left: pos.left, top: pos.top, position: 'fixed', zIndex: 120 }}
           onMouseEnter={() => setShowPopover(true)}
           onMouseLeave={() => setShowPopover(false)}

@@ -7453,6 +7453,480 @@ html:not(.dark) .text-node-toolbar {
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
+ * 角度魔方浮层
+ * ═════════════════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 角度魔方面板（内嵌模式）— portal 到 .pea-node-editor-anchor
+ *
+ * ⚠️ 关键决策：面板本身不能有 transform 属性！
+ *    transform 会创建新渲染上下文，导致 preserve-3d 失效、3D 立方体被压成 2D 平面。
+ *    这是 CSS 3D 规范的铁律，无法绕过。
+ *    解决方案：
+ *    - 居中：用 left:0 + width:100% + margin:auto（不用 translateX(-50%)）
+ *    - 缩放补偿：内部非 3D 区域单独包一层做 scale（3D 区域不受影响）
+ * ═════════════════════════════════════════════════════════════════════════════ */
+.pea-angle-cube-panel {
+  position: absolute;
+  left: 0;
+  width: 580px;
+  max-width: calc(100vw - 24px);
+  z-index: 40;
+  pointer-events: auto;
+  /* 不用 transform！用 margin 居中 */
+  margin-left: calc(-290px + 50%);
+  transform-origin: top center;
+  /* 定位到节点正下方 */
+  top: calc(100% + 16px * var(--pea-inv-zoom, 1));
+  border-radius: 14px;
+  background: rgba(28, 28, 34, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #fff;
+  padding: 14px 20px 12px;
+  font-size: 13px;
+  animation: pea-angle-cube-in 0.18s ease;
+}
+html:not(.dark) .pea-angle-cube-panel {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(0, 0, 0, 0.08);
+  color: var(--pea-text-primary, #1a1a1f);
+}
+@keyframes pea-angle-cube-in {
+  /* ⚠️ 禁止在 keyframes 中使用 transform —— 会覆盖面板定位的 translateX(-50%) scale()，
+     导致 preserve-3d 上下文断裂、立方体被压扁。只做淡入。 */
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.pea-angle-cube-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.pea-angle-cube-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.pea-angle-cube-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.pea-angle-cube-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+html:not(.dark) .pea-angle-cube-close {
+  color: var(--pea-text-secondary, #555560);
+}
+html:not(.dark) .pea-angle-cube-close:hover {
+  color: var(--pea-text-primary, #1a1a1f);
+  background: rgba(0, 0, 0, 0.06);
+}
+.pea-angle-cube-body {
+  display: flex;
+  gap: 22px;
+  align-items: stretch;
+}
+/* ═══════════════════════════════════════════════════════════════
+ * 预览区 — 立方体展示容器（参考图：大方框，立方体饱满）
+ * ═══════════════════════════════════════════════════════════════ */
+.pea-angle-cube-preview {
+  flex: 0 0 auto;
+  width: min(220px, 38vw);
+  height: 220px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative; /* 锚点：内嵌重置按钮定位 */
+}
+html:not(.dark) .pea-angle-cube-preview {
+  background: rgba(0, 0, 0, 0.02);
+}
+/* 底部重置按钮 — footer 左侧（参考图：图标+文字） */
+.pea-angle-cube-reset-foot {
+  flex: 0 0 auto;
+  height: 30px;
+  border-radius: 16px;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.6);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.pea-angle-cube-reset-foot:hover {
+  color: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.14);
+}
+html:not(.dark) .pea-angle-cube-reset-foot {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--pea-text-secondary, #555560);
+}
+html:not(.dark) .pea-angle-cube-reset-foot:hover {
+  color: var(--pea-text-primary, #1a1a1f);
+  background: rgba(0, 0, 0, 0.10);
+}
+/* perspective 容器 — 提供 3D 透视深度 */
+.pea-angle-cube-preview-stage {
+  perspective: 800px;
+  perspective-origin: 50% 50%;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* ═══════════════════════════════════════════════════════════════
+ * 3D 立方体 — 图片贴正面，白色侧面（对标参考 Image 2/3）
+ *
+ * base 65px: 在预览区(200px)中占 ~33%，匹配参考图"小立方体居中"
+ * 初始有轻微旋转（组件设置 rotateY(-18deg) rotateX(8deg)），
+ * 让用户一打开就能看到立体效果（多面可见）
+ * ═══════════════════════════════════════════════════════════════ */
+.pea-angle-cube-preview-cube {
+  position: relative;
+  width: var(--cube-size, 65px);
+  height: var(--cube-size, 65px);
+  transform-style: preserve-3d;
+  transition: transform 0.15s ease-out;
+}
+.pea-cube-face {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--cube-size, 65px);
+  height: var(--cube-size, 65px);
+  backface-visibility: visible;
+  border-radius: calc(var(--cube-size, 65px) * 0.092);
+}
+/* 正面 — 贴图（无 box-shadow，避免旋转到侧面时虚影溢出立方体边界） */
+.pea-cube-front {
+  transform: translateZ(var(--cube-half-z, 32.5px));
+  overflow: hidden;
+}
+.pea-cube-front img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+/* 背面 — 白色 */
+.pea-cube-back {
+  transform: rotateY(180deg) translateZ(var(--cube-half-z, 32.5px));
+  background: #f0f0f2;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+/* 右侧面 — 浅灰白 */
+.pea-cube-right {
+  transform: rotateY(90deg) translateZ(var(--cube-half-z, 32.5px));
+  background: #e8e8ec;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+/* 右侧面旋转方向字母 — 魔方 Right 面记法（系统品牌色，随尺寸缩放）*/
+.pea-cube-right::after {
+  content: "R";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cube-size, 65px) * 0.37);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--pea-accent, #1fa2dc);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.4);
+}
+/* 左侧面 — 浅灰白（魔方 Left 面记法）*/
+.pea-cube-left {
+  transform: rotateY(-90deg) translateZ(var(--cube-half-z, 32.5px));
+  background: #e0e0e6;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+.pea-cube-left::after {
+  content: "L";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cube-size, 65px) * 0.37);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--pea-accent, #1fa2dc);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.4);
+}
+/* 顶面 — 白色偏亮（魔方 Up 面记法）*/
+.pea-cube-top {
+  transform: rotateX(90deg) translateZ(var(--cube-half-z, 32.5px));
+  background: #f4f4f6;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+}
+.pea-cube-top::after {
+  content: "U";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cube-size, 65px) * 0.37);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--pea-accent, #1fa2dc);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.4);
+}
+/* 底面 — 略深灰白（魔方 Down 面记法）*/
+.pea-cube-bottom {
+  transform: rotateX(-90deg) translateZ(var(--cube-half-z, 32.5px));
+  background: #dcdce2;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+.pea-cube-bottom::after {
+  content: "D";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--cube-size, 65px) * 0.37);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--pea-accent, #1fa2dc);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.4);
+}
+.pea-angle-cube-controls {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pea-angle-cube-row {
+  display: grid;
+  grid-template-columns: 56px 1fr 48px;
+  align-items: center;
+  gap: 12px;
+}
+.pea-angle-cube-row:has(.pea-angle-cube-toggle) {
+  grid-template-columns: 56px 1fr 44px;
+}
+.pea-angle-cube-label {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  white-space: nowrap;
+}
+html:not(.dark) .pea-angle-cube-label {
+  color: var(--pea-text-secondary, #555560);
+}
+.pea-angle-cube-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+  min-width: 40px;
+}
+html:not(.dark) .pea-angle-cube-value {
+  color: var(--pea-text-primary, #1a1a1f);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+ * 滑块 — 白色圆点 thumb + 中心原点进度填充（参考 Image 3/4）
+ * --from / --to 由组件动态设置：
+ *   value ≥ 0: from=50%, to=progress%  (中点到右侧)
+ *   value < 0: from=progress%, to=50%  (左侧到中点)
+ *
+ * 色系：使用系统品牌色 --pea-accent（#1fa2dc）作为填充亮色，
+ *       与整体 UI 风格统一（暗底用 accent 60%透明，亮底用 accent 45%）
+ * ═══════════════════════════════════════════════════════════════ */
+.pea-angle-cube-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  /* 中心原点填充：从 --from 到 --to 为品牌色，其余为暗色 */
+  background: linear-gradient(
+    to right,
+    rgba(255, 255, 255, 0.08) 0%,
+    rgba(255, 255, 255, 0.08) var(--from, 50%),
+    rgba(31, 162, 220, 0.60) var(--from, 50%),
+    rgba(31, 162, 220, 0.60) var(--to, 50%),
+    rgba(255, 255, 255, 0.08) var(--to, 50%),
+    rgba(255, 255, 255, 0.08) 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+html:not(.dark) .pea-angle-cube-slider {
+  background: linear-gradient(
+    to right,
+    rgba(0, 0, 0, 0.08) 0%,
+    rgba(0, 0, 0, 0.08) var(--from, 50%),
+    rgba(31, 162, 220, 0.45) var(--from, 50%),
+    rgba(31, 162, 220, 0.45) var(--to, 50%),
+    rgba(0, 0, 0, 0.08) var(--to, 50%),
+    rgba(0, 0, 0, 0.08) 100%
+  );
+}
+/* Firefox filled track fallback — 品牌色 */
+.pea-angle-cube-slider::-moz-range-progress {
+  background: rgba(31, 162, 220, 0.60);
+  height: 3px;
+  border-radius: 2px;
+}
+/* Webkit thumb — 白色圆点 */
+.pea-angle-cube-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  border: none;
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+.pea-angle-cube-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}
+/* Moz thumb — 白色圆点 */
+.pea-angle-cube-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  border: none;
+  cursor: pointer;
+}
+.pea-angle-cube-toggle {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  border: none;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.10);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+html:not(.dark) .pea-angle-cube-toggle {
+  background: rgba(0, 0, 0, 0.10);
+}
+.pea-angle-cube-toggle.on {
+  background: var(--pea-accent, #1fa2dc);
+}
+html:not(.dark) .pea-angle-cube-toggle.on {
+  background: var(--pea-accent, #1fa2dc);
+}
+.pea-angle-cube-toggle-knob {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+html:not(.dark) .pea-angle-cube-toggle-knob {
+  background: #fff;
+}
+.pea-angle-cube-toggle.on .pea-angle-cube-toggle-knob {
+  transform: translateX(20px);
+}
+.pea-angle-cube-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 10px;
+}
+/* 参数胶囊：合并齿轮+数字与圆形发送按钮，并推到 footer 最右侧 */
+.pea-angle-cube-send-pill {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  padding: 4px 4px 4px 12px;
+}
+html:not(.dark) .pea-angle-cube-send-pill {
+  background: rgba(0, 0, 0, 0.06);
+}
+.pea-angle-cube-cost {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+}
+html:not(.dark) .pea-angle-cube-cost {
+  color: var(--pea-text-primary, #1a1a1f);
+}
+.pea-angle-cube-cost svg {
+  opacity: 0.9;
+}
+.pea-angle-cube-send {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #fff;
+  color: #111;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+.pea-angle-cube-send:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+.pea-angle-cube-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+html:not(.dark) .pea-angle-cube-send {
+  background: var(--pea-text-primary, #1a1a1f);
+  color: #fff;
+}
+.pea-angle-cube-send-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(17, 17, 17, 0.2);
+  border-top-color: #111;
+  border-radius: 50%;
+  animation: pea-spin 0.8s linear infinite;
+}
+html:not(.dark) .pea-angle-cube-send-spinner {
+  border-color: rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+}
+@keyframes pea-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
  * 全屏查看 Lightbox（截图10）
  * ═════════════════════════════════════════════════════════════════════════════ */
 .pea-node-lightbox {
@@ -7880,6 +8354,13 @@ html:not(.dark) .pea-crop-custom-colon {
   outline: none !important;
 }
 .pea-node.is-cropping .pea-node-media-card {
+  overflow: visible !important;
+}
+
+/* 关键：角度魔方模式取消 body-card 的 overflow:hidden，
+   否则祖先的 overflow:hidden 会破坏 CSS preserve-3d 上下文，
+   导致立方体被压成扁平平面（这是 8 轮调试的根本原因） */
+.pea-node.is-cube-mode .pea-node-body-card {
   overflow: visible !important;
 }
 

@@ -1230,6 +1230,7 @@ export default forwardRef<NodePromptInputRef, NodePromptInputProps>(function Nod
       {showPicker && pickerPos && createPortal(
         <div
           className="pea-ref-picker"
+          data-pea-canvas-portal
           style={{ left: pickerPos.left, top: pickerPos.top, position: 'fixed', zIndex: 100 }}
           role="listbox"
           aria-label="引用上游节点"
@@ -1324,6 +1325,7 @@ function VideoPickerThumb({ url, label }: { url?: string; label: string }) {
       {showPopover && pos && createPortal(
         <div
           className="pea-ref-video-popover"
+          data-pea-canvas-portal
           style={{ left: pos.left, top: pos.top, position: 'fixed', zIndex: 120 }}
           onMouseEnter={() => setShowPopover(true)}
           onMouseLeave={() => setShowPopover(false)}

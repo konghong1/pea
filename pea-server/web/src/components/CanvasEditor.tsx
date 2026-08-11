@@ -403,6 +403,7 @@ function CanvasActions() {
     <div className="pea-canvas-actions">
       <Select
         className="pea-theme-select"
+        popupClassName="pea-canvas-portal"
         value={mode}
         onChange={(v) => setMode(v)}
         suffixIcon={<span className="text-xs">▾</span>}
@@ -1772,29 +1773,70 @@ function Flow() {
     }
   };
 
+  // 以光标为锚点缩放画布（用于落在 portal/浮层上的 Ctrl+滚轮，ReactFlow 收不到该事件）。
+  const zoomCanvasAtPointer = useCallback(
+    (clientX: number, clientY: number, deltaY: number) => {
+      const container = flowRef.current;
+      if (!container) return;
+      const vp = getViewport();
+      const rect = container.getBoundingClientRect();
+      const px = clientX - rect.left;
+      const py = clientY - rect.top;
+      const minZoom = 0.25;
+      const maxZoom = 3;
+      // 与 ReactFlow d3-zoom 一致的缩放曲线：上滚(deltaY<0)放大，下滚缩小。
+      const factor = Math.pow(2, -deltaY * 0.0015);
+      const next = Math.min(maxZoom, Math.max(minZoom, vp.zoom * factor));
+      // 保持光标下的画布坐标不变：flow = (p - translate) / zoom
+      const fx = (px - vp.x) / vp.zoom;
+      const fy = (py - vp.y) / vp.zoom;
+      setViewport({ x: px - fx * next, y: py - fy * next, zoom: next }, { duration: 0 });
+    },
+    [getViewport, setViewport],
+  );
+
   // 修复：Ctrl/⌘ + 滚轮会触发浏览器整页缩放，而非画布缩放。
-  // 浏览器会在事件冒泡到画布逻辑前，于页面层级捕获 Ctrl+wheel 并放大整页。
-  // 这里挂一个非 passive 的 wheel 监听：当按住 Ctrl/⌘ 时 preventDefault()，
-  // 阻止浏览器默认缩放；但【不】 stopPropagation，所以 ReactFlow 内部的 wheel
-  // 监听仍能收到该事件、继续完成画布缩放。两者互不干扰。
-  // 普通滚轮（无 Ctrl）不拦截，保留 panOnScroll 的画布平移手势。
-  // 裁切模式（cropActiveRef）下：完全阻止所有 wheel 事件，锁定画布缩放/平移。
+  // 根因：原 guard 只挂在 flowRef（画布容器内）。但节点编辑框浮层、antd Select 下拉、
+  // 节点参数弹层等会被 createPortal 渲染到 document.body，不在 flowRef 子树内，
+  // 其 wheel 事件冒泡不到 flowRef → 不被 preventDefault → 浏览器执行整页缩放。
+  // 修复：改为在 window 捕获阶段 + 非 passive 监听 wheel：
+  //  - 命中 Ctrl/⌘ 且目标处于画布范围内（.pea-canvas-host 或其 portal 后代）时，
+  //    preventDefault() 拦截浏览器整页缩放；
+  //  - 目标若在 ReactFlow 的 pane 子树内（含节点内联编辑框）→ 交给 ReactFlow 自身缩放，
+  //    不重复缩放；否则（落在 portal/浮层上）以光标为锚点手动驱动画布缩放，
+  //    满足"只要在画布中，Ctrl+滚轮只控制画布缩放"。
+  //  - 普通滚轮（无 Ctrl）不拦截，保留 panOnScroll 的画布平移手势。
+  //  - 裁切模式（cropActiveRef）下：完全阻止所有 wheel，锁定画布。
   useEffect(() => {
-    const el = flowRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
+    const onWheelCapture = (e: WheelEvent) => {
       if (cropActiveRef.current) {
         e.stopPropagation();
         e.preventDefault();
         return;
       }
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-      }
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target as HTMLElement | null;
+      if (!t || !t.closest) return;
+      const inCanvas =
+        !!t.closest('.pea-canvas-host') ||
+        !!t.closest('[data-pea-canvas-portal]') ||
+        !!t.closest('.pea-canvas-portal');
+      if (!inCanvas) return;
+      // 拦截浏览器整页缩放（关键：必须在捕获阶段 + 非 passive 才能生效）
+      e.preventDefault();
+      // 已在 ReactFlow pane 子树内（含节点内联编辑框）→ ReactFlow 已接管缩放，避免重复
+      const inPane =
+        !!t.closest('.react-flow__pane') ||
+        !!t.closest('.react-flow__viewport') ||
+        !!t.closest('.react-flow__renderer') ||
+        !!t.closest('.react-flow__node');
+      if (inPane) return;
+      // 落在 portal/浮层上：ReactFlow 收不到该 wheel，手动以光标为锚点缩放画布
+      zoomCanvasAtPointer(e.clientX, e.clientY, e.deltaY);
     };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, []);
+    window.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
+    return () => window.removeEventListener('wheel', onWheelCapture, true);
+  }, [zoomCanvasAtPointer]);
 
   return (
     <div

@@ -170,6 +170,7 @@ export default function MultiSelectToolbar() {
       {/* ====== 1. 选中框右侧「添加节点」按钮（节点卡样式） ====== */}
       <div
         className="multiselect-plus-btn"
+        data-pea-canvas-portal
         style={{ left: plus.left, top: plus.top }}
         onClick={handleAddNode}
         title="在此处插入节点"
@@ -186,6 +187,7 @@ export default function MultiSelectToolbar() {
       {/* ====== 2. 下方工具栏 ====== */}
       <div
         className="multiselect-toolbar"
+        data-pea-canvas-portal
         style={{ left: bar.left, top: bar.top }}
         role="toolbar"
         aria-label="多选操作"

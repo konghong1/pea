@@ -5,7 +5,7 @@ import { useCanvas, PeaNodeData } from '../store/canvas';
 import { toast } from '../store/toast';
 import { useAuth } from '../store/auth';
 import { api } from '../api/client';
-import { getFileUrl } from '../api/files';
+import { getFileUrl, getPresignedUrl } from '../api/files';
 import { NODE_DEF_OF, PeaNodeKind } from '../constants/nodeTypes';
 import NodeIcon, { GeneratingBadge, UploadBadge, kindColor } from './NodeIcon';
 import TextNodeToolbar from './TextNodeToolbar';
@@ -13,17 +13,36 @@ import TextNodeEditorModal from './TextNodeEditorModal';
 import TechLoader from './TechLoader';
 import SaveToLibraryModal from './SaveToLibraryModal';
 import { assetsApi, ASSET_ASSETS_CHANGED_EVENT, type AssetScope } from '../api/assets';
-import { retryNodeGeneration } from '../lib/nodeGeneration';
+import { retryNodeGeneration, pollNodeJobResult } from '../lib/nodeGeneration';
 import {
   acceptsUpstreamInput,
   isGeneratedMediaNode,
   isUserUploadedMediaNode,
 } from '../lib/nodeSemantics';
-import { getNodeSize } from '../lib/nodeSize';
+import { getNodeSize, simplifyRatio } from '../lib/nodeSize';
 import ImageCropOverlay from './ImageCropOverlay';
+import AngleCubeOverlay, { type AngleCubeParams } from './AngleCubeOverlay';
+import { acceptNodeGenerationJob } from '../api/catalog';
 
 /** 数值夹取，用于连接点跟随鼠标的小范围限制 */
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/** 读取本地图片文件的真实宽高比。失败时返回 undefined，调用方使用默认比例。 */
+function detectImageAspectRatio(file: File): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(simplifyRatio(img.naturalWidth, img.naturalHeight));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(undefined);
+    };
+    img.src = objectUrl;
+  });
+}
 
 /**
  * 连接点(手柄圆点)内缘距节点框的间距（flow 坐标 px）。
@@ -61,6 +80,8 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const [editing, setEditing] = useState(false);
   const [editorModalOpen, setEditorModalOpen] = useState(false);
   const [cropping, setCropping] = useState(false);
+  // 角度魔方：从 meta 读取持久化状态（重新选中节点时恢复面板显示）
+  const [cubeOpen, setCubeOpen] = useState(() => !!(data.meta?.cubeOpen));
   const editRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const chromeRef = useRef<HTMLDivElement>(null);
@@ -184,6 +205,9 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
     e.target.value = '';
     if (!f) return;
     const nodeMeta = data.meta ?? {};
+    // 读取本地图片真实比例，让节点框随上传内容自适应。
+    // 修复：上传横向图后节点仍按默认 9:16 显示，导致截图/裁剪时露出原图比例而视觉不一致。
+    const detectedAspectRatio = kind === 'image' ? await detectImageAspectRatio(f) : undefined;
     // 经 BFF 代理上传（multipart），服务端直写 MinIO，刷新后仍可加载；失败退回本地 blob 预览。
     let fileKey: string | undefined;
     if (useAuth.getState().user?.id != null) {
@@ -206,6 +230,8 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
       resultIndex: 0,
       savedToLibrary: false,
       isFavorite: false,
+      // 用户上传图片时按真实比例更新节点框；检测失败则保持原比例。
+      aspectRatio: detectedAspectRatio ?? data.aspectRatio,
       meta: { ...nodeMeta, fileName: f.name, fileSize: f.size, uploadAt: new Date().toISOString() },
     });
     if (!fileKey) toast.error('上传失败，已用本地预览（刷新后可能丢失）');
@@ -228,7 +254,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   return (
     <div
       ref={rootRef}
-      className={`pea-node ${selected && !isMulti ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''} ${data.generating ? 'is-generating' : ''} ${cropping ? 'is-cropping' : ''}`}
+      className={`pea-node ${selected && !isMulti ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''} ${data.generating ? 'is-generating' : ''} ${cropping ? 'is-cropping' : ''} ${cubeOpen ? 'is-cube-mode' : ''}`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
         setHovered(false);
@@ -427,7 +453,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
             />
           </div>
         ) : isMedia ? (
-          <MediaNodeBody id={id} kind={kind} data={data} hasImage={hasImage} onRequestUpload={() => fileRef.current?.click()} chromeRef={chromeFixedRef} onCropChange={setCropping} />
+          <MediaNodeBody id={id} kind={kind} data={data} hasImage={hasImage} onRequestUpload={() => fileRef.current?.click()} chromeRef={chromeFixedRef} onCropChange={setCropping} onCubeChange={setCubeOpen} />
         ) : (
           <GenericNodeBody id={id} data={data} tagLabel={tagLabel} kind={kind} />
         )}
@@ -435,7 +461,8 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
 
       {/* 编辑框锚点：NodeChatPrompt 会把节点输入栏 portal 进这个容器
           （data-pea-anchor 用于按选中节点精确匹配）。该元素缺失会导致点击节点后
-          输入栏（边框框）永不弹出——这是反复回归的根因，务必保留。 */}
+          输入栏（边框框）永不弹出——这是反复回归的根因，务必保留。
+          角度魔方打开时，AngleCubeOverlay 也会 portal 到此替代输入框。 */}
       <div className="pea-node-editor-anchor" data-pea-anchor={id} />
 
       {/* 文本节点全屏编辑弹窗（双击触发） */}
@@ -460,6 +487,7 @@ function MediaNodeBody({
   onRequestUpload,
   chromeRef,
   onCropChange,
+  onCubeChange,
 }: {
   id: string;
   kind: PeaNodeKind;
@@ -468,6 +496,7 @@ function MediaNodeBody({
   onRequestUpload: () => void;
   chromeRef: React.RefObject<HTMLDivElement | null>;
   onCropChange?: (open: boolean) => void;
+  onCubeChange?: (open: boolean) => void;
 }) {
   const update = useCanvas((s) => s.updateNodeData);
   const tagLabel = tagLabelOf(kind);
@@ -538,6 +567,7 @@ function MediaNodeBody({
         showMediaLabel={showMediaLabel}
         chromeRef={chromeRef}
         onCropChange={onCropChange}
+        onCubeChange={onCubeChange}
       />
     );
   }
@@ -557,6 +587,7 @@ function MediaNodeBody({
         showMediaLabel={showMediaLabel}
         chromeRef={chromeRef}
         onCropChange={onCropChange}
+        onCubeChange={onCubeChange}
       />
     );
   }
@@ -612,6 +643,7 @@ function ResultMediaView({
   showMediaLabel,
   chromeRef,
   onCropChange,
+  onCubeChange,
 }: {
   id: string;
   kind: PeaNodeKind;
@@ -625,6 +657,7 @@ function ResultMediaView({
   showMediaLabel: boolean;
   chromeRef: React.RefObject<HTMLDivElement | null>;
   onCropChange?: (open: boolean) => void;
+  onCubeChange?: (open: boolean) => void;
 }) {
   const [chromeReady, setChromeReady] = useState(false);
   useLayoutEffect(() => { setChromeReady(true); }, []);
@@ -636,10 +669,27 @@ function ResultMediaView({
   const [mediaError, setMediaError] = useState(false);
   const [savingToLibrary, setSavingToLibrary] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
+  // 角度魔方：从 meta 读取持久化状态（重新选中节点时恢复面板显示）
+  const [cubeOpen, setCubeOpen] = useState(() => !!(data.meta?.cubeOpen));
   const imageWrapRef = useRef<HTMLDivElement>(null);  // 图片容器 ref，裁切组件用它测量尺寸并原地覆盖
+  // 角度魔方锚点：与 NodeChatPrompt 同一机制，确保 DOM 挂载后才 portal
+  const [cubeAnchorEl, setCubeAnchorEl] = useState<HTMLElement | null>(null);
+  const liveCubeAnchor = cubeOpen && typeof document !== 'undefined'
+    ? (document.querySelector<HTMLElement>(`.pea-node-editor-anchor[data-pea-anchor="${id}"]`) ?? null)
+    : null;
+  useEffect(() => {
+    if (liveCubeAnchor) {
+      setCubeAnchorEl(liveCubeAnchor);
+    } else if (!cubeOpen) {
+      setCubeAnchorEl(null);
+    }
+  }, [liveCubeAnchor, cubeOpen, id]);
   useEffect(() => {
     onCropChange?.(cropOpen);
   }, [cropOpen, onCropChange]);
+  useEffect(() => {
+    onCubeChange?.(cubeOpen);
+  }, [cubeOpen, onCubeChange]);
   // 兼容性兜底：历史节点可能保存了外部模型视角的公网 CDN URL（如花生壳域名），
   // 当浏览器无法访问该域名时，fallback 到同域 /media/<key> 重试。
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
@@ -769,6 +819,113 @@ function ResultMediaView({
       // 直接建立 source → 新节点的连线，保留源节点已有的其他下游边（并列而非串链）。
       g.addEdges([{ id: `e-${id}-${newId}`, source: id, target: newId, sourceHandle: 'out', targetHandle: 'in', type: 'pea' }]);
       toast.success('已生成裁剪节点');
+    }
+  };
+
+  const handleCube = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent('pea:center-node', { detail: { id } }));
+    setCubeOpen(true);
+    // 持久化到 meta：重新选中节点时自动恢复角度魔方面板
+    const meta = { ...(data.meta ?? {}) } as Record<string, unknown>;
+    meta.cubeOpen = true;
+    useCanvas.getState().updateNodeData(id, { meta }, false);
+  };
+
+  const handleCubeClose = () => {
+    setCubeOpen(false);
+    // 持久化到 meta：确保重新选中节点时不会自动恢复角度魔方面板
+    const meta = { ...(data.meta ?? {}) } as Record<string, unknown>;
+    delete meta.cubeOpen;
+    useCanvas.getState().updateNodeData(id, { meta }, false);
+  };
+
+  const handleCubeConfirm = async (cube: AngleCubeParams) => {
+    setCubeOpen(false);
+
+    // 取当前图片可外传的参考图 URL（与节点聊天提交保持同一套规则）
+    const urls = data.resultUrls?.length ? data.resultUrls : data.resultUrl ? [data.resultUrl] : [];
+    const firstUrl = urls[0] || data.url;
+    let refUrl: string | undefined;
+    if (firstUrl && (firstUrl.startsWith('http') || firstUrl.startsWith('data:'))) {
+      refUrl = firstUrl;
+    } else if (firstUrl && firstUrl.startsWith('/media/')) {
+      refUrl = firstUrl;
+    } else if (data.fileKey) {
+      refUrl = await getPresignedUrl(data.fileKey);
+    }
+    if (!refUrl) {
+      toast.error('无法读取当前图片，请检查图片是否已上传或刷新后重试');
+      return;
+    }
+
+    const prompt = `多角度生成：以参考图主体为基础，生成水平旋转 ${cube.rotation}°、上下倾斜 ${cube.tilt}°、缩放 ${cube.zoom} 的视角${cube.wideAngle ? '，使用广角镜头' : ''}。保持人物/主体、风格、光线、背景与参考图严格一致。`;
+
+    // 按源节点比例生成同尺寸图片，n 固定为 1，确保余额只扣 1 张
+    const arText = data.aspectRatio || '9:16';
+    const [arW, arH] = arText.split(':').map(Number);
+    const LONG_EDGE = 1024;
+    let width = LONG_EDGE;
+    let height = LONG_EDGE;
+    if (arW && arH) {
+      if (arW >= arH) {
+        width = LONG_EDGE;
+        height = Math.round(LONG_EDGE * (arH / arW));
+      } else {
+        height = LONG_EDGE;
+        width = Math.round(LONG_EDGE * (arW / arH));
+      }
+    }
+    const params: Record<string, unknown> = {
+      reference_images: [refUrl],
+      n: 1,
+      width,
+      height,
+      size: `${width}x${height}`,
+    };
+
+    const g = useCanvas.getState();
+    const src = g.nodes.find((n) => n.id === id);
+    const newSize = getNodeSize(data.aspectRatio, 'image');
+    const srcSize = getNodeSize(src?.data.aspectRatio, src?.data.kind ?? 'image');
+    const siblingCount = g.edges.filter((e) => e.source === id).length;
+    const srcRight = (src?.position.x ?? 0) + srcSize.width;
+    const pos = {
+      x: srcRight + 80 + siblingCount * (newSize.width + 80),
+      y: src?.position.y ?? 0,
+    };
+
+    const newId = addNode(
+      {
+        kind: 'image',
+        label: '多角度',
+        aspectRatio: data.aspectRatio,
+        generating: true,
+        clipped: true,
+        meta: {
+          angleCube: { rotation: cube.rotation, tilt: cube.tilt, zoom: cube.zoom, wideAngle: cube.wideAngle },
+        },
+      } as PeaNodeData,
+      pos,
+    );
+
+    try {
+      const res = await acceptNodeGenerationJob({
+        type: 'image',
+        prompt,
+        model: cube.modelId,
+        params,
+        priority: 'normal',
+        idempotencyKey: `angle-${id}-${Date.now()}`,
+      });
+      useCanvas.getState().registerJob(res.jobId, newId);
+      useCanvas.getState().updateNodeData(newId, { lastJobId: res.jobId }, false);
+      pollNodeJobResult(res.jobId);
+      toast.success('多角度生成已受理');
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || e?.message || '多角度生成受理失败';
+      useCanvas.getState().updateNodeData(newId, { generating: false, error: msg }, false);
+      toast.error(msg);
     }
   };
 
@@ -946,8 +1103,20 @@ function ResultMediaView({
           saved={!!data.savedToLibrary}
           onFullscreen={handleFullscreen}
           onCrop={handleCrop}
+          onCube={handleCube}
         />,
         chromeRef.current
+      )}
+
+      {/* 角度魔方面板：portal 到编辑锚点（替代 NodeChatPrompt 输入框），相对节点固定 */}
+      {cubeOpen && currentUrl && cubeAnchorEl && createPortal(
+        <AngleCubeOverlay
+          nodeId={id}
+          url={currentUrl}
+          onClose={handleCubeClose}
+          onConfirm={handleCubeConfirm}
+        />,
+        cubeAnchorEl,
       )}
 
       {/* 全屏查看 */}
@@ -983,12 +1152,14 @@ function ResultToolbar({
   saved,
   onFullscreen,
   onCrop,
+  onCube,
 }: {
   currentUrl: string;
   onSave: (e: React.MouseEvent) => void;
   saved: boolean;
   onFullscreen: (e: React.MouseEvent) => void;
   onCrop: (e: React.MouseEvent) => void;
+  onCube: (e: React.MouseEvent) => void;
 }) {
   const soon = (label: string) => (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1003,7 +1174,7 @@ function ResultToolbar({
           <path d="M2 6h14a2 2 0 0 1 2 2v14" />
         </svg>
       </ToolbarButton>
-      <ToolbarButton label="3D" muted onClick={soon('3D 转换')}>
+      <ToolbarButton label="角度魔方" onClick={onCube}>
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.6">
           <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
           <path d="M3.27 6.96L12 12.01l8.73-5.05" />
@@ -1814,11 +1985,4 @@ function HandleGlyph() {
 function tagLabelOf(k: string): string {
   // 与 nodeTypes.ts 的中文标签保持一致，作为徽章默认名称的唯一来源
   return NODE_DEF_OF(k).label;
-}
-
-function simplifyRatio(w: number, h: number) {
-  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
-  const g = gcd(Math.round(w), Math.round(h));
-  if (!g) return '1:1';
-  return `${Math.round(w) / g}:${Math.round(h) / g}`;
 }

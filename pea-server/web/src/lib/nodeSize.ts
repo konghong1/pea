@@ -31,3 +31,11 @@ export function getNodeSize(aspectRatio?: string, kind?: string) {
     ? { width: LONG_EDGE, height: Math.round(LONG_EDGE * (h / w)) }
     : { width: Math.round(LONG_EDGE * (w / h)), height: LONG_EDGE };
 }
+
+/** 把浮点宽高归约为最简整数比（如 1920×1080 → "16:9"）。 */
+export function simplifyRatio(w: number, h: number) {
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const g = gcd(Math.round(w), Math.round(h));
+  if (!g) return '1:1';
+  return `${Math.round(w) / g}:${Math.round(h) / g}`;
+}
