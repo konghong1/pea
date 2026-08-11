@@ -88,6 +88,10 @@ interface CanvasState {
   edges: Edge[];
   selectedId: string | null;
   selectedIds: string[];
+  /** 当前打开角度魔方面板的节点 id（单一数据源，避免节点重挂载后误恢复面板）。 */
+  cubeOpenNodeId: string | null;
+  /** 设置/清除当前打开角度魔方的节点（null = 关闭面板）。 */
+  setCubeOpenNodeId: (id: string | null) => void;
   dirty: boolean;
   lastSavedAt: number | null;
   saveCount: number;
@@ -417,6 +421,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   edges: [],
   selectedId: null,
   selectedIds: [],
+  cubeOpenNodeId: null,
   dirty: false,
   lastSavedAt: null,
   saveCount: 0,
@@ -639,6 +644,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       dirty: true,
     });
   },
+  setCubeOpenNodeId: (id) => set({ cubeOpenNodeId: id }),
   select: (id) =>
     set((s) => ({
       selectedId: id,

@@ -80,8 +80,10 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const [editing, setEditing] = useState(false);
   const [editorModalOpen, setEditorModalOpen] = useState(false);
   const [cropping, setCropping] = useState(false);
-  // 角度魔方：从 meta 读取持久化状态（重新选中节点时恢复面板显示）
-  const [cubeOpen, setCubeOpen] = useState(() => !!(data.meta?.cubeOpen));
+  // 角度魔方：单一数据源取自 store（cubeOpenNodeId），不用 meta 持久化，
+  // 避免节点重挂载后误把面板恢复出来。
+  const cubeOpenNodeId = useCanvas((s) => s.cubeOpenNodeId);
+  const cubeOpen = cubeOpenNodeId === id;
   const editRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const chromeRef = useRef<HTMLDivElement>(null);
@@ -254,6 +256,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   return (
     <div
       ref={rootRef}
+      data-node-id={id}
       className={`pea-node ${selected && !isMulti ? 'selected' : ''} ${hovered ? 'hover' : ''} pea-node-${kind} ${hasMediaContent ? 'pea-node-has-media' : ''} ${data.generating ? 'is-generating' : ''} ${cropping ? 'is-cropping' : ''} ${cubeOpen ? 'is-cube-mode' : ''}`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => {
@@ -453,7 +456,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
             />
           </div>
         ) : isMedia ? (
-          <MediaNodeBody id={id} kind={kind} data={data} hasImage={hasImage} onRequestUpload={() => fileRef.current?.click()} chromeRef={chromeFixedRef} onCropChange={setCropping} onCubeChange={setCubeOpen} />
+          <MediaNodeBody id={id} kind={kind} data={data} hasImage={hasImage} onRequestUpload={() => fileRef.current?.click()} chromeRef={chromeFixedRef} onCropChange={setCropping} />
         ) : (
           <GenericNodeBody id={id} data={data} tagLabel={tagLabel} kind={kind} />
         )}
@@ -487,7 +490,6 @@ function MediaNodeBody({
   onRequestUpload,
   chromeRef,
   onCropChange,
-  onCubeChange,
 }: {
   id: string;
   kind: PeaNodeKind;
@@ -496,8 +498,9 @@ function MediaNodeBody({
   onRequestUpload: () => void;
   chromeRef: React.RefObject<HTMLDivElement | null>;
   onCropChange?: (open: boolean) => void;
-  onCubeChange?: (open: boolean) => void;
 }) {
+  const selectedIdsArr = useCanvas((s) => s.selectedIds);
+  const selected = selectedIdsArr.includes(id);
   const update = useCanvas((s) => s.updateNodeData);
   const tagLabel = tagLabelOf(kind);
   const resultUrls = data.resultUrls?.length ? data.resultUrls : data.resultUrl ? [data.resultUrl] : [];
@@ -567,7 +570,6 @@ function MediaNodeBody({
         showMediaLabel={showMediaLabel}
         chromeRef={chromeRef}
         onCropChange={onCropChange}
-        onCubeChange={onCubeChange}
       />
     );
   }
@@ -587,7 +589,6 @@ function MediaNodeBody({
         showMediaLabel={showMediaLabel}
         chromeRef={chromeRef}
         onCropChange={onCropChange}
-        onCubeChange={onCubeChange}
       />
     );
   }
@@ -643,7 +644,6 @@ function ResultMediaView({
   showMediaLabel,
   chromeRef,
   onCropChange,
-  onCubeChange,
 }: {
   id: string;
   kind: PeaNodeKind;
@@ -657,10 +657,11 @@ function ResultMediaView({
   showMediaLabel: boolean;
   chromeRef: React.RefObject<HTMLDivElement | null>;
   onCropChange?: (open: boolean) => void;
-  onCubeChange?: (open: boolean) => void;
 }) {
   const [chromeReady, setChromeReady] = useState(false);
   useLayoutEffect(() => { setChromeReady(true); }, []);
+  const selectedIdsArr = useCanvas((s) => s.selectedIds);
+  const selected = selectedIdsArr.includes(id);
   const update = useCanvas((s) => s.updateNodeData);
   const addNode = useCanvas((s) => s.addNode);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -669,8 +670,11 @@ function ResultMediaView({
   const [mediaError, setMediaError] = useState(false);
   const [savingToLibrary, setSavingToLibrary] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
-  // 角度魔方：从 meta 读取持久化状态（重新选中节点时恢复面板显示）
-  const [cubeOpen, setCubeOpen] = useState(() => !!(data.meta?.cubeOpen));
+  // 角度魔方：单一数据源取自 store（cubeOpenNodeId），不持久化到 meta，
+  // 这样关闭后再点节点只会显示节点编辑框、不会误恢复面板。
+  const cubeOpenNodeId = useCanvas((s) => s.cubeOpenNodeId);
+  const setCubeOpenNodeId = useCanvas((s) => s.setCubeOpenNodeId);
+  const cubeOpen = cubeOpenNodeId === id;
   const imageWrapRef = useRef<HTMLDivElement>(null);  // 图片容器 ref，裁切组件用它测量尺寸并原地覆盖
   // 角度魔方锚点：与 NodeChatPrompt 同一机制，确保 DOM 挂载后才 portal
   const [cubeAnchorEl, setCubeAnchorEl] = useState<HTMLElement | null>(null);
@@ -687,9 +691,6 @@ function ResultMediaView({
   useEffect(() => {
     onCropChange?.(cropOpen);
   }, [cropOpen, onCropChange]);
-  useEffect(() => {
-    onCubeChange?.(cubeOpen);
-  }, [cubeOpen, onCubeChange]);
   // 兼容性兜底：历史节点可能保存了外部模型视角的公网 CDN URL（如花生壳域名），
   // 当浏览器无法访问该域名时，fallback 到同域 /media/<key> 重试。
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
@@ -824,24 +825,16 @@ function ResultMediaView({
 
   const handleCube = (e: React.MouseEvent) => {
     e.stopPropagation();
-    window.dispatchEvent(new CustomEvent('pea:center-node', { detail: { id } }));
-    setCubeOpen(true);
-    // 持久化到 meta：重新选中节点时自动恢复角度魔方面板
-    const meta = { ...(data.meta ?? {}) } as Record<string, unknown>;
-    meta.cubeOpen = true;
-    useCanvas.getState().updateNodeData(id, { meta }, false);
+    window.dispatchEvent(new CustomEvent('pea:center-node', { detail: { id, mode: 'cube' } }));
+    setCubeOpenNodeId(id);
   };
 
   const handleCubeClose = () => {
-    setCubeOpen(false);
-    // 持久化到 meta：确保重新选中节点时不会自动恢复角度魔方面板
-    const meta = { ...(data.meta ?? {}) } as Record<string, unknown>;
-    delete meta.cubeOpen;
-    useCanvas.getState().updateNodeData(id, { meta }, false);
+    setCubeOpenNodeId(null);
   };
 
   const handleCubeConfirm = async (cube: AngleCubeParams) => {
-    setCubeOpen(false);
+    setCubeOpenNodeId(null);
 
     // 取当前图片可外传的参考图 URL（与节点聊天提交保持同一套规则）
     const urls = data.resultUrls?.length ? data.resultUrls : data.resultUrl ? [data.resultUrl] : [];
@@ -1108,8 +1101,9 @@ function ResultMediaView({
         chromeRef.current
       )}
 
-      {/* 角度魔方面板：portal 到编辑锚点（替代 NodeChatPrompt 输入框），相对节点固定 */}
-      {cubeOpen && currentUrl && cubeAnchorEl && createPortal(
+      {/* 角度魔方面板：portal 到编辑锚点（替代 NodeChatPrompt 输入框），相对节点固定。
+          只在节点被选中时显示；取消选中时收起但 cubeOpenNodeId 状态保留，再选中恢复。 */}
+      {cubeOpen && selected && currentUrl && cubeAnchorEl && createPortal(
         <AngleCubeOverlay
           nodeId={id}
           url={currentUrl}

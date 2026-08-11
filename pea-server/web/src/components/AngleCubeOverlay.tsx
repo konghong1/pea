@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { estimateCost, listAvailableModels } from '../api/catalog';
 import type { AvailableModel } from '../api/catalog';
 import { useCanvas } from '../store/canvas';
@@ -23,9 +23,11 @@ interface Props {
  * 角度魔方面板 — 内嵌模式（渲染到节点编辑锚点内，替代 NodeChatPrompt 输入框）。
  *
  * 关键行为：
- * - 不再使用 createPortal→body，而是作为普通子组件渲染到 .pea-node-editor-anchor 内；
- * - 只有点击右上角 × 按钮才关闭（不响应点击外部关闭）；
- * - Escape 键仍可关闭。
+ * - 渲染到 .pea-node-editor-anchor 内，与节点选中态绑定；
+ * - 面板「是否展示」取决于节点是否被选中：节点取消选中时编辑框收起（不展示），
+ *   但 cubeOpenNodeId 状态保留，再次选中同一节点仍恢复角度魔方面板；
+ * - 只有点击右上角 × 按钮才真正关闭（清空 cubeOpenNodeId），关闭后再次选中节点回退为提示词框；
+ * - 不响应点击外部 / Escape 关闭，避免误关。
  */
 export default function AngleCubeOverlay({ nodeId, url, onClose, onConfirm }: Props) {
   const node = useCanvas((s) => s.nodes.find((n) => n.id === nodeId));
@@ -39,17 +41,6 @@ export default function AngleCubeOverlay({ nodeId, url, onClose, onConfirm }: Pr
   const [model, setModel] = useState<AvailableModel | null>(null);
   const [est, setEst] = useState<{ cost: number; allowed: boolean; minPlanLevel: number } | null>(null);
   const [loading, setLoading] = useState(false);
-
-  const panelRef = useRef<HTMLDivElement>(null);
-
-  // 仅 Escape 关闭，不监听外部点击（用户必须点 × 才退出角度魔方模式）
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
 
   // 加载可用模型 + 估算消耗
   useEffect(() => {
@@ -100,7 +91,6 @@ export default function AngleCubeOverlay({ nodeId, url, onClose, onConfirm }: Pr
 
   return (
     <div
-      ref={panelRef}
       className="pea-angle-cube-panel"
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}

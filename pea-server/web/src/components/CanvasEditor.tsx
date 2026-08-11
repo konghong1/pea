@@ -1297,7 +1297,7 @@ function Flow() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onCenter = (e: Event) => {
-      const detail = (e as CustomEvent).detail as { id?: string; zoom?: number } | undefined;
+      const detail = (e as CustomEvent).detail as { id?: string; zoom?: number; mode?: string } | undefined;
       const id = detail?.id;
       if (!id) return;
       const target = useCanvas.getState().nodes.find((n) => n.id === id);
@@ -1308,9 +1308,21 @@ function Flow() {
       const container = flowRef.current;
       const cw = container?.clientWidth ?? window.innerWidth;
       const ch = container?.clientHeight ?? window.innerHeight;
-      const zoom = detail?.zoom ?? Math.min(2, Math.min((cw * 0.8) / width, (ch * 0.8) / height));
+      // 角度魔方模式：节点下方约 300px 面板需要留在视口内，
+      // 因此节点放在视口偏上（垂直 ~38%），并限制画布缩放让节点+面板都完整可见。
+      const cubeMode = detail?.mode === 'cube';
+      let zoom: number;
+      let centerYRatio = 0.5;
+      if (cubeMode) {
+        // 节点显示高度不超过视口 42%，给下方角度魔方面板留足空间；
+        // 同时限制最大 1.2，避免节点被放得过大。
+        zoom = Math.min(1.2, (ch * 0.42) / height, (cw * 0.6) / width);
+        centerYRatio = 0.38;
+      } else {
+        zoom = detail?.zoom ?? Math.min(2, Math.min((cw * 0.8) / width, (ch * 0.8) / height));
+      }
       const nextX = cw / 2 - cx * zoom;
-      const nextY = ch / 2 - cy * zoom;
+      const nextY = ch * centerYRatio - cy * zoom;
       setViewport({ x: nextX, y: nextY, zoom }, { duration: 320 });
     };
     window.addEventListener('pea:center-node', onCenter as EventListener);

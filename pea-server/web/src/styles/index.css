@@ -7542,15 +7542,22 @@ html:not(.dark) .pea-angle-cube-close:hover {
   flex: 0 0 auto;
   width: min(220px, 38vw);
   height: 220px;
-  background: rgba(255, 255, 255, 0.03);
+  /* 预览区固定为深色底，与浅色面板形成层次差；
+     立方体三个面用更亮/暗的渐变就能直接被眼睛分辨 */
+  background: linear-gradient(160deg, rgba(20, 22, 30, 0.96) 0%, rgba(34, 38, 50, 0.96) 100%);
   border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
   align-items: center;
   justify-content: center;
-  position: relative; /* 锚点：内嵌重置按钮定位 */
+  position: relative;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 html:not(.dark) .pea-angle-cube-preview {
-  background: rgba(0, 0, 0, 0.02);
+  /* 浅色主题仍固定深色底，与外面浅色面板形成对比；
+     立方体轮廓才能被看出 */
+  background: linear-gradient(160deg, #1a1c24 0%, #262934 100%);
+  border-color: rgba(0, 0, 0, 0.10);
 }
 /* 底部重置按钮 — footer 左侧（参考图：图标+文字） */
 .pea-angle-cube-reset-foot {
@@ -7612,11 +7619,15 @@ html:not(.dark) .pea-angle-cube-reset-foot:hover {
   height: var(--cube-size, 65px);
   backface-visibility: visible;
   border-radius: calc(var(--cube-size, 65px) * 0.092);
+  /* 深色统一描边把立方体六个面围起来，无论旋转到哪个角度都看得见形状 */
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 /* 正面 — 贴图（无 box-shadow，避免旋转到侧面时虚影溢出立方体边界） */
 .pea-cube-front {
   transform: translateZ(var(--cube-half-z, 32.5px));
   overflow: hidden;
+  border-color: rgba(0, 0, 0, 0.65);
 }
 .pea-cube-front img {
   width: 100%;
@@ -7625,89 +7636,50 @@ html:not(.dark) .pea-angle-cube-reset-foot:hover {
   display: block;
   border-radius: inherit;
 }
-/* 背面 — 白色 */
+/* 三个面的明度梯度（顶面最亮 > 右面次亮 > 左面最暗 > 背/底最深），
+ * 每个面都比白色图片正面明显更暗，所以「贴图的正面和相邻侧面」一眼能区分开。 */
 .pea-cube-back {
   transform: rotateY(180deg) translateZ(var(--cube-half-z, 32.5px));
-  background: #f0f0f2;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: linear-gradient(135deg, #474e5b 0%, #3a404b 100%);
 }
-/* 右侧面 — 浅灰白 */
 .pea-cube-right {
   transform: rotateY(90deg) translateZ(var(--cube-half-z, 32.5px));
-  background: #e8e8ec;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: linear-gradient(135deg, #7c8492 0%, #666d7b 100%);
 }
-/* 右侧面旋转方向字母 — 魔方 Right 面记法（系统品牌色，随尺寸缩放）*/
-.pea-cube-right::after {
-  content: "R";
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(var(--cube-size, 65px) * 0.37);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--pea-accent, #1fa2dc);
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.4);
-}
-/* 左侧面 — 浅灰白（魔方 Left 面记法）*/
 .pea-cube-left {
   transform: rotateY(-90deg) translateZ(var(--cube-half-z, 32.5px));
-  background: #e0e0e6;
-  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: linear-gradient(135deg, #565d6b 0%, #454b57 100%);
 }
-.pea-cube-left::after {
-  content: "L";
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(var(--cube-size, 65px) * 0.37);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--pea-accent, #1fa2dc);
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.4);
-}
-/* 顶面 — 白色偏亮（魔方 Up 面记法）*/
 .pea-cube-top {
   transform: rotateX(90deg) translateZ(var(--cube-half-z, 32.5px));
-  background: #f4f4f6;
-  border: 1px solid rgba(0, 0, 0, 0.04);
+  background: linear-gradient(135deg, #aeb6c4 0%, #99a2b1 100%);
 }
-.pea-cube-top::after {
-  content: "U";
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(var(--cube-size, 65px) * 0.37);
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: var(--pea-accent, #1fa2dc);
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.4);
-}
-/* 底面 — 略深灰白（魔方 Down 面记法）*/
 .pea-cube-bottom {
   transform: rotateX(-90deg) translateZ(var(--cube-half-z, 32.5px));
-  background: #dcdce2;
-  border: 1px solid rgba(0, 0, 0, 0.06);
+  background: linear-gradient(135deg, #363c47 0%, #2a2f38 100%);
 }
-.pea-cube-bottom::after {
-  content: "D";
+/* 面中心字母（醒目但半透明，不抢贴图）：
+ * 正面是图片不显示，其余面在面正中显示 R/L/U/D/B 记法。 */
+.pea-cube-face::after {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: calc(var(--cube-size, 65px) * 0.37);
+  font-size: calc(var(--cube-size, 65px) * 0.30);
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: var(--pea-accent, #1fa2dc);
-  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.6);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  line-height: 1;
 }
+.pea-cube-back::after  { content: "B"; }
+.pea-cube-right::after { content: "R"; }
+.pea-cube-left::after  { content: "L"; }
+.pea-cube-top::after   { content: "U"; }
+.pea-cube-bottom::after{ content: "D"; }
+/* 正面是图片，不显示角标（与图片抢内容） */
+.pea-cube-front::after { content: none; }
 .pea-angle-cube-controls {
   flex: 1;
   display: flex;

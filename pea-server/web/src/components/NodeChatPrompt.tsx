@@ -1228,7 +1228,9 @@ useEffect(() => {
   // 选中时不渲染下方编辑框。NodeChatPrompt 由 CanvasEditor 常驻挂载，这里 return null
   // 只卸载编辑框子树，组件自身的 draftRef 草稿仍在内存中，切回可生成节点即可续写。
   // cubeOpen：角度魔方模式激活时，编辑框由 AngleCubeOverlay 替代，此处不渲染。
-  const cubeOpen = !!(sel?.data.meta?.cubeOpen);
+  // 该状态来自 store.cubeOpenNodeId（单一数据源），不读 meta，避免关闭后误恢复。
+  const cubeOpenNodeId = useCanvas((s) => s.cubeOpenNodeId);
+  const cubeOpen = !!(sel && cubeOpenNodeId === sel.id);
   if (!sel || !single || !anchorEl || hideEditor || cubeOpen) return null;
   const cfg = KIND_CFG[kind] ?? KIND_CFG.text;
 
