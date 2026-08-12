@@ -262,7 +262,7 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
       { label: <><code style={{ fontSize: 11 }}>&lt;/&gt;</code></>, title: '行内代码', cmd: 'formatBlock', value: 'PRE' },
       { label: <>—</>, title: '分割线', cmd: 'insertHorizontalRule' },
       null,
-      { label: <span className="tne-color-dot" style={{ background: '#1fa2dc' }} />, title: '蓝色', cmd: 'foreColor', value: '#1fa2dc' },
+      { label: <span className="tne-color-dot" style={{ background: '#8b5cf6' }} />, title: '蓝色', cmd: 'foreColor', value: '#8b5cf6' },
       { label: <span className="tne-color-dot" style={{ background: '#e74c3c' }} />, title: '红色', cmd: 'foreColor', value: '#e74c3c' },
       { label: <span className="tne-color-dot" style={{ background: '#27ae60' }} />, title: '绿色', cmd: 'foreColor', value: '#27ae60' },
       { label: <span className="tne-color-dot" style={{ background: '#f39c12' }} />, title: '橙色', cmd: 'foreColor', value: '#f39c12' },
@@ -301,7 +301,7 @@ export default function TextNodeEditorModal({ open, initialHtml, onSave, onCance
       }}
       title={
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ color: 'var(--tne-accent, #1fa2dc)', flexShrink: 0 }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" style={{ color: 'var(--tne-accent, #8b5cf6)', flexShrink: 0 }}>
             <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
           </svg>
           <span style={{ fontWeight: 600, fontSize: 15 }}>文本编辑器</span>

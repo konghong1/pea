@@ -125,12 +125,12 @@ export default function AngleCubeOverlay({ nodeId, url, onClose, onConfirm }: Pr
           >
             {(() => {
               /* 等比缩放基础尺寸（不用 CSS scale，避免 translateZ 被同比例放大导致透视变形）
-               * 对标参考图：
-               *   zoom=0  → 图2 小立方体，约 72px（占 220px 框的 ~33%）
-               *   zoom=10 → 图1 大立方体，投影~200px（占框 ~91%，接近填满但不溢出）
+               * 紧凑面板：预览框 160px，左下角留 28px 图标区；
+               *   zoom=0  → 小立方体，约 46px（占 160px 框的 ~29%）
+               *   zoom=10 → 大立方体，正方面 70px × 1.37 ≈ 96px 投影（占框 ~60%，不会碰到左下角重置按钮）
                * 立方体固定旋转态(rotation=-30/tilt=23)，旋转后投影≈正方面的1.37倍 */
-              const baseSize = 66;
-              const maxSize = 112; // zoom=10 正方面112px × 1.37 ≈ 153px 投影（占220px预览框约70%，对标参考图）
+              const baseSize = 46;
+              const maxSize = 70;
               const cubeSize = Math.round(baseSize + (maxSize - baseSize) * (zoom / 10));
               const halfZ = Math.round(cubeSize / 2);
               return (
@@ -160,6 +160,20 @@ export default function AngleCubeOverlay({ nodeId, url, onClose, onConfirm }: Pr
               );
             })()}
           </div>
+
+          {/* 重置按钮：仅图标，悬浮在预览区左下角，避免与最大立方体重叠 */}
+          <button
+            type="button"
+            className="pea-angle-cube-reset-icon"
+            onClick={reset}
+            title="重置角度"
+            aria-label="重置角度"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+            </svg>
+          </button>
         </div>
 
         <div className="pea-angle-cube-controls">
@@ -203,45 +217,39 @@ export default function AngleCubeOverlay({ nodeId, url, onClose, onConfirm }: Pr
               <span className="pea-angle-cube-toggle-knob" />
             </button>
           </div>
-        </div>
-      </div>
 
-      <div className="pea-angle-cube-footer">
-        {/* 重置 */}
-        <button type="button" className="pea-angle-cube-reset-foot" onClick={reset} title="重置角度">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-            <path d="M3 3v5h5" />
-          </svg>
-          重置
-        </button>
-
-        {/* 参数胶囊：齿轮图标 + 消耗数字 + 圆形发送按钮（合并消除间距） */}
-        <div className="pea-angle-cube-send-pill">
-          <span className="pea-angle-cube-cost" title="固定消耗当前模型 1 张图">
-            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-            {est ? Math.round(est.cost) : '—'}
-          </span>
-          <button
-            type="button"
-            className="pea-angle-cube-send"
-            onClick={handleSend}
-            disabled={!canSend || loading}
-            aria-label="发送生成"
-            title={est?.allowed ? '发送生成' : '当前模型不可用'}
-          >
-            {loading ? (
-              <span className="pea-angle-cube-send-spinner" />
-            ) : (
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 19V5" />
-                <path d="M5 12l7-7 7 7" />
-              </svg>
-            )}
-          </button>
+          {/* 发送胶囊：齿轮 + 短横线 + 灰色圆形箭头按钮（与截图一致），放在参数区底部 */}
+          <div className="pea-angle-cube-send-row">
+            <div className="pea-angle-cube-send-pill">
+              <span
+                className="pea-angle-cube-cost"
+                title={est ? `预计消耗 ${Math.round(est.cost)} Tapies` : '当前模型不可用'}
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+                <span className="pea-angle-cube-cost-sep" aria-hidden>—</span>
+              </span>
+              <button
+                type="button"
+                className="pea-angle-cube-send"
+                onClick={handleSend}
+                disabled={!canSend || loading}
+                aria-label="发送生成"
+                title={est?.allowed ? '发送生成' : '当前模型不可用'}
+              >
+                {loading ? (
+                  <span className="pea-angle-cube-send-spinner" />
+                ) : (
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2">
+                    <path d="M12 19V5" />
+                    <path d="M5 12l7-7 7 7" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -268,12 +276,12 @@ function SliderRow({
   const fmt = `${value > 0 && suffix ? '+' : ''}${value}${suffix}`;
   // 当前值在 range 中的位置百分比（0~100）
   const progress = ((value - min) / (max - min)) * 100;
-  // 以中心点(0值=50%)为原点，向当前值方向填充：
-  //   正值：中心(50%) → 进度位置（向右亮）
-  //   负值：进度位置 → 中心(50%)（向左亮）
-  //   零值：from==to 无填充
-  const fromPct = value >= 0 ? 50 : progress;
-  const toPct = value >= 0 ? progress : 50;
+  // 填充逻辑：
+  //   - 对称范围（含负值，如旋转 -45~+45）：以中心(50%)为原点双向填充
+  //   - 非负范围（如缩放 0~10）：标准左到右填充
+  const isSymmetric = min < 0 && max > 0;
+  const fromPct = isSymmetric ? (value >= 0 ? 50 : progress) : 0;
+  const toPct = isSymmetric ? (value >= 0 ? progress : 50) : progress;
   return (
     <div className="pea-angle-cube-row">
       <span className="pea-angle-cube-label">{label}</span>

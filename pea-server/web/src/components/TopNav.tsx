@@ -1,5 +1,5 @@
 import { App, Select, Tooltip } from 'antd';
-import { ShareAltOutlined } from '@ant-design/icons';
+import { ShareAltOutlined, DownOutlined, TeamOutlined } from '@ant-design/icons';
 import { useAuth } from '../store/auth';
 import { useTheme } from '../store/theme';
 import { useUi, PageKey } from '../store/ui';
@@ -79,8 +79,8 @@ export default function TopNav() {
             <svg className="pea-balance-gem" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
               <defs>
                 <radialGradient id="topnavOrbBg" cx="40%" cy="35%" r="60%">
-                  <stop offset="0%" stopColor="#B8E2FF"/>
-                  <stop offset="50%" stopColor="#3B9EFF"/>
+                  <stop offset="0%" stopColor="#c4b5fd"/>
+                  <stop offset="50%" stopColor="#a78bfa"/>
                   <stop offset="100%" stopColor="#5B7BF5"/>
                 </radialGradient>
                 <linearGradient id="topnavOrbShine" x1="6" y1="4" x2="18" y2="16">
@@ -107,7 +107,7 @@ export default function TopNav() {
           </button>
         </Tooltip>
         <button type="button" className="pea-topnav-community" onClick={() => toast.info('社区功能即将开放')}>
-          ✦ 社区
+          <TeamOutlined /> 社区
         </button>
         <Tooltip title="复制分享链接">
           <button type="button" className="pea-topnav-share" aria-label="复制分享链接" onClick={onShare}>
@@ -119,7 +119,7 @@ export default function TopNav() {
           className="pea-theme-select"
           value={mode}
           onChange={(v) => setMode(v)}
-          suffixIcon={<span className="text-xs">▾</span>}
+          suffixIcon={<DownOutlined />}
           options={[
             { label: '浅色', value: 'light' },
             { label: '深色', value: 'dark' },

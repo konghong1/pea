@@ -32,7 +32,7 @@ const HEADER_HEIGHT = 36;
 const COLOR_PRESETS: { color: string; label: string }[] = [
   { color: 'transparent', label: '透明' },
   { color: 'rgba(255,255,255,0.08)', label: '浅白' },
-  { color: 'rgba(31,162,220,0.16)', label: '蓝' },
+  { color: 'rgba(99,102,241,0.16)', label: '靛' },
   { color: 'rgba(239,68,68,0.16)', label: '红' },
   { color: 'rgba(34,197,94,0.16)', label: '绿' },
   { color: 'rgba(234,179,8,0.16)', label: '黄' },

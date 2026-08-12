@@ -4,98 +4,280 @@
 
 :root {
   color-scheme: light dark;
-  /* pea 设计令牌（对齐 pea-canvas-v12.html） */
-  --pea-bg-deep: #f4f4f7;
+
+  /* ══ 统一设计系统（Runway cinematic + Vercel precision）══
+     默认 = precision（Vercel 单色精准）；画布容器加 data-surface="cinematic" 覆盖为电影感暗色。
+     语义彩色仅三类：AI 紫(--pea-purple) / 失败琥珀(--pea-warn) / 成功青柠(--pea-lime)。
+     青色(var(--pea-brand))已弃用 —— 主操作一律中性黑/白。 */
+  --pea-bg-deep: #fafafa;
   --pea-bg-surface: #ffffff;
   --pea-bg-panel: #ffffff;
-  --pea-bg-elevated: #f0f0f3;
-  --pea-border: rgba(0, 0, 0, 0.10);
-  --pea-text-primary: #1a1a1f;
-  --pea-text-secondary: #555560;
-  --pea-text-muted: #9999a8;
-  --pea-brand: #1fa2dc;
-  --pea-brand-strong: #0b86bd;
+  --pea-bg-elevated: #f5f5f5;
+  --pea-border: #ebebeb;
+  --pea-border-strong: #a1a1a1;
+  --pea-text-primary: #171717;
+  --pea-text-secondary: #4d4d4d;
+  --pea-text-muted: #888888;
+  --pea-text-2: #4d4d4d;
+  --pea-text-3: #888888;
+  --pea-brand: #171717;
+  --pea-brand-strong: #000000;
   --pea-purple: #8b5cf6;
+  --pea-purple-soft: #d8ccf1;
   --pea-lime: #34d399;
-  /* 派生强调色（基于系统 brand，不新增配色）：用于按钮/状态光/辉光 */
-  --pea-accent: #1fa2dc;
-  --pea-accent-soft: #5cc6ec;   /* 亮色 tint，用于暗底上的辉光/标签 */
-  --pea-accent-press: #0b86bd;  /* 按下态 */
-  --pea-warn: #f59e0b;          /* 优雅琥珀，替代饱和红 */
-  --pea-warn-soft: #ffb454;
+  --pea-accent: #171717;
+  --pea-accent-rgb: 23, 23, 23;
+  --pea-accent-soft: #d4d4d8;
+  --pea-accent-press: #000000;
+  --pea-warn: #f5a623;
+  --pea-warn-soft: #ffefcf;
   --pea-success: #34d399;
 
-  /* ── 连线令牌（亮色背景 #f4f4f7）───────────────────────────────────────
-     空闲连线要"退到背景里"：低饱和的冷灰蓝 + 低透明 + 微模糊；
-     激活（选中边 / 选中或拖动端点节点）才切到品牌蓝并发光。
-     2026-08-03：提升 idle 对比度并减弱 blur，避免在 group 浅灰背景上完全看不见。 */
-  --pea-edge-idle: rgba(70, 90, 115, 0.52);
+  /* 字体（precision=Vercel：Geist 主导；创作者端在各自 surface 覆写为 Inter） */
+  --pea-font-sans: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --pea-font-mono: 'Geist Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+
+  /* 几何 / 高程（precision：Vercel 堆叠微影） */
+  --pea-radius-sm: 6px;
+  --pea-radius-md: 8px;
+  --pea-radius-lg: 12px;
+  --pea-radius-pill: 9999px;
+  --pea-shadow-1: 0 0 0 1px #00000014;
+  --pea-shadow-2: 0 1px 1px #00000005, 0 2px 2px #0000000a;
+  --pea-shadow-3: 0 2px 2px #0000000a, 0 8px 8px -8px #0000000a;
+  --pea-shadow-4: 0 2px 2px #0000000a, 0 8px 16px -4px #0000000a;
+  --pea-shadow-5: 0 1px 1px #00000005, 0 8px 16px -4px #0000000a, 0 24px 32px -8px #0000000f;
+
+  /* ── 连线令牌（precision 亮色：中性墨色流光，非青）────────────────────── */
+  --pea-edge-idle: rgba(70, 90, 115, 0.42);
   --pea-edge-idle-w: 1.5px;
   --pea-edge-idle-blur: 0.25px;
-  --pea-edge-hover: rgba(31, 162, 220, 0.55);
-  --pea-edge-active: rgba(31, 162, 220, 0.92);
-  --pea-edge-active-w: 2.1px;
-  --pea-edge-halo: rgba(31, 162, 220, 0.22);
-  --pea-edge-glow: rgba(31, 162, 220, 0.5);
-  /* 方向渐变：source 端淡 → target 端亮 */
-  --pea-edge-flow-from: rgba(31, 162, 220, 0);
-  --pea-edge-flow-mid: rgba(31, 162, 220, 0.55);
-  --pea-edge-flow-to: rgba(11, 134, 189, 0.95);
-  --pea-edge-comet: #0b86bd;
-  --pea-edge-comet-glow: rgba(31, 162, 220, 0.85);
-  /* 方向箭头 + 源点脉冲（科技感方向指示） */
-  --pea-edge-arrow: rgba(31, 162, 220, 0.92);
-  --pea-edge-src-pulse: rgba(31, 162, 220, 0.5);
-  /* 删除芯片 */
+  --pea-edge-hover: rgba(23, 23, 23, 0.5);
+  --pea-edge-active: rgba(23, 23, 23, 0.9);
+  --pea-edge-active-w: 2px;
+  --pea-edge-halo: rgba(23, 23, 23, 0.15);
+  --pea-edge-glow: rgba(23, 23, 23, 0.25);
+  --pea-edge-flow-from: rgba(23, 23, 23, 0);
+  --pea-edge-flow-mid: rgba(23, 23, 23, 0.5);
+  --pea-edge-flow-to: rgba(23, 23, 23, 0.95);
+  --pea-edge-comet: #171717;
+  --pea-edge-comet-glow: rgba(23, 23, 23, 0.6);
+  --pea-edge-arrow: rgba(23, 23, 23, 0.9);
+  --pea-edge-src-pulse: rgba(23, 23, 23, 0.4);
   --pea-edge-chip-bg: rgba(255, 255, 255, 0.92);
-  --pea-edge-chip-stroke: rgba(31, 162, 220, 0.7);
-  --pea-edge-chip-ink: #2b6b8c;
-  --pea-edge-chip-shadow: rgba(16, 40, 60, 0.22);
+  --pea-edge-chip-stroke: rgba(23, 23, 23, 0.5);
+  --pea-edge-chip-ink: #404040;
+  --pea-edge-chip-shadow: rgba(16, 40, 60, 0.18);
 }
 
 .dark {
   --pea-bg-deep: #0a0a0a;
   --pea-bg-surface: #0f0f0f;
-  --pea-bg-panel: #1f1f1f;
-  --pea-bg-elevated: #262626;
-  --pea-border: rgba(255, 255, 255, 0.10);
+  --pea-bg-panel: #111111;
+  --pea-bg-elevated: #1a1a1a;
+  --pea-border: #27272a;
+  --pea-border-strong: #3f3f3f;
   --pea-text-primary: #f5f5f5;
-  --pea-text-secondary: #d4d4d8;
-  --pea-text-muted: #7a7a7a;
-  --pea-brand: #1fa2dc;
-  --pea-brand-strong: #90c4e5;
-  --pea-purple: #8b5cf6;
+  --pea-text-secondary: #a1a1a1;
+  --pea-text-muted: #6b7280;
+  --pea-text-2: #a1a1a1;
+  --pea-text-3: #6b7280;
+  --pea-brand: #f5f5f5;
+  --pea-brand-strong: #ffffff;
+  --pea-purple: #a78bfa;
   --pea-lime: #34d399;
-  --pea-accent: #1fa2dc;
-  --pea-accent-soft: #5cc6ec;
-  --pea-accent-press: #0b86bd;
-  --pea-warn: #f59e0b;
-  --pea-warn-soft: #ffb454;
+  --pea-accent: #f5f5f5;
+  --pea-accent-rgb: 245, 245, 245;
+  --pea-accent-soft: #525252;
+  --pea-accent-press: #ffffff;
+  --pea-warn: #f5a623;
+  --pea-warn-soft: #ab570a;
   --pea-success: #34d399;
 
-  /* ── 连线令牌（暗色背景 #0a0a0a）───────────────────────────────────────
-     暗底上"融入背景"= 压低亮度而不是压低对比度过头，
-     否则线会彻底消失。取冷灰蓝的高明度低透明版本。 */
+  /* 字体（precision 暗态仍用 Geist 主导） */
+  --pea-font-sans: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --pea-font-mono: 'Geist Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+
   --pea-edge-idle: rgba(150, 178, 200, 0.26);
   --pea-edge-idle-w: 1.5px;
   --pea-edge-idle-blur: 0.5px;
-  --pea-edge-hover: rgba(92, 198, 236, 0.6);
-  --pea-edge-active: rgba(92, 198, 236, 0.95);
-  --pea-edge-active-w: 2.1px;
-  --pea-edge-halo: rgba(31, 162, 220, 0.3);
-  --pea-edge-glow: rgba(92, 198, 236, 0.65);
-  --pea-edge-flow-from: rgba(92, 198, 236, 0);
-  --pea-edge-flow-mid: rgba(92, 198, 236, 0.6);
-  --pea-edge-flow-to: rgba(168, 232, 255, 1);
-  --pea-edge-comet: #d6f4ff;
-  --pea-edge-comet-glow: rgba(92, 198, 236, 0.95);
-  /* 方向箭头 + 源点脉冲（科技感方向指示） */
-  --pea-edge-arrow: rgba(92, 198, 236, 0.95);
-  --pea-edge-src-pulse: rgba(92, 198, 236, 0.5);
+  --pea-edge-hover: rgba(245, 245, 245, 0.55);
+  --pea-edge-active: rgba(245, 245, 245, 0.92);
+  --pea-edge-active-w: 2px;
+  --pea-edge-halo: rgba(245, 245, 245, 0.18);
+  --pea-edge-glow: rgba(245, 245, 245, 0.4);
+  --pea-edge-flow-from: rgba(245, 245, 245, 0);
+  --pea-edge-flow-mid: rgba(200, 212, 212, 0.55);
+  --pea-edge-flow-to: rgba(255, 255, 255, 0.95);
+  --pea-edge-comet: #ffffff;
+  --pea-edge-comet-glow: rgba(245, 245, 245, 0.8);
+  --pea-edge-arrow: rgba(245, 245, 245, 0.9);
+  --pea-edge-src-pulse: rgba(200, 212, 212, 0.5);
   --pea-edge-chip-bg: rgba(14, 20, 27, 0.9);
-  --pea-edge-chip-stroke: rgba(92, 198, 236, 0.75);
-  --pea-edge-chip-ink: #a8e8ff;
+  --pea-edge-chip-stroke: rgba(200, 212, 212, 0.6);
+  --pea-edge-chip-ink: #c9ccd1;
   --pea-edge-chip-shadow: rgba(0, 0, 0, 0.6);
+}
+
+/* ══ 创作端表面：Runway 电影感暗色 ══
+   画布容器加 data-surface="cinematic" 即切换为近黑、发丝边、零阴影、cool-slate 文本。
+   作用域覆盖：比 :root/.dark 更近的祖先，画布子树内优先于全局令牌。 */
+[data-surface="cinematic"] {
+  --pea-bg-deep: #000000;
+  --pea-bg-surface: #1a1a1a;
+  --pea-bg-panel: #0a0a0a;
+  --pea-bg-elevated: #1f1f1f;
+  --pea-border: #27272a;
+  --pea-border-strong: #3f3f3f;
+  --pea-text-primary: #ffffff;
+  --pea-text-secondary: #767d88;
+  --pea-text-muted: #a7a7a7;
+  --pea-text-2: #c9ccd1;
+  --pea-text-3: #8a8f99;
+  --pea-brand: #f5f5f5;
+  --pea-brand-strong: #ffffff;
+  --pea-accent: #f5f5f5;
+  --pea-accent-rgb: 245, 245, 245;
+  --pea-accent-soft: #c9ccd1;
+  --pea-accent-press: #ffffff;
+  --pea-purple: #8b5cf6;
+  --pea-lime: #34d399;
+  --pea-warn: #f5a623;
+  --pea-warn-soft: #ffefcf;
+  --pea-success: #34d399;
+  /* 字体（cinematic=Runway：Inter 主导的单一几何无衬线，全文本同字族） */
+  --pea-font-sans: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --pea-font-mono: 'Geist Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  /* 几何：功能性 4-8px；CTA pill 由 .pea-btn--primary(cinematic) 接管 */
+  --pea-radius-sm: 4px;
+  --pea-radius-md: 8px;
+  --pea-radius-lg: 12px;
+  /* Runway 零阴影：所有 elevation 归零 */
+  --pea-shadow-1: none;
+  --pea-shadow-2: none;
+  --pea-shadow-3: none;
+  --pea-shadow-4: none;
+  --pea-shadow-5: none;
+  /* 连线：cool-slate 微妙流光，亮态切白（可见度提升：0.22→0.38，黑底上肉眼可辨） */
+  --pea-edge-idle: rgba(150, 178, 200, 0.38);
+  --pea-edge-idle-w: 1.5px;
+  --pea-edge-idle-blur: 0.5px;
+  --pea-edge-hover: rgba(200, 212, 212, 0.6);
+  --pea-edge-active: rgba(245, 245, 245, 0.9);
+  --pea-edge-active-w: 2px;
+  --pea-edge-halo: rgba(245, 245, 245, 0.18);
+  --pea-edge-glow: rgba(200, 212, 212, 0.4);
+  --pea-edge-flow-from: rgba(245, 245, 245, 0);
+  --pea-edge-flow-mid: rgba(200, 212, 212, 0.55);
+  --pea-edge-flow-to: rgba(255, 255, 255, 0.95);
+  --pea-edge-comet: #ffffff;
+  --pea-edge-comet-glow: rgba(245, 245, 245, 0.8);
+  --pea-edge-arrow: rgba(245, 245, 245, 0.9);
+  --pea-edge-src-pulse: rgba(200, 212, 212, 0.5);
+  --pea-edge-chip-bg: rgba(10, 10, 10, 0.92);
+  --pea-edge-chip-stroke: rgba(200, 212, 212, 0.6);
+  --pea-edge-chip-ink: #c9ccd1;
+  --pea-edge-chip-shadow: rgba(0, 0, 0, 0.6);
+  /* 节点卡（Runway：零阴影、发丝边、近黑表面） */
+  --pea-node-bg: rgba(26, 26, 26, 0.96);
+  --pea-node-border: rgba(255, 255, 255, 0.08);
+  --pea-node-border-hover: rgba(255, 255, 255, 0.22);
+  --pea-node-shadow: none;
+  --pea-node-shadow-hover: 0 0 0 1px rgba(255, 255, 255, 0.10);
+  --pea-node-shadow-selected: 0 22px 50px rgba(0, 0, 0, 0.55);
+}
+
+/* ══ 创作端表面 #2：Figma 明亮创作 ══
+   与 Runway 互补 —— Figma 是「白画布 + 黑墨 + 发丝边 + 柔和投影 + 通栏粉彩块」的明亮创作工具美学。
+   画布容器加 data-surface="figma" 即切换为白底、纯黑字、hairline 描边、软投影、Inter 字体。
+   主 CTA 同样为纯黑药丸（与 Runway 共享「黑药丸」语言，仅底亮/暗之分）；AI 信号仍统一用紫。 */
+[data-surface="figma"] {
+  --pea-bg-deep: #ffffff;
+  --pea-bg-surface: #ffffff;
+  --pea-bg-panel: #ffffff;
+  --pea-bg-elevated: #f7f7f5;
+  --pea-border: #e6e6e6;
+  --pea-border-strong: #cfcfcf;
+  --pea-text-primary: #000000;
+  --pea-text-secondary: #4d4d4d;
+  --pea-text-muted: #8a8a8a;
+  --pea-text-2: #4d4d4d;
+  --pea-text-3: #8a8a8a;
+  --pea-brand: #000000;
+  --pea-brand-strong: #000000;
+  --pea-accent: #000000;
+  --pea-accent-rgb: 0, 0, 0;
+  --pea-accent-soft: #f7f7f5;
+  --pea-accent-press: #000000;
+  --pea-purple: #8b5cf6;
+  --pea-lime: #34d399;
+  --pea-warn: #f5a623;
+  --pea-warn-soft: #ffefcf;
+  --pea-success: #34d399;
+  /* 字体（figma=Inter 主导，figmaSans 的开源替代） */
+  --pea-font-sans: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  --pea-font-mono: 'Geist Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+  /* 几何：Figma 大圆角（色块/卡 lg=24px），功能性 6-8px，CTA pill */
+  --pea-radius-sm: 6px;
+  --pea-radius-md: 8px;
+  --pea-radius-lg: 24px;
+  /* 高程：Figma「色块即深度」——浮动元素软投影，静态块仅发丝边 */
+  --pea-shadow-1: 0 0 0 1px rgba(0, 0, 0, 0.06);
+  --pea-shadow-2: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --pea-shadow-3: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --pea-shadow-4: 0 12px 32px rgba(0, 0, 0, 0.10);
+  --pea-shadow-5: 0 16px 48px rgba(0, 0, 0, 0.12);
+  /* 连线：中性墨色（亮底用深墨，非青） */
+  --pea-edge-idle: rgba(0, 0, 0, 0.18);
+  --pea-edge-idle-w: 1.5px;
+  --pea-edge-idle-blur: 0.3px;
+  --pea-edge-hover: rgba(0, 0, 0, 0.42);
+  --pea-edge-active: rgba(0, 0, 0, 0.9);
+  --pea-edge-active-w: 2px;
+  --pea-edge-halo: rgba(0, 0, 0, 0.10);
+  --pea-edge-glow: rgba(0, 0, 0, 0.16);
+  --pea-edge-flow-from: rgba(0, 0, 0, 0);
+  --pea-edge-flow-mid: rgba(0, 0, 0, 0.4);
+  --pea-edge-flow-to: rgba(0, 0, 0, 0.9);
+  --pea-edge-comet: #000000;
+  --pea-edge-comet-glow: rgba(0, 0, 0, 0.35);
+  --pea-edge-arrow: rgba(0, 0, 0, 0.9);
+  --pea-edge-src-pulse: rgba(0, 0, 0, 0.3);
+  --pea-edge-chip-bg: rgba(255, 255, 255, 0.96);
+  --pea-edge-chip-stroke: rgba(0, 0, 0, 0.35);
+  --pea-edge-chip-ink: #404040;
+  --pea-edge-chip-shadow: rgba(0, 0, 0, 0.10);
+  /* 节点卡（Figma：白表面、hairline 边、柔和投影） */
+  --pea-node-bg: #ffffff;
+  --pea-node-border: #e6e6e6;
+  --pea-node-border-hover: rgba(0, 0, 0, 0.18);
+  --pea-node-shadow: 0 8px 28px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.02);
+  --pea-node-shadow-hover: 0 12px 36px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --pea-node-shadow-selected: 0 16px 40px rgba(0, 0, 0, 0.16);
+}
+
+/* Figma：主 CTA = 纯黑药丸（白底），与 Runway 共享黑药丸语言 */
+[data-surface="figma"] .pea-btn--primary {
+  --btn-fg: #ffffff;
+  background: #000000;
+  border-radius: var(--pea-radius-pill);
+  border: 1px solid rgba(0, 0, 0, 0.0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+[data-surface="figma"] .pea-btn--primary:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  transform: translateY(-1px);
+}
+
+/* Figma：ghost = 黑墨克制描边（亮底） */
+[data-surface="figma"] .pea-btn--ghost {
+  --btn-bg: rgba(0, 0, 0, 0.04);
+  --btn-fg: #000000;
+  --btn-border: rgba(0, 0, 0, 0.12);
+}
+[data-surface="figma"] .pea-btn--ghost:hover {
+  --btn-bg: rgba(0, 0, 0, 0.08);
+  --btn-border: rgba(0, 0, 0, 0.2);
 }
 
 html,
@@ -106,10 +288,15 @@ body,
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  font-family: var(--pea-font-sans);
   background: var(--pea-bg-deep);
   color: var(--pea-text-primary);
   transition: background 0.2s ease, color 0.2s ease;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--pea-purple) 26%, transparent);
+  color: var(--pea-text-primary);
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
@@ -170,14 +357,15 @@ body {
 .pea-btn--sm    { padding: 5px 11px; font-size: 11px; border-radius: 7px; }
 .pea-btn--block { width: 100%; }
 
-/* primary：青色渐变 + 柔光 + 扫光（系统 brand） */
+/* primary：中性黑/白（precision）；画布端由 [data-surface="cinematic"] 覆写为纯黑药丸 */
 .pea-btn--primary {
-  --btn-fg: #04141c;
-  background: linear-gradient(180deg, var(--pea-accent-soft), var(--pea-accent));
+  --btn-fg: #ffffff;
+  background: var(--pea-brand);
   border-color: transparent;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.28),
-    0 2px 10px rgba(31, 162, 220, 0.30);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    0 1px 2px rgba(0, 0, 0, 0.18);
+  border-radius: var(--pea-radius-sm);
   font-weight: 600;
 }
 .pea-btn--primary::after {
@@ -190,10 +378,24 @@ body {
 }
 .pea-btn--primary:hover {
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.40),
-    0 4px 18px rgba(31, 162, 220, 0.50);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 2px 8px rgba(0, 0, 0, 0.22);
+  transform: translateY(-1px);
 }
 .pea-btn--primary:hover::after { transform: translateX(120%); transition: transform 0.6s ease; }
+
+/* 创作端：纯黑药丸 CTA（Runway 电影感） */
+[data-surface="cinematic"] .pea-btn--primary {
+  --btn-fg: #ffffff;
+  background: #000000;
+  border-radius: var(--pea-radius-pill);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: none;
+}
+[data-surface="cinematic"] .pea-btn--primary:hover {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
+  transform: translateY(-1px);
+}
 
 /* ghost：克制描边，悬停轻微提亮 */
 .pea-btn--ghost {
@@ -251,7 +453,7 @@ body {
   --btn-border: var(--pea-border);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
-.pea-btn--light.pea-btn--primary { --btn-fg: #04141c; }
+.pea-btn--light.pea-btn--primary { --btn-fg: #ffffff; }
 .pea-btn--light.pea-btn--ghost {
   --btn-bg: transparent;
   --btn-fg: var(--pea-text-secondary);
@@ -336,11 +538,11 @@ body {
   /* 整节点外柔光呼吸 (只留 blur 光晕, 不出实心环 —— 实心环会和 HUD 4 角叠加成两层框) */
   0%, 100% {
     box-shadow:
-      0 0 24px -4px color-mix(in srgb, var(--pea-accent, #1fa2dc) 20%, transparent);
+      0 0 24px -4px color-mix(in srgb, var(--pea-accent, var(--pea-brand)) 20%, transparent);
   }
   50% {
     box-shadow:
-      0 0 48px -2px color-mix(in srgb, var(--pea-accent, #1fa2dc) 45%, transparent);
+      0 0 48px -2px color-mix(in srgb, var(--pea-accent, var(--pea-brand)) 45%, transparent);
   }
 }
 .pea-node:hover {
@@ -378,9 +580,9 @@ body {
   width: 100%;          /* 撑满 .pea-node 父节点，不被内容（audio/video 等）撑窄 */
   box-sizing: border-box;
   border-radius: 18px;
-  background: rgba(34, 34, 40, 0.96);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  background: var(--pea-node-bg, rgba(34, 34, 40, 0.96));
+  border: 1px solid var(--pea-node-border, rgba(255, 255, 255, 0.07));
+  box-shadow: var(--pea-node-shadow, 0 18px 40px rgba(0, 0, 0, 0.45));
   min-height: 130px;
   display: flex;
   align-items: center;
@@ -395,49 +597,29 @@ body {
   overflow: hidden; /* 图片节点需要让图片完全贴合 body-card 圆角 */
 }
 .pea-node-body-card:hover {
-  /* hover 反馈下沉到 body-card：轻微外发光，与 .pea-node 自身的 transition 互补。
-     不用 transform，避免和 ReactFlow 拖拽 transform 打架。 */
+  /* hover 仅做边框提亮（框级状态反馈），不动图片、不加发光/外影，
+     避免任何"变亮"观感影响图片观看体验。 */
+  border-color: var(--pea-node-border-hover, rgba(255, 255, 255, 0.22));
+}
+/* 选中态 = AI 紫环（语义：选中即"即将 AI 活动"，与全局 AI 紫信号统一，三表面一致）。
+   纯静态状态变化，无装饰性动画；边框/阴影平滑过渡由 .pea-node-body-card 既有
+   transition（border-color/box-shadow）承担，不属于"动画"。
+   ring 用 box-shadow 模拟（不影响布局，避免 1px→2px 边框抖动）。 */
+/* 选中态 = AI 紫环（语义：选中即"即将 AI 活动"，与全局 AI 紫信号统一，三表面一致）。
+   纯静态状态变化，无装饰性动画；边框/阴影平滑过渡由 .pea-node-body-card 既有
+   transition（border-color/box-shadow）承担，不属于"动画"。
+   ring 用 box-shadow 模拟（不影响布局，避免 1px→2px 边框抖动）。
+   注意：必须覆盖 .pea-node-image/video.pea-node-has-media .pea-node-body-card 的
+   border/box-shadow 简写（同特异性、源码位置更靠后），故选择器带上 has-media 变体提权。 */
+.pea-node.selected .pea-node-body-card,
+.pea-node-image.pea-node-has-media.selected .pea-node-body-card,
+.pea-node-video.pea-node-has-media.selected .pea-node-body-card {
+  border-color: var(--pea-purple, #8b5cf6);
+  border-width: 1.5px;
+  overflow: hidden;
   box-shadow:
-    0 22px 48px rgba(0, 0, 0, 0.50),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
-}
-/* 选中：1.5px 蓝边 + ring（box-shadow 0 0 0 1.5px）+ 略加深的投影。
-   ring 用 box-shadow 而不是 border 扩展，是因为 1px→1.5px 的 border 变化会顶动内层 1px，
-   让 box-card 的视觉尺寸有 0.5px 抖动；用 box-shadow 模拟 ring 不影响布局。
-   单选时不再画 .pea-selection-bounds 外框（见 SelectionBoundsBox.tsx），
-   选中反馈全部由节点自身的 ring + 投影承担。 */
-.pea-node.selected .pea-node-body-card {
-  border-color: var(--pea-brand, #38e1ff);
-  box-shadow:
-    0 0 0 1.5px var(--pea-brand, #38e1ff),
-    0 0 18px 0 rgba(56, 225, 255, 0.28),
-    0 22px 50px rgba(0, 0, 0, 0.55);
-}
-/* 进入选中时跑一次 ripple：在 0.3s 内 ring 由"无"扩散到 1.5px 蓝光，
-   让"选中"从单纯变色升级为有动画。ripple 只跑一次（.selected 加上后触发，
-   同一节点重复点击因为 .selected 状态没变化不会重跑，符合预期）。 */
-.pea-node.selected .pea-node-body-card {
-  animation: pea-node-select 300ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-@keyframes pea-node-select {
-  0% {
-    box-shadow:
-      0 0 0 0 rgba(56, 225, 255, 0.0),
-      0 0 0 0 rgba(56, 225, 255, 0.0),
-      0 18px 40px rgba(0, 0, 0, 0.45);
-  }
-  60% {
-    box-shadow:
-      0 0 0 4px rgba(56, 225, 255, 0.35),
-      0 0 22px 2px rgba(56, 225, 255, 0.32),
-      0 22px 50px rgba(0, 0, 0, 0.55);
-  }
-  100% {
-    box-shadow:
-      0 0 0 1.5px rgba(56, 225, 255, 1.0),
-      0 0 18px 0 rgba(56, 225, 255, 0.28),
-      0 22px 50px rgba(0, 0, 0, 0.55);
-  }
+    0 0 0 1px color-mix(in srgb, var(--pea-purple, #8b5cf6) 14%, transparent),
+    var(--pea-node-shadow-selected, 0 12px 28px rgba(0, 0, 0, 0.35));
 }
 
 /* 选中外层光晕 - 已在 .pea-node.selected .pea-node-body-card 中通过 box-shadow 实现 */
@@ -632,7 +814,7 @@ body {
   color: var(--pea-warn-soft, #ffb454);
 }
 .pea-node-badge-dot.uploaded {
-  color: var(--pea-accent-soft, #5cc6ec);
+  color: var(--pea-accent-soft, var(--pea-accent-soft));
 }
 /* 空媒体节点的安静上传区（取代原先悬浮的大黑“上传”药丸，与结果态标签风格统一） */
 .pea-node-media-placeholder-icon {
@@ -670,7 +852,7 @@ body {
    故可放心用 overflow:hidden 让圆角干净裁切媒体。 */
 .pea-node-image.pea-node-has-media .pea-node-body-card {
   padding: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: #000000;
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
   aspect-ratio: auto;  /* inline height 已锁定框高，aspect-ratio 不生效 */
@@ -726,7 +908,7 @@ body {
    视频被缩在更小的盒子内、四周留白。现改为与图片结果一致，节点尺寸由视频原始比例决定。 */
 .pea-node-video.pea-node-has-media .pea-node-body-card {
   padding: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: #000000;
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
   aspect-ratio: auto;
@@ -773,12 +955,9 @@ body {
   object-fit: cover;
   border-radius: 0;
   cursor: default;
-  transition: filter 0.2s ease, opacity 0.25s ease;
+  opacity: 1;
   background: #000;
   aspect-ratio: auto;
-}
-.pea-node-video.pea-node-has-media .pea-node-result-video-wrap:hover .pea-node-media-preview {
-  filter: brightness(1.04);
 }
 
 .pea-node-media-card {
@@ -1027,7 +1206,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   height: 32px;
   border-radius: 50%;
   border: 3px solid rgba(255, 255, 255, 0.12);
-  border-top-color: var(--pea-brand, #1fa2dc);
+  border-top-color: var(--pea-brand, var(--pea-brand));
   animation: pea-spin 0.8s linear infinite;
 }
 @keyframes pea-spin {
@@ -1043,7 +1222,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
    已上移到 .pea-node.is-generating 内的 .pea-node-hud，让 4 个角贴在节点框 4 角，
    "在节点框内动"的视觉感更直接。 */
 .tech-loader {
-  --tech-color: var(--pea-accent, #1fa2dc);
+  --tech-color: var(--pea-accent, var(--pea-brand));
   color: var(--tech-color);
   display: flex;
   flex-direction: column;
@@ -1438,7 +1617,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   align-items: center;
   justify-content: center;
   overflow: visible !important;
-  filter: drop-shadow(0 0 3px rgba(31, 162, 220, 0.55)) !important;
+  filter: drop-shadow(0 0 3px rgba(var(--pea-accent-rgb), 0.55)) !important;
   /* 鼠标小范围跟随：--pea-hx / --pea-hy 由 PeaNode 注入（屏幕 px），
      直接位移，配合弹回逻辑使手柄不会进入节点框。 */
   transform: translate(var(--pea-hx, 0px), var(--pea-hy, 0px)) translateY(-50%) !important;
@@ -1456,13 +1635,13 @@ html:not(.dark) .pea-node-prompt-echo-params {
 }
 .pea-handle-glyph .hg-ring {
   fill: none;
-  stroke: var(--pea-brand, #1fa2dc);
+  stroke: var(--pea-brand, var(--pea-brand));
   stroke-width: 1.6;
   opacity: 0.9;
 }
 .pea-handle-glyph .hg-core {
-  fill: var(--pea-brand, #1fa2dc);
-  filter: drop-shadow(0 0 3px var(--pea-brand, #1fa2dc));
+  fill: var(--pea-brand, var(--pea-brand));
+  filter: drop-shadow(0 0 3px var(--pea-brand, var(--pea-brand)));
 }
 .pea-handle-glyph .hg-rotor {
   fill: none;
@@ -1482,7 +1661,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   pointer-events: all !important;
   width: 19px !important;
   height: 19px !important;
-  filter: drop-shadow(0 0 7px rgba(31, 162, 220, 0.9)) !important;
+  filter: drop-shadow(0 0 7px rgba(var(--pea-accent-rgb), 0.9)) !important;
 }
 .pea-node.hover .pea-handle .hg-rotor {
   opacity: 0.9;
@@ -1495,7 +1674,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   pointer-events: all !important;
   width: 22px !important;
   height: 22px !important;
-  filter: drop-shadow(0 0 10px rgba(31, 162, 220, 1)) !important;
+  filter: drop-shadow(0 0 10px rgba(var(--pea-accent-rgb), 1)) !important;
 }
 .react-flow__handle.pea-handle.connectingfrom .hg-rotor {
   opacity: 1;
@@ -1646,7 +1825,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #2f7dff;
+  background: #8b5cf6;
   display: inline-block;
 }
 .pea-add-menu-tag {
@@ -1705,8 +1884,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
   transform: scale(0.94) translateY(0);
 }
 .tnt-btn.active {
-  background: rgba(31, 162, 220, 0.18);
-  color: #38e1ff;
+  background: rgba(var(--pea-accent-rgb), 0.18);
+  color: #c4b5fd;
 }
 
 /* 颜色选择圆点按钮 */
@@ -1749,8 +1928,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
    pointer-events:none —— 选择框不拦截事件，拖拽期间经过节点的 hover/点击仍命中节点本身。 */
 .react-flow__selection {
   /* !important 必须：ReactFlow 会在运行时注入默认样式（晚于本包样式、同特异性），不加 !important 会被覆盖 */
-  background: rgba(31, 162, 220, 0.10) !important;
-  border: 1.5px solid var(--pea-brand, #1fa2dc) !important;
+  background: rgba(var(--pea-accent-rgb), 0.10) !important;
+  border: 1.5px solid var(--pea-brand, var(--pea-brand)) !important;
   pointer-events: none !important;
 }
 /* nodesselection SVG 容器本身：确保不被任何父元素裁剪，选区矩形完整展示 */
@@ -1851,8 +2030,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
 }
 .pea-eb-btn:hover { background: rgba(255, 255, 255, 0.06); }
 .pea-eb-btn.primary {
-  background: var(--pea-brand, #1fa2dc);
-  border-color: var(--pea-brand, #1fa2dc);
+  background: var(--pea-brand, var(--pea-brand));
+  border-color: var(--pea-brand, var(--pea-brand));
   color: #fff;
 }
 .pea-eb-btn.primary:hover { filter: brightness(1.08); }
@@ -1860,7 +2039,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
 .pea-sel-box {
   position: fixed;
   z-index: 35;
-  background: rgba(31, 162, 220, 0.1);
+  background: rgba(var(--pea-accent-rgb), 0.1);
   border: 1px solid var(--pea-brand);
   border-radius: 4px;
   pointer-events: none;
@@ -1918,14 +2097,14 @@ html:not(.dark) .pea-node-prompt-echo-params {
   transform: scale(0.94);
 }
 .pea-tlb-btn.active {
-  background: rgba(31, 162, 220, 0.14);
+  background: rgba(var(--pea-accent-rgb), 0.14);
   color: var(--pea-brand);
 }
 .pea-tlb-avatar {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--pea-brand), #0ea5e9);
+  background: linear-gradient(135deg, var(--pea-brand), #8b5cf6);
   color: #fff;
   display: flex;
   align-items: center;
@@ -1934,12 +2113,12 @@ html:not(.dark) .pea-node-prompt-echo-params {
   font-weight: 700;
   cursor: pointer;
   border: 2px solid var(--pea-bg-panel);
-  box-shadow: 0 2px 8px rgba(31, 162, 220, 0.25);
+  box-shadow: 0 2px 8px rgba(var(--pea-accent-rgb), 0.25);
   transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
 }
 .pea-tlb-avatar:hover {
   transform: scale(1.05);
-  box-shadow: 0 4px 14px rgba(31, 162, 220, 0.35);
+  box-shadow: 0 4px 14px rgba(var(--pea-accent-rgb), 0.35);
 }
 .pea-tlb-avatar:active {
   transform: scale(0.96);
@@ -2140,7 +2319,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
 }
 
 .pea-material-row.active {
-  background: rgba(31, 162, 220, 0.12);
+  background: rgba(var(--pea-accent-rgb), 0.12);
   color: var(--pea-brand);
 }
 
@@ -3289,15 +3468,14 @@ html:not(.dark) .pea-node-prompt-echo-params {
   cursor: not-allowed;
 }
 
-/* ===== 画布点阵背景 (pea-canvas-v12 .canvas-viewport) ===== */
+/* ===== 画布点阵背景 (pea-canvas-v12 .canvas-viewport) =====
+   点的 fill 由 ReactFlow <Background color="var(--pea-edge-idle)" /> 控制（surface-aware：
+   cinematic=cool-slate 半透、figma=深墨半透）。这里只兜底默认色，避免被旧硬编码白色 fill 覆盖。 */
 .react-flow__background {
   background-color: var(--pea-bg-deep);
 }
 .react-flow__background-pattern.dots {
-  fill: rgba(255, 255, 255, 0.05);
-}
-.react-flow__background {
-  background-color: var(--pea-bg-deep);
+  fill: var(--pea-edge-idle);
 }
 .react-flow__container { background-color: var(--pea-bg-deep); }
 .react-flow { background: var(--pea-bg-deep); }
@@ -3387,8 +3565,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
   pointer-events: none;
   z-index: 9999;
   isolation: isolate;
-  border: 2px solid var(--pea-brand, #1fa2dc);
-  background: rgba(31, 162, 220, 0.12);
+  border: 2px solid var(--pea-brand, var(--pea-brand));
+  background: rgba(var(--pea-accent-rgb), 0.12);
   border-radius: 4px;
   box-sizing: border-box;
   transition: opacity 120ms ease;
@@ -3403,8 +3581,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
   position: fixed;
   pointer-events: none;
   z-index: 40;
-  border: 1px solid var(--pea-brand, #1fa2dc);
-  background: rgba(31, 162, 220, 0.06);
+  border: 1px solid var(--pea-brand, var(--pea-brand));
+  background: rgba(var(--pea-accent-rgb), 0.06);
   border-radius: 4px;
   box-sizing: border-box;
   transition: opacity 120ms ease;
@@ -3747,20 +3925,20 @@ html:not(.dark) .pea-node-prompt-echo-params {
   transition: all 0.18s ease;
 }
 .pea-nav-item:hover {
-  background: rgba(31, 162, 220, 0.1);
+  background: rgba(var(--pea-accent-rgb), 0.1);
   color: #2b2b2b;
 }
 .dark .pea-nav-item {
   color: #b8b8c0;
 }
 .dark .pea-nav-item:hover {
-  background: rgba(31, 162, 220, 0.18);
+  background: rgba(var(--pea-accent-rgb), 0.18);
   color: #fff;
 }
 .pea-nav-item.active {
-  color: #1fa2dc;
+  color: var(--pea-brand);
   font-weight: 600;
-  background: rgba(31, 162, 220, 0.14);
+  background: rgba(var(--pea-accent-rgb), 0.14);
 }
 .pea-nav-item.active::after {
   content: '';
@@ -3770,7 +3948,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   bottom: -1px;
   height: 2px;
   border-radius: 2px;
-  background: linear-gradient(90deg, #1fa2dc, #8b5cf6);
+  background: linear-gradient(90deg, var(--pea-brand), #8b5cf6);
 }
 
 /* ===== 全局 Toast (FR-G4) ===== */
@@ -3857,10 +4035,10 @@ html:not(.dark) .pea-node-prompt-echo-params {
   gap: 10px;
   padding: 12px;
   border-radius: 10px;
-  background: rgba(31, 162, 220, 0.06);
+  background: rgba(var(--pea-accent-rgb), 0.06);
 }
 .dark .pea-notif-item {
-  background: rgba(31, 162, 220, 0.12);
+  background: rgba(var(--pea-accent-rgb), 0.12);
 }
 .pea-notif-item.read {
   opacity: 0.6;
@@ -3903,7 +4081,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   color: #888;
 }
 .pea-user-stats b {
-  color: #1fa2dc;
+  color: var(--pea-brand);
   font-size: 14px;
 }
 
@@ -3947,7 +4125,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   align-items: center;
   justify-content: center;
   border-style: dashed;
-  color: #1fa2dc;
+  color: var(--pea-brand);
   font-weight: 600;
 }
 
@@ -4039,7 +4217,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   color: var(--pea-text-primary);
 }
 .acct-nav.active {
-  background: rgba(31, 162, 220, 0.12);
+  background: rgba(var(--pea-accent-rgb), 0.12);
   color: var(--pea-brand);
   font-weight: 600;
 }
@@ -4246,7 +4424,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   background: rgba(255, 255, 255, 0.06);
 }
 .dark .acct-nav.active {
-  background: rgba(31, 162, 220, 0.18);
+  background: rgba(var(--pea-accent-rgb), 0.18);
 }
 .dark .acct-balance-chip {
   background: var(--pea-bg-surface);
@@ -4419,7 +4597,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
 .pea-agent-suggestion:hover {
   border-color: var(--pea-brand);
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(31, 162, 220, 0.12);
+  box-shadow: 0 8px 24px rgba(var(--pea-accent-rgb), 0.12);
 }
 .dark .pea-agent-suggestion {
   background: rgba(30, 30, 38, 0.7);
@@ -4459,7 +4637,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(31, 162, 220, 0.12);
+  background: rgba(var(--pea-accent-rgb), 0.12);
   color: var(--pea-brand);
 }
 
@@ -4698,7 +4876,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   transform: scale(1.06);
 }
 .pea-canvas-controls-btn.active {
-  background: rgba(31, 162, 220, 0.22);
+  background: rgba(var(--pea-accent-rgb), 0.22);
   color: #fff;
 }
 .pea-canvas-controls-slider-wrap {
@@ -4963,13 +5141,13 @@ html:not(.dark) .pea-node-prompt-echo-params {
   padding: 0 8px 0 10px;
   border-radius: 16px;
   background: linear-gradient(180deg, rgba(40, 50, 70, 0.9) 0%, rgba(20, 26, 38, 0.95) 100%);
-  border: 1px solid rgba(125, 221, 255, 0.2);
+  border: 1px solid rgba(167, 139, 250, 0.2);
   cursor: pointer;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     inset 0 -1px 0 rgba(0, 0, 0, 0.3),
-    0 0 0 1px rgba(63, 169, 245, 0.12),
-    0 4px 12px -2px rgba(30, 141, 239, 0.35),
+    0 0 0 1px rgba(139, 92, 246, 0.12),
+    0 4px 12px -2px rgba(139, 92, 246, 0.35),
     0 2px 6px -1px rgba(0, 0, 0, 0.5);
   backdrop-filter: blur(12px) saturate(150%);
   -webkit-backdrop-filter: blur(12px) saturate(150%);
@@ -4982,8 +5160,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     inset 0 -1px 0 rgba(0, 0, 0, 0.3),
-    0 0 0 1px rgba(125, 221, 255, 0.35),
-    0 6px 16px -2px rgba(30, 141, 239, 0.5),
+    0 0 0 1px rgba(167, 139, 250, 0.35),
+    0 6px 16px -2px rgba(139, 92, 246, 0.5),
     0 2px 8px -1px rgba(0, 0, 0, 0.6);
 }
 .pe-launcher:active {
@@ -5000,8 +5178,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.14),
       inset 0 -1px 0 rgba(0, 0, 0, 0.3),
-      0 0 0 1px rgba(125, 221, 255, 0.35),
-      0 6px 16px -2px rgba(30, 141, 239, 0.5),
+      0 0 0 1px rgba(167, 139, 250, 0.35),
+      0 6px 16px -2px rgba(139, 92, 246, 0.5),
       0 2px 8px -1px rgba(0, 0, 0, 0.6);
   }
   40% {
@@ -5009,17 +5187,17 @@ html:not(.dark) .pea-node-prompt-echo-params {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.25),
       inset 0 -1px 0 rgba(0, 0, 0, 0.25),
-      0 0 0 2px rgba(125, 221, 255, 0.6),
-      0 0 24px 4px rgba(30, 141, 239, 0.55),
-      0 0 12px 2px rgba(125, 221, 255, 0.35);
+      0 0 0 2px rgba(167, 139, 250, 0.6),
+      0 0 24px 4px rgba(139, 92, 246, 0.55),
+      0 0 12px 2px rgba(167, 139, 250, 0.35);
   }
   100% {
     transform: scale(1);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.14),
       inset 0 -1px 0 rgba(0, 0, 0, 0.3),
-      0 0 0 1px rgba(125, 221, 255, 0.35),
-      0 6px 16px -2px rgba(30, 141, 239, 0.5),
+      0 0 0 1px rgba(167, 139, 250, 0.35),
+      0 6px 16px -2px rgba(139, 92, 246, 0.5),
       0 2px 8px -1px rgba(0, 0, 0, 0.6);
   }
 }
@@ -5029,7 +5207,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   display: inline-flex;
   align-items: center;
   padding-right: 8px;
-  border-right: 1px solid rgba(125, 221, 255, 0.15);
+  border-right: 1px solid rgba(167, 139, 250, 0.15);
   margin-right: 4px;
 }
 .pe-cost-num {
@@ -5037,7 +5215,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   font-weight: 600;
   color: rgba(255, 255, 255, 0.9);
   letter-spacing: -0.2px;
-  text-shadow: 0 0 8px rgba(125, 221, 255, 0.35);
+  text-shadow: 0 0 8px rgba(167, 139, 250, 0.35);
 }
 
 /* 科技感生成按钮 */
@@ -5046,7 +5224,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #8EDBFF 0%, #2A9BFF 60%, #1A7FE8 100%);
+  background: radial-gradient(circle at 35% 30%, #c4b5fd 0%, #8b5cf6 60%, #6d28d9 100%);
   border: none;
   cursor: pointer;
   display: flex;
@@ -5056,9 +5234,9 @@ html:not(.dark) .pea-node-prompt-echo-params {
   overflow: hidden;
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.4),
-    inset 0 -1px 2px rgba(10, 74, 176, 0.6),
-    0 0 0 1px rgba(125, 221, 255, 0.3),
-    0 2px 6px rgba(30, 141, 239, 0.5);
+    inset 0 -1px 2px rgba(76, 29, 149, 0.6),
+    0 0 0 1px rgba(167, 139, 250, 0.3),
+    0 2px 6px rgba(139, 92, 246, 0.5);
   transition:
     transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
     box-shadow 0.2s ease;
@@ -5067,9 +5245,9 @@ html:not(.dark) .pea-node-prompt-echo-params {
   transform: scale(1.08);
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.5),
-    inset 0 -1px 2px rgba(10, 74, 176, 0.6),
-    0 0 0 1px rgba(191, 233, 255, 0.5),
-    0 3px 10px rgba(30, 141, 239, 0.7);
+    inset 0 -1px 2px rgba(76, 29, 149, 0.6),
+    0 0 0 1px rgba(196, 181, 253, 0.5),
+    0 3px 10px rgba(139, 92, 246, 0.7);
 }
 .pe-trigger:active {
   transform: scale(0.95);
@@ -5130,12 +5308,12 @@ html:not(.dark) .pea-node-prompt-echo-params {
 
 /* submitting 状态 */
 .pe-launcher.submitting .pe-trigger {
-  background: radial-gradient(circle at 35% 30%, #8EDBFF 0%, #2A9BFF 60%, #1A7FE8 100%);
+  background: radial-gradient(circle at 35% 30%, #c4b5fd 0%, #8b5cf6 60%, #6d28d9 100%);
   animation: pe-breath 1.2s ease-in-out infinite;
 }
 @keyframes pe-breath {
-  0%, 100% { box-shadow: inset 0 1px 1px rgba(255,255,255,0.4), 0 0 0 1px rgba(125,221,255,0.3), 0 2px 6px rgba(30,141,239,0.5); }
-  50%      { box-shadow: inset 0 1px 1px rgba(255,255,255,0.5), 0 0 0 1px rgba(191,233,255,0.6), 0 3px 10px rgba(30,141,239,0.7); }
+  0%, 100% { box-shadow: inset 0 1px 1px rgba(255,255,255,0.4), 0 0 0 1px rgba(167, 139, 250,0.3), 0 2px 6px rgba(139, 92, 246,0.5); }
+  50%      { box-shadow: inset 0 1px 1px rgba(255,255,255,0.5), 0 0 0 1px rgba(196, 181, 253,0.6), 0 3px 10px rgba(139, 92, 246,0.7); }
 }
 
 /* 生成中：按钮切换为「停止」按钮，明确可点击（修复"生成中按钮不能点击"） */
@@ -5254,19 +5432,19 @@ html:not(.dark) .node-input-model-icon {
 
 /* 浅色：生成按钮整体 */
 html:not(.dark) .pe-launcher {
-  background: linear-gradient(180deg, #3b9eff 0%, #1a7fe8 100%);
+  background: linear-gradient(180deg, var(--pea-purple) 0%, #6d28d9 100%);
   border: none;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.25),
-    0 2px 8px rgba(26, 127, 232, 0.35),
-    0 4px 16px -2px rgba(26, 127, 232, 0.2);
+    0 2px 8px rgba(109, 40, 217, 0.35),
+    0 4px 16px -2px rgba(109, 40, 217, 0.2);
 }
 html:not(.dark) .pe-launcher:hover {
   transform: translateY(-1px);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.35),
-    0 4px 12px rgba(26, 127, 232, 0.45),
-    0 6px 20px -2px rgba(26, 127, 232, 0.25);
+    0 4px 12px rgba(109, 40, 217, 0.45),
+    0 6px 20px -2px rgba(109, 40, 217, 0.25);
 }
 
 /* 浅色：生成中「停止」按钮 */
@@ -5310,21 +5488,21 @@ html:not(.dark) .pe-cost-num {
 
 /* 浅色：触发核心（更亮的蓝色） */
 html:not(.dark) .pe-trigger {
-  background: radial-gradient(circle at 35% 30%, #b8e2ff 0%, #5cc6ec 60%, #3b9eff 100%);
+  background: radial-gradient(circle at 35% 30%, var(--pea-purple-soft) 0%, var(--pea-accent-soft) 60%, var(--pea-purple) 100%);
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.55),
-    0 1px 4px rgba(26, 127, 232, 0.35);
+    0 1px 4px rgba(109, 40, 217, 0.35);
 }
 html:not(.dark) .pe-launcher:hover .pe-trigger {
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.65),
-    0 2px 8px rgba(26, 127, 232, 0.45);
+    0 2px 8px rgba(109, 40, 217, 0.45);
 }
 /* 浅色：粒子颜色加深以在亮底上可见 */
 html:not(.dark) .pe-particle.p1,
-html:not(.dark) .pe-particle.p3 { fill: #1a7fe8; }
+html:not(.dark) .pe-particle.p3 { fill: #6d28d9; }
 html:not(.dark) .pe-particle.p2,
-html:not(.dark) .pe-particle.p4 { fill: #3b9eff; }
+html:not(.dark) .pe-particle.p4 { fill: var(--pea-purple); }
 html:not(.dark) .pe-gen-spark path {
   fill: url(#pea-gen-spark-light);
 }
@@ -5498,9 +5676,9 @@ html:not(.dark) .node-count-btn-hint {
   transform: translateY(-1px);
 }
 .picker-card-active {
-  background: rgba(31, 162, 220, 0.1);
-  border-color: rgba(31, 162, 220, 0.35);
-  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.15);
+  background: rgba(var(--pea-accent-rgb), 0.1);
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
+  box-shadow: 0 0 0 1px rgba(var(--pea-accent-rgb), 0.15);
 }
 .picker-card-locked {
   opacity: 0.5;
@@ -5533,7 +5711,7 @@ html:not(.dark) .node-count-btn-hint {
 }
 .picker-check {
   flex-shrink: 0;
-  color: var(--pea-brand, #1fa2dc);
+  color: var(--pea-brand, var(--pea-brand));
 }
 .picker-lock {
   font-size: 13px;
@@ -5554,7 +5732,7 @@ html:not(.dark) .node-count-btn-hint {
   line-height: 1.5;
 }
 .picker-badge-new {
-  background: linear-gradient(135deg, #1fa2dc, #8b5cf6);
+  background: linear-gradient(135deg, var(--pea-brand), #8b5cf6);
   color: #fff;
 }
 
@@ -5573,7 +5751,7 @@ html:not(.dark) .node-count-btn-hint {
 }
 .picker-card-active .picker-tag {
   color: rgba(255, 255, 255, 0.7);
-  background: rgba(31, 162, 220, 0.1);
+  background: rgba(var(--pea-accent-rgb), 0.1);
 }
 
 .picker-card-lock-hint {
@@ -5687,8 +5865,8 @@ html:not(.dark) .node-count-btn-hint {
   color: #fff;
 }
 .aspect-res-btn.active {
-  background: rgba(31, 162, 220, 0.15);
-  border-color: rgba(31, 162, 220, 0.35);
+  background: rgba(var(--pea-accent-rgb), 0.15);
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
   color: #fff;
 }
 
@@ -5720,8 +5898,8 @@ html:not(.dark) .node-count-btn-hint {
   color: rgba(255, 255, 255, 0.8);
 }
 .aspect-ratio-btn.active {
-  background: rgba(31, 162, 220, 0.12);
-  border-color: rgba(31, 162, 220, 0.35);
+  background: rgba(var(--pea-accent-rgb), 0.12);
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
   color: #fff;
 }
 .aspect-ratio-btn svg {
@@ -5765,8 +5943,8 @@ html:not(.dark) .node-count-btn-hint {
   color: rgba(255, 255, 255, 0.85);
 }
 .aspect-duration-btn.active {
-  background: rgba(31, 162, 220, 0.15);
-  border-color: rgba(31, 162, 220, 0.35);
+  background: rgba(var(--pea-accent-rgb), 0.15);
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
   color: #fff;
 }
 
@@ -5840,9 +6018,9 @@ html:not(.dark) .node-count-btn-hint {
 }
 .node-count-opt.active {
   color: #fff;
-  background: rgba(31, 162, 220, 0.1);
-  border-color: rgba(31, 162, 220, 0.35);
-  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.15);
+  background: rgba(var(--pea-accent-rgb), 0.1);
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
+  box-shadow: 0 0 0 1px rgba(var(--pea-accent-rgb), 0.15);
 }
 .node-count-opt:last-child {
   margin-bottom: 0;
@@ -5934,8 +6112,8 @@ html:not(.dark) .picker-card:hover {
   border-color: rgba(0, 0, 0, 0.10);
 }
 html:not(.dark) .picker-card-active {
-  background: rgba(31, 162, 220, 0.08);
-  border-color: rgba(31, 162, 220, 0.3);
+  background: rgba(var(--pea-accent-rgb), 0.08);
+  border-color: rgba(var(--pea-accent-rgb), 0.3);
 }
 html:not(.dark) .picker-card-locked {
   opacity: 0.45;
@@ -5944,11 +6122,11 @@ html:not(.dark) .picker-card-name {
   color: var(--pea-text-primary);
 }
 html:not(.dark) .picker-tag {
-  background: rgba(31, 162, 220, 0.10);
+  background: rgba(var(--pea-accent-rgb), 0.10);
   color: var(--pea-brand-strong);
 }
 html:not(.dark) .picker-card-active .picker-tag {
-  background: rgba(31, 162, 220, 0.15);
+  background: rgba(var(--pea-accent-rgb), 0.15);
 }
 html:not(.dark) .picker-empty {
   color: var(--pea-text-muted);
@@ -5977,8 +6155,8 @@ html:not(.dark) .aspect-ratio-btn:hover {
   color: var(--pea-text-primary);
 }
 html:not(.dark) .aspect-ratio-btn.active {
-  background: rgba(31, 162, 220, 0.10);
-  border-color: rgba(31, 162, 220, 0.35);
+  background: rgba(var(--pea-accent-rgb), 0.10);
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
   color: var(--pea-brand);
 }
 html:not(.dark) .aspect-res-btn {
@@ -5986,8 +6164,8 @@ html:not(.dark) .aspect-res-btn {
   border-color: rgba(0, 0, 0, 0.08);
 }
 html:not(.dark) .aspect-res-btn.active {
-  background: rgba(31, 162, 220, 0.10);
-  border-color: rgba(31, 162, 220, 0.35);
+  background: rgba(var(--pea-accent-rgb), 0.10);
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
   color: var(--pea-brand);
 }
 html:not(.dark) .aspect-duration-btn {
@@ -5998,8 +6176,8 @@ html:not(.dark) .aspect-duration-btn:hover {
   background: rgba(0, 0, 0, 0.04);
 }
 html:not(.dark) .aspect-duration-btn.active {
-  background: rgba(31, 162, 220, 0.10);
-  border-color: rgba(31, 162, 220, 0.35);
+  background: rgba(var(--pea-accent-rgb), 0.10);
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
   color: var(--pea-brand);
 }
 html:not(.dark) .node-count-opt {
@@ -6010,7 +6188,7 @@ html:not(.dark) .node-count-opt:hover {
   background: rgba(0, 0, 0, 0.05);
 }
 html:not(.dark) .node-count-opt.active {
-  background: rgba(31, 162, 220, 0.12);
+  background: rgba(var(--pea-accent-rgb), 0.12);
   color: var(--pea-brand);
 }
 
@@ -6032,20 +6210,11 @@ html:not(.dark) .pea-node-toolbar-btn:hover {
 }
 html:not(.dark) .pea-node-toolbar-btn.active {
   color: var(--pea-brand);
-  background: rgba(59, 158, 255, 0.10);
+  background: rgba(139, 92, 246, 0.10);
 }
 
-/* 节点主体卡片（深色圆角框）*/
-html:not(.dark) .pea-node-body-card {
-  background: rgba(255, 255, 255, 0.94);
-  border-color: rgba(0, 0, 0, 0.07);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(255, 255, 255, 0.6);
-}
-html:not(.dark) .pea-node-body-card:hover {
-  box-shadow:
-    0 12px 36px rgba(0, 0, 0, 0.12),
-    inset 0 0 0 1px rgba(0, 0, 0, 0.04);
-}
+/* 节点卡片明暗背景由 [data-surface] 令牌系统驱动（:root/.dark/cinematic/figma），
+   不再使用 html:not(.dark) 硬编码覆写。删除旧硬编码避免与 has-media 规则和表面令牌冲突。 */
 
 /* 文本节点正文：浅色模式下使用深色文字，确保对比度 */
 html:not(.dark) .pea-node-text-edit {
@@ -6100,8 +6269,8 @@ html:not(.dark) .pea-canvas-controls-btn:hover {
   color: var(--pea-text-primary);
 }
 html:not(.dark) .pea-canvas-controls-btn.active {
-  background: rgba(59, 158, 255, 0.12);
-  color: var(--pea-brand, #1A7FE8);
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--pea-brand, #6d28d9);
 }
 /* 浅色下滑块轨道 */
 html:not(.dark) .pea-canvas-controls-slider-wrap input[type='range'] {
@@ -6167,7 +6336,7 @@ html:not(.dark) .pea-add-menu-sub {
   color: var(--pea-text-muted);
 }
 html:not(.dark) .pea-add-menu-tag {
-  background: rgba(59, 158, 255, 0.10);
+  background: rgba(139, 92, 246, 0.10);
   color: var(--pea-brand);
 }
 
@@ -6211,8 +6380,8 @@ html:not(.dark) .pea-edge-menu-sub {
   color: var(--pea-text-muted);
 }
 html:not(.dark) .pea-edge-menu-tag {
-  background: rgba(59, 158, 255, 0.10);
-  color: var(--pea-brand, #1A7FE8);
+  background: rgba(139, 92, 246, 0.10);
+  color: var(--pea-brand, #6d28d9);
 }
 
 /* 文本节点工具栏（H1/H2/H3 格式栏）*/
@@ -6229,7 +6398,7 @@ html:not(.dark) .tnt-btn:hover {
   color: var(--pea-text-primary);
 }
 html:not(.dark) .tnt-btn.active {
-  background: rgba(59, 158, 255, 0.10);
+  background: rgba(139, 92, 246, 0.10);
   color: var(--pea-brand);
 }
 html:not(.dark) .tnt-label {
@@ -6601,9 +6770,9 @@ html:not(.dark) .text-node-toolbar {
 }
 .pea-topnav-balance:hover {
   transform: translateY(-1px);
-  border-color: rgba(125, 221, 255, 0.3);
-  background: rgba(125, 221, 255, 0.06);
-  box-shadow: 0 2px 8px rgba(31, 162, 220, 0.1);
+  border-color: rgba(167, 139, 250, 0.3);
+  background: rgba(167, 139, 250, 0.06);
+  box-shadow: 0 2px 8px rgba(var(--pea-accent-rgb), 0.1);
 }
 .pea-topnav-balance:active {
   transform: translateY(0) scale(0.98);
@@ -6611,25 +6780,25 @@ html:not(.dark) .text-node-toolbar {
 /* 深色主题：顶栏余额按钮玻璃态 */
 .dark .pea-topnav-balance {
   background: linear-gradient(180deg, rgba(30, 38, 55, 0.7) 0%, rgba(18, 24, 36, 0.8) 100%);
-  border-color: rgba(125, 221, 255, 0.15);
+  border-color: rgba(167, 139, 250, 0.15);
   color: rgba(245, 248, 252, 0.92);
   backdrop-filter: blur(10px) saturate(140%);
 }
 .dark .pea-topnav-balance:hover {
   background: linear-gradient(180deg, rgba(30, 38, 55, 0.85) 0%, rgba(18, 24, 36, 0.92) 100%);
-  border-color: rgba(125, 221, 255, 0.32);
-  box-shadow: 0 4px 14px rgba(59, 158, 255, 0.1), 0 0 20px rgba(107, 95, 255, 0.04);
+  border-color: rgba(167, 139, 250, 0.32);
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.1), 0 0 20px rgba(139, 92, 246, 0.04);
 }
 /* 顶栏水晶图标（复用画布芯片的 gem 样式，尺寸略小以适配导航栏） */
 .pea-topnav-balance .pea-balance-gem {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
-  filter: drop-shadow(0 0 2px rgba(125, 221, 255, 0.25));
+  filter: drop-shadow(0 0 2px rgba(167, 139, 250, 0.25));
   transition: filter 0.3s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .pea-topnav-balance:hover .pea-balance-gem {
-  filter: drop-shadow(0 0 5px rgba(125, 221, 255, 0.45));
+  filter: drop-shadow(0 0 5px rgba(167, 139, 250, 0.45));
   animation: gemPulse 1.6s ease-in-out infinite;
 }
 /* 顶栏余额数字 */
@@ -6791,7 +6960,7 @@ html:not(.dark) .text-node-toolbar {
   background: var(--pea-bg-elevated);
   border-color: color-mix(in srgb, var(--pea-brand) 35%, transparent);
   transform: scale(1.06);
-  box-shadow: 0 4px 14px rgba(31, 162, 220, 0.25);
+  box-shadow: 0 4px 14px rgba(var(--pea-accent-rgb), 0.25);
 }
 .pea-canvas-header-trigger:active {
   transform: scale(0.96);
@@ -6799,7 +6968,7 @@ html:not(.dark) .text-node-toolbar {
 .pea-canvas-header-trigger[aria-expanded="true"] {
   background: var(--pea-bg-elevated);
   border-color: color-mix(in srgb, var(--pea-brand) 55%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pea-brand) 18%, transparent), 0 2px 8px rgba(31, 162, 220, 0.2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pea-brand) 18%, transparent), 0 2px 8px rgba(var(--pea-accent-rgb), 0.2);
 }
 .pea-canvas-header-logo {
   width: 34px;
@@ -6875,6 +7044,95 @@ html:not(.dark) .text-node-toolbar {
   margin: 6px 4px;
 }
 
+/* 创作主题切换（Runway / Figma 分段控件） */
+.pea-canvas-theme-switch {
+  display: flex;
+  gap: 6px;
+  padding: 4px 10px 10px;
+}
+.pea-canvas-theme-opt {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--pea-border);
+  background: var(--pea-bg-elevated);
+  color: var(--pea-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.pea-canvas-theme-opt:hover {
+  border-color: var(--pea-border-strong);
+  color: var(--pea-text-primary);
+}
+.pea-canvas-theme-opt.active {
+  border-color: var(--pea-purple);
+  color: var(--pea-text-primary);
+  background: color-mix(in srgb, var(--pea-purple) 14%, transparent);
+}
+.pea-canvas-theme-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  flex-shrink: 0;
+}
+.pea-canvas-theme-swatch.runway {
+  background: linear-gradient(135deg, #000000 0%, #1a1a1a 60%, #767d88 100%);
+}
+.pea-canvas-theme-swatch.figma {
+  background: linear-gradient(135deg, #ffffff 0%, #f7f7f5 50%, #e6e6e6 100%);
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+/* ---- 右上角紧凑创作主题切换（inline pill） ---- */
+.pea-canvas-theme-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--pea-bg-panel);
+  border: 1px solid var(--pea-border);
+  margin-right: 10px;
+}
+.pea-canvas-theme-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--pea-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  line-height: 1;
+}
+.pea-canvas-theme-pill:hover {
+  color: var(--pea-text-secondary);
+  background: color-mix(in srgb, var(--pea-text-primary) 6%, transparent);
+}
+.pea-canvas-theme-pill.active {
+  color: var(--pea-text-primary);
+  background: color-mix(in srgb, var(--pea-purple) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pea-purple) 30%, transparent);
+}
+.pea-canvas-theme-pill .pea-canvas-theme-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border-width: 1px;
+}
+
 /* ---- 画布右上角操作区 ---- */
 .pea-canvas-actions {
   position: absolute;
@@ -6896,7 +7154,7 @@ html:not(.dark) .text-node-toolbar {
   padding: 0 14px 0 10px;
   border-radius: 999px;
   background: linear-gradient(180deg, #f6f8fc 0%, #eef3fa 100%);
-  border: 1px solid rgba(26, 127, 232, 0.18);
+  border: 1px solid rgba(109, 40, 217, 0.18);
   color: var(--pea-text-primary, #1a1a2e);
   font-size: 13px;
   font-weight: 600;
@@ -6912,12 +7170,12 @@ html:not(.dark) .text-node-toolbar {
 }
 .pea-canvas-tapies:hover {
   transform: translateY(-1px);
-  border-color: rgba(26, 127, 232, 0.35);
+  border-color: rgba(109, 40, 217, 0.35);
   background: linear-gradient(180deg, #eef3fa 0%, #e4ecf8 100%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.8),
     0 2px 6px rgba(30, 60, 100, 0.12),
-    0 0 14px rgba(59, 158, 255, 0.08);
+    0 0 14px rgba(139, 92, 246, 0.08);
 }
 .pea-canvas-tapies:active {
   transform: translateY(0) scale(0.98);
@@ -6927,22 +7185,22 @@ html:not(.dark) .text-node-toolbar {
 .dark .pea-canvas-tapies {
   background:
     linear-gradient(180deg, rgba(30, 38, 55, 0.85) 0%, rgba(18, 24, 36, 0.92) 100%);
-  border: 1px solid rgba(125, 221, 255, 0.18);
+  border: 1px solid rgba(167, 139, 250, 0.18);
   color: rgba(245, 248, 252, 0.92);
   backdrop-filter: blur(12px) saturate(140%);
   -webkit-backdrop-filter: blur(12px) saturate(140%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
     0 1px 3px rgba(0, 0, 0, 0.15),
-    0 0 12px rgba(59, 158, 255, 0.06);
+    0 0 12px rgba(139, 92, 246, 0.06);
 }
 .dark .pea-canvas-tapies:hover {
-  border-color: rgba(125, 221, 255, 0.35);
+  border-color: rgba(167, 139, 250, 0.35);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.08),
     0 2px 6px rgba(0, 0, 0, 0.2),
-    0 0 20px rgba(59, 158, 255, 0.12),
-    0 0 40px rgba(107, 95, 255, 0.05);
+    0 0 20px rgba(139, 92, 246, 0.12),
+    0 0 40px rgba(139, 92, 246, 0.05);
 }
 
 /* 能量水晶图标 */
@@ -6950,19 +7208,19 @@ html:not(.dark) .text-node-toolbar {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
-  filter: drop-shadow(0 1px 2px rgba(59, 130, 246, 0.25));
+  filter: drop-shadow(0 1px 2px rgba(139, 92, 246, 0.25));
   transition: filter 0.3s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 .pea-canvas-tapies:hover .pea-balance-gem {
-  filter: drop-shadow(0 0 5px rgba(59, 130, 246, 0.4));
+  filter: drop-shadow(0 0 5px rgba(139, 92, 246, 0.4));
   animation: gemPulse 1.6s ease-in-out infinite;
 }
 /* 深色主题：图标增强发光 */
 .dark .pea-balance-gem {
-  filter: drop-shadow(0 0 3px rgba(125, 221, 255, 0.35));
+  filter: drop-shadow(0 0 3px rgba(167, 139, 250, 0.35));
 }
 .dark .pea-canvas-tapies:hover .pea-balance-gem {
-  filter: drop-shadow(0 0 6px rgba(125, 221, 255, 0.55));
+  filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.55));
 }
 @keyframes gemPulse {
   0%, 100% { transform: scale(1) rotate(0deg); }
@@ -6976,14 +7234,14 @@ html:not(.dark) .text-node-toolbar {
   transition: text-shadow 0.3s ease;
 }
 .pea-canvas-tapies:hover .pea-balance-num {
-  text-shadow: 0 0 10px rgba(59, 130, 246, 0.15);
+  text-shadow: 0 0 10px rgba(139, 92, 246, 0.15);
 }
 /* 深色主题：数字发光 */
 .dark .pea-balance-num {
-  text-shadow: 0 0 8px rgba(125, 221, 255, 0.15);
+  text-shadow: 0 0 8px rgba(167, 139, 250, 0.15);
 }
 .dark .pea-canvas-tapies:hover .pea-balance-num {
-  text-shadow: 0 0 14px rgba(125, 221, 255, 0.28);
+  text-shadow: 0 0 14px rgba(167, 139, 250, 0.28);
 }
 .pea-canvas-community {
   display: inline-flex;
@@ -7023,7 +7281,7 @@ html:not(.dark) .text-node-toolbar {
 .pea-canvas-iconbtn:disabled { opacity: 0.5; cursor: progress; }
 
 /* ---- 主题下拉选择器（浅 / 深 / 跟随系统） —— 紧凑胶囊样式 ---- */
-/* 同时覆盖 TopNav 与画布右上角，共用 .pea-theme-select */
+/* TopNav 主题切换下拉（共用 .pea-theme-select） */
 .pea-theme-select.ant-select {
   min-width: 112px;
 }
@@ -7040,7 +7298,7 @@ html:not(.dark) .text-node-toolbar {
 .pea-theme-select:hover .ant-select-selector,
 .pea-theme-select.ant-select-open .ant-select-selector {
   background: var(--pea-bg-elevated) !important;
-  border-color: var(--pea-brand, #1fa2dc) !important;
+  border-color: var(--pea-brand, var(--pea-brand)) !important;
 }
 .pea-theme-select .ant-select-selection-item {
   font-size: 13px !important;
@@ -7155,13 +7413,10 @@ html:not(.dark) .text-node-toolbar {
   object-fit: cover;
   border-radius: 0;
   cursor: default;
-  transition: filter 0.2s ease, opacity 0.25s ease;
+  opacity: 1;
   background: #000;
   /* 图片未加载时保持占位，避免高度骤降 */
   aspect-ratio: auto;
-}
-.pea-node-result-image-wrap:hover .pea-node-media-preview {
-  filter: brightness(1.04);
 }
 
 /* 结果图加载失败占位：避免浏览器默认裂图，提示可点击重新生成 */
@@ -7302,7 +7557,7 @@ html:not(.dark) .text-node-toolbar {
 }
 .pea-node-image-picker-item.active,
 .pea-node-image-picker-item:hover {
-  border-color: var(--pea-brand, #1fa2dc);
+  border-color: var(--pea-brand, var(--pea-brand));
 }
 
 /* 右上角浮层容器（替换按钮 + 多图角标 并排） */
@@ -7376,13 +7631,13 @@ html:not(.dark) .text-node-toolbar {
   outline-offset: 2px;
 }
 .pea-node-text-edit.is-editing {
-  outline: 1px solid rgba(31, 162, 220, 0.55);
+  outline: 1px solid rgba(var(--pea-accent-rgb), 0.55);
   outline-offset: 2px;
   border-radius: 8px;
-  caret-color: var(--pea-brand, #1fa2dc);
+  caret-color: var(--pea-brand, var(--pea-brand));
 }
 .pea-node-text-edit.is-editing:focus {
-  outline: 1px solid rgba(31, 162, 220, 0.85);
+  outline: 1px solid rgba(var(--pea-accent-rgb), 0.85);
 }
 
 /* 功能条：作为 .pea-node-chrome 的 flex 子元素，浮在节点框上方。
@@ -7468,21 +7723,21 @@ html:not(.dark) .text-node-toolbar {
 .pea-angle-cube-panel {
   position: absolute;
   left: 0;
-  width: 580px;
+  width: 520px;
   max-width: calc(100vw - 24px);
   z-index: 40;
   pointer-events: auto;
   /* 不用 transform！用 margin 居中 */
-  margin-left: calc(-290px + 50%);
+  margin-left: calc(-260px + 50%);
   transform-origin: top center;
   /* 定位到节点正下方 */
-  top: calc(100% + 16px * var(--pea-inv-zoom, 1));
-  border-radius: 14px;
+  top: calc(100% + 14px * var(--pea-inv-zoom, 1));
+  border-radius: 12px;
   background: rgba(28, 28, 34, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.08);
   color: #fff;
-  padding: 14px 20px 12px;
-  font-size: 13px;
+  padding: 11px 16px 10px;
+  font-size: 12px;
   animation: pea-angle-cube-in 0.18s ease;
 }
 html:not(.dark) .pea-angle-cube-panel {
@@ -7500,16 +7755,16 @@ html:not(.dark) .pea-angle-cube-panel {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 .pea-angle-cube-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 13px;
 }
 .pea-angle-cube-close {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.55);
@@ -7532,20 +7787,20 @@ html:not(.dark) .pea-angle-cube-close:hover {
 }
 .pea-angle-cube-body {
   display: flex;
-  gap: 22px;
-  align-items: stretch;
+  gap: 14px;
+  align-items: flex-start;
 }
 /* ═══════════════════════════════════════════════════════════════
- * 预览区 — 立方体展示容器（参考图：大方框，立方体饱满）
+ * 预览区 — 立方体展示容器（紧凑版本）
  * ═══════════════════════════════════════════════════════════════ */
 .pea-angle-cube-preview {
   flex: 0 0 auto;
-  width: min(220px, 38vw);
-  height: 220px;
+  width: 168px;
+  height: 160px;
   /* 预览区固定为深色底，与浅色面板形成层次差；
      立方体三个面用更亮/暗的渐变就能直接被眼睛分辨 */
   background: linear-gradient(160deg, rgba(20, 22, 30, 0.96) 0%, rgba(34, 38, 50, 0.96) 100%);
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   display: flex;
   align-items: center;
@@ -7559,33 +7814,35 @@ html:not(.dark) .pea-angle-cube-preview {
   background: linear-gradient(160deg, #1a1c24 0%, #262934 100%);
   border-color: rgba(0, 0, 0, 0.10);
 }
-/* 底部重置按钮 — footer 左侧（参考图：图标+文字） */
-.pea-angle-cube-reset-foot {
-  flex: 0 0 auto;
-  height: 30px;
-  border-radius: 16px;
+/* 预览区左下角重置按钮 — 仅图标 */
+.pea-angle-cube-reset-icon {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.6);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.7);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 12px;
-  font-size: 12px;
+  justify-content: center;
   cursor: pointer;
+  z-index: 2;
   transition: color 0.12s ease, background 0.12s ease;
 }
-.pea-angle-cube-reset-foot:hover {
+.pea-angle-cube-reset-icon:hover {
   color: rgba(255, 255, 255, 0.95);
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.55);
 }
-html:not(.dark) .pea-angle-cube-reset-foot {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--pea-text-secondary, #555560);
+html:not(.dark) .pea-angle-cube-reset-icon {
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.75);
 }
-html:not(.dark) .pea-angle-cube-reset-foot:hover {
-  color: var(--pea-text-primary, #1a1a1f);
-  background: rgba(0, 0, 0, 0.10);
+html:not(.dark) .pea-angle-cube-reset-icon:hover {
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
 }
 /* perspective 容器 — 提供 3D 透视深度 */
 .pea-angle-cube-preview-stage {
@@ -7684,22 +7941,22 @@ html:not(.dark) .pea-angle-cube-reset-foot:hover {
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 6px;
   min-width: 0;
 }
 .pea-angle-cube-row {
   display: grid;
-  grid-template-columns: 56px 1fr 48px;
+  grid-template-columns: 38px 1fr 34px;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 .pea-angle-cube-row:has(.pea-angle-cube-toggle) {
-  grid-template-columns: 56px 1fr 44px;
+  grid-template-columns: 38px 1fr 34px;
 }
 .pea-angle-cube-label {
   color: rgba(255, 255, 255, 0.55);
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
 }
 html:not(.dark) .pea-angle-cube-label {
@@ -7709,9 +7966,9 @@ html:not(.dark) .pea-angle-cube-label {
   text-align: right;
   font-variant-numeric: tabular-nums;
   font-weight: 500;
-  font-size: 13px;
+  font-size: 12px;
   color: rgba(255, 255, 255, 0.75);
-  min-width: 40px;
+  min-width: 30px;
 }
 html:not(.dark) .pea-angle-cube-value {
   color: var(--pea-text-primary, #1a1a1f);
@@ -7723,22 +7980,22 @@ html:not(.dark) .pea-angle-cube-value {
  *   value ≥ 0: from=50%, to=progress%  (中点到右侧)
  *   value < 0: from=progress%, to=50%  (左侧到中点)
  *
- * 色系：使用系统品牌色 --pea-accent（#1fa2dc）作为填充亮色，
+ * 色系：使用系统品牌色 --pea-accent（var(--pea-brand)）作为填充亮色，
  *       与整体 UI 风格统一（暗底用 accent 60%透明，亮底用 accent 45%）
  * ═══════════════════════════════════════════════════════════════ */
 .pea-angle-cube-slider {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 3px;
-  border-radius: 2px;
+  height: 2px;
+  border-radius: 1px;
   /* 中心原点填充：从 --from 到 --to 为品牌色，其余为暗色 */
   background: linear-gradient(
     to right,
     rgba(255, 255, 255, 0.08) 0%,
     rgba(255, 255, 255, 0.08) var(--from, 50%),
-    rgba(31, 162, 220, 0.60) var(--from, 50%),
-    rgba(31, 162, 220, 0.60) var(--to, 50%),
+    rgba(var(--pea-accent-rgb), 0.60) var(--from, 50%),
+    rgba(var(--pea-accent-rgb), 0.60) var(--to, 50%),
     rgba(255, 255, 255, 0.08) var(--to, 50%),
     rgba(255, 255, 255, 0.08) 100%
   );
@@ -7750,47 +8007,47 @@ html:not(.dark) .pea-angle-cube-slider {
     to right,
     rgba(0, 0, 0, 0.08) 0%,
     rgba(0, 0, 0, 0.08) var(--from, 50%),
-    rgba(31, 162, 220, 0.45) var(--from, 50%),
-    rgba(31, 162, 220, 0.45) var(--to, 50%),
+    rgba(var(--pea-accent-rgb), 0.45) var(--from, 50%),
+    rgba(var(--pea-accent-rgb), 0.45) var(--to, 50%),
     rgba(0, 0, 0, 0.08) var(--to, 50%),
     rgba(0, 0, 0, 0.08) 100%
   );
 }
 /* Firefox filled track fallback — 品牌色 */
 .pea-angle-cube-slider::-moz-range-progress {
-  background: rgba(31, 162, 220, 0.60);
-  height: 3px;
-  border-radius: 2px;
+  background: rgba(var(--pea-accent-rgb), 0.60);
+  height: 2px;
+  border-radius: 1px;
 }
 /* Webkit thumb — 白色圆点 */
 .pea-angle-cube-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   border: none;
   cursor: pointer;
   transition: transform 0.12s ease;
 }
 .pea-angle-cube-slider::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
+  transform: scale(1.25);
 }
 /* Moz thumb — 白色圆点 */
 .pea-angle-cube-slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   border: none;
   cursor: pointer;
 }
 .pea-angle-cube-toggle {
-  width: 44px;
-  height: 24px;
-  border-radius: 12px;
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
   border: none;
   padding: 0;
   background: rgba(255, 255, 255, 0.10);
@@ -7802,97 +8059,105 @@ html:not(.dark) .pea-angle-cube-toggle {
   background: rgba(0, 0, 0, 0.10);
 }
 .pea-angle-cube-toggle.on {
-  background: var(--pea-accent, #1fa2dc);
+  background: var(--pea-accent, var(--pea-brand));
 }
 html:not(.dark) .pea-angle-cube-toggle.on {
-  background: var(--pea-accent, #1fa2dc);
+  background: var(--pea-accent, var(--pea-brand));
 }
 .pea-angle-cube-toggle-knob {
   position: absolute;
-  left: 3px;
-  top: 3px;
-  width: 18px;
-  height: 18px;
+  left: 2px;
+  top: 2px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: #fff;
   transition: transform 0.2s ease;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
 }
 html:not(.dark) .pea-angle-cube-toggle-knob {
   background: #fff;
 }
 .pea-angle-cube-toggle.on .pea-angle-cube-toggle-knob {
-  transform: translateX(20px);
+  transform: translateX(14px);
 }
-.pea-angle-cube-footer {
+/* 发送行：放在参数区底部，右对齐，与上方参数紧密衔接 */
+.pea-angle-cube-send-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-top: 10px;
+  justify-content: flex-end;
+  margin-top: 2px;
+  min-height: 28px;
 }
-/* 参数胶囊：合并齿轮+数字与圆形发送按钮，并推到 footer 最右侧 */
+/* 发送胶囊：齿轮 + 短横线 + 灰色圆形箭头按钮（与截图一致） */
 .pea-angle-cube-send-pill {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: rgba(255, 255, 255, 0.08);
-  border-radius: 20px;
-  padding: 4px 4px 4px 12px;
+  border-radius: 16px;
+  padding: 2px 2px 2px 9px;
 }
 html:not(.dark) .pea-angle-cube-send-pill {
-  background: rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.05);
 }
 .pea-angle-cube-cost {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.85);
+  color: rgba(255, 255, 255, 0.8);
   white-space: nowrap;
 }
 html:not(.dark) .pea-angle-cube-cost {
-  color: var(--pea-text-primary, #1a1a1f);
+  color: var(--pea-text-secondary, #555560);
 }
 .pea-angle-cube-cost svg {
-  opacity: 0.9;
+  opacity: 0.8;
+}
+/* 齿轮与箭头之间的短横线分隔 */
+.pea-angle-cube-cost-sep {
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.5;
+  user-select: none;
 }
 .pea-angle-cube-send {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  background: #fff;
-  color: #111;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
   border: none;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   flex: 0 0 auto;
-  transition: transform 0.12s ease, opacity 0.12s ease;
+  transition: transform 0.12s ease, opacity 0.12s ease, background 0.12s ease;
 }
 .pea-angle-cube-send:hover:not(:disabled) {
   transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.32);
 }
 .pea-angle-cube-send:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 html:not(.dark) .pea-angle-cube-send {
-  background: var(--pea-text-primary, #1a1a1f);
+  background: rgba(0, 0, 0, 0.14);
   color: #fff;
 }
+html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.22);
+}
 .pea-angle-cube-send-spinner {
-  width: 16px;
-  height: 16px;
-  border: 2px solid rgba(17, 17, 17, 0.2);
-  border-top-color: #111;
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
   border-radius: 50%;
   animation: pea-spin 0.8s linear infinite;
-}
-html:not(.dark) .pea-angle-cube-send-spinner {
-  border-color: rgba(255, 255, 255, 0.25);
-  border-top-color: #fff;
 }
 @keyframes pea-spin {
   to { transform: rotate(360deg); }
@@ -8249,7 +8514,7 @@ html:not(.dark) .pea-angle-cube-send-spinner {
   color: rgba(255, 255, 255, 0.4);
 }
 .pea-crop-custom-input:focus {
-  border-color: var(--pea-brand, #38e1ff);
+  border-color: var(--pea-brand, #c4b5fd);
   background: rgba(0, 0, 0, 0.4);
 }
 .pea-crop-custom-colon {
@@ -8270,7 +8535,7 @@ html:not(.dark) .pea-crop-custom-input::placeholder {
   color: rgba(0, 0, 0, 0.35);
 }
 html:not(.dark) .pea-crop-custom-input:focus {
-  border-color: var(--pea-brand, #3b9eff);
+  border-color: var(--pea-brand, var(--pea-purple));
 }
 html:not(.dark) .pea-crop-custom-colon {
   color: var(--pea-text-secondary);
@@ -8456,7 +8721,7 @@ html:not(.dark) .pea-crop-frame {
   backdrop-filter: blur(6px);
 }
 .pea-node-lightbox-setmain:hover {
-  background: rgba(31, 162, 220, 0.9);
+  background: rgba(var(--pea-accent-rgb), 0.9);
 }
 .pea-node-lightbox-arrow {
   position: absolute;
@@ -8528,7 +8793,7 @@ html:not(.dark) .pea-crop-frame {
 }
 .pea-node-lightbox-thumbs button.active,
 .pea-node-lightbox-thumbs button:hover {
-  border-color: var(--pea-brand, #1fa2dc);
+  border-color: var(--pea-brand, var(--pea-brand));
   transform: translateY(-2px);
 }
 
@@ -8595,12 +8860,12 @@ html:not(.dark) .pea-crop-frame {
   border-color: rgba(255, 255, 255, 0.2);
 }
 .pea-node-lightbox-action.primary {
-  background: var(--pea-brand, #1fa2dc);
+  background: var(--pea-brand, var(--pea-brand));
   border-color: transparent;
   color: #fff;
 }
 .pea-node-lightbox-action.primary:hover {
-  background: var(--pea-brand-strong, #0b86bd);
+  background: var(--pea-brand-strong, var(--pea-brand-strong));
 }
 .pea-node-lightbox-action:disabled,
 .pea-node-lightbox-action.primary.saved {
@@ -8770,7 +9035,7 @@ html:not(.dark) .pea-crop-frame {
   padding: 5px 12px;
   border-radius: 8px;
   border: none;
-  background: var(--pea-brand, #1fa2dc);
+  background: var(--pea-brand, var(--pea-brand));
   color: #fff;
   font-size: 12px;
   font-weight: 500;
@@ -8778,7 +9043,7 @@ html:not(.dark) .pea-crop-frame {
   transition: background 0.12s ease, transform 0.12s ease;
 }
 .pea-grid-lb-setmain:hover {
-  background: var(--pea-brand-strong, #0b86bd);
+  background: var(--pea-brand-strong, var(--pea-brand-strong));
   transform: scale(1.04);
 }
 .pea-grid-lb-primary-tag {
@@ -8798,13 +9063,13 @@ html:not(.dark) .pea-crop-frame {
   top: 0;
   bottom: 0;
   width: 3px;
-  background: var(--pea-brand, #1fa2dc);
+  background: var(--pea-brand, var(--pea-brand));
   border-radius: 12px 0 0 12px;
-  box-shadow: 0 0 10px rgba(31, 162, 220, 0.4);
+  box-shadow: 0 0 10px rgba(var(--pea-accent-rgb), 0.4);
 }
 /* 主图卡片微调 */
 .pea-grid-lb-item.is-primary {
-  outline: 2px solid rgba(31, 162, 220, 0.35);
+  outline: 2px solid rgba(var(--pea-accent-rgb), 0.35);
   outline-offset: -2px;
 }
 
@@ -8864,8 +9129,8 @@ html:not(.dark) .pea-crop-frame {
   vertical-align: middle;
   margin: 0 2px;
   border-radius: 8px;
-  background: rgba(31, 162, 220, 0.26);
-  border: 1px solid rgba(31, 162, 220, 0.45);
+  background: rgba(var(--pea-accent-rgb), 0.26);
+  border: 1px solid rgba(var(--pea-accent-rgb), 0.45);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
   color: #fff;
   font-size: 12px;
@@ -9171,8 +9436,8 @@ html:not(.dark) .pea-crop-frame {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--pea-brand, #1fa2dc);
-  box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.25);
+  background: var(--pea-brand, var(--pea-brand));
+  box-shadow: 0 0 0 2px rgba(var(--pea-accent-rgb), 0.25);
   z-index: 3;
   pointer-events: none;
 }
@@ -9208,9 +9473,9 @@ html:not(.dark) .pea-crop-frame {
   border-color: rgba(255, 255, 255, 0.16);
 }
 .node-ref-tool.active {
-  background: rgba(31, 162, 220, 0.22);
-  border-color: rgba(31, 162, 220, 0.45);
-  color: #1fa2dc;
+  background: rgba(var(--pea-accent-rgb), 0.22);
+  border-color: rgba(var(--pea-accent-rgb), 0.45);
+  color: var(--pea-brand);
 }
 .node-ref-thumbs {
   display: flex;
@@ -9253,8 +9518,8 @@ html:not(.dark) .pea-crop-frame {
 }
 /* 文本节点引用：显示文本图标（区别于图片缩略图） */
 .node-ref-thumb-text {
-  background: linear-gradient(135deg, rgba(31, 162, 220, 0.18), rgba(31, 162, 220, 0.08));
-  border-color: rgba(31, 162, 220, 0.35);
+  background: linear-gradient(135deg, rgba(var(--pea-accent-rgb), 0.18), rgba(var(--pea-accent-rgb), 0.08));
+  border-color: rgba(var(--pea-accent-rgb), 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9265,7 +9530,7 @@ html:not(.dark) .pea-crop-frame {
   justify-content: center;
   width: 100%;
   height: 100%;
-  color: #1fa2dc;
+  color: var(--pea-brand);
 }
 /* 引用项右上角移除按钮：默认隐藏，hover 时显示 */
 .node-ref-remove {
@@ -9317,7 +9582,7 @@ html:not(.dark) .pea-crop-frame {
   gap: 16px;
   padding: 8px 16px;
   border-radius: 999px;
-  background: rgba(31, 162, 220, 0.95);
+  background: rgba(var(--pea-accent-rgb), 0.95);
   border: 1px solid rgba(255, 255, 255, 0.18);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(16px) saturate(180%);
@@ -9367,7 +9632,7 @@ html:not(.dark) .pea-crop-frame {
   backdrop-filter: blur(16px) saturate(180%);
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-  color: var(--pea-brand, #1fa2dc);
+  color: var(--pea-brand, var(--pea-brand));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9382,9 +9647,9 @@ html:not(.dark) .pea-crop-frame {
 }
 .multiselect-plus-btn:hover {
   transform: translate(-50%, -50%) scale(1.06);
-  border-color: var(--pea-brand, #1fa2dc);
+  border-color: var(--pea-brand, var(--pea-brand));
   background: rgba(28, 28, 36, 0.96);
-  box-shadow: 0 0 0 1px rgba(31, 162, 220, 0.45), 0 6px 22px rgba(31, 162, 220, 0.32);
+  box-shadow: 0 0 0 1px rgba(var(--pea-accent-rgb), 0.45), 0 6px 22px rgba(var(--pea-accent-rgb), 0.32);
 }
 .multiselect-plus-btn:active {
   transform: translate(-50%, -50%) scale(0.97);
@@ -9406,9 +9671,9 @@ html:not(.dark) .pea-crop-frame {
 }
 
 @keyframes mst-pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(31, 162, 220, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3); }
-  60% { box-shadow: 0 0 0 10px rgba(31, 162, 220, 0), 0 2px 8px rgba(0, 0, 0, 0.3); }
-  100% { box-shadow: 0 0 0 0 rgba(31, 162, 220, 0), 0 2px 8px rgba(0, 0, 0, 0.3); }
+  0% { box-shadow: 0 0 0 0 rgba(var(--pea-accent-rgb), 0.5), 0 2px 8px rgba(0, 0, 0, 0.3); }
+  60% { box-shadow: 0 0 0 10px rgba(var(--pea-accent-rgb), 0), 0 2px 8px rgba(0, 0, 0, 0.3); }
+  100% { box-shadow: 0 0 0 0 rgba(var(--pea-accent-rgb), 0), 0 2px 8px rgba(0, 0, 0, 0.3); }
 }
 
 /** 下方工具栏（暗色胶囊） */
@@ -9474,15 +9739,15 @@ html:not(.dark) .pea-crop-frame {
   height: 28px;
   padding: 0;
   border-radius: 8px;
-  background: linear-gradient(135deg, #1fa2dc, #0d8ab8);
+  background: linear-gradient(135deg, var(--pea-brand), var(--pea-purple));
   color: #fff;
   font-size: 13px;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(31, 162, 220, 0.35);
+  box-shadow: 0 2px 8px rgba(var(--pea-accent-rgb), 0.35);
 }
 .mst-btn.mst-primary:hover {
-  background: linear-gradient(135deg, #22b8f0, #1fa2dc);
-  box-shadow: 0 3px 12px rgba(31, 162, 220, 0.5);
+  background: linear-gradient(135deg, #8b5cf6, var(--pea-brand));
+  box-shadow: 0 3px 12px rgba(var(--pea-accent-rgb), 0.5);
   transform: scale(1.08);
 }
 
@@ -9509,13 +9774,13 @@ html:not(.dark) .pea-crop-frame {
   height: 17px;
   padding: 0 5px;
   border-radius: 9px;
-  background: #1fa2dc;
+  background: var(--pea-brand);
   color: #fff;
   font-size: 11px;
   font-weight: 700;
   line-height: 17px;
   text-align: center;
-  box-shadow: 0 1px 4px rgba(31, 162, 220, 0.4);
+  box-shadow: 0 1px 4px rgba(var(--pea-accent-rgb), 0.4);
   pointer-events: none;
 }
 
@@ -9564,7 +9829,7 @@ html:not(.dark) .pea-crop-frame {
 .msnp-edges-preview {
   padding: 10px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(31, 162, 220, 0.04);
+  background: rgba(var(--pea-accent-rgb), 0.04);
 }
 .msnp-edges-label {
   font-size: 11px;
@@ -9601,7 +9866,7 @@ html:not(.dark) .pea-crop-frame {
 }
 .msnp-edge-arrow {
   font-size: 9px;
-  color: #1fa2dc;
+  color: var(--pea-brand);
   flex-shrink: 0;
 }
 .msnp-edge-tgt {
@@ -9614,8 +9879,8 @@ html:not(.dark) .pea-crop-frame {
   margin-left: auto;
   padding: 1px 6px;
   border-radius: 4px;
-  background: rgba(31, 162, 220, 0.15);
-  color: #1fa2dc;
+  background: rgba(var(--pea-accent-rgb), 0.15);
+  color: var(--pea-brand);
   font-size: 10px;
   font-weight: 600;
   flex-shrink: 0;
@@ -9643,7 +9908,7 @@ html:not(.dark) .pea-crop-frame {
 }
 .msnp-item:hover,
 .msnp-item.hl {
-  background: rgba(31, 162, 220, 0.1);
+  background: rgba(var(--pea-accent-rgb), 0.1);
 }
 .msnp-item:active {
   transform: scale(0.98);
@@ -9708,7 +9973,7 @@ html:not(.dark) .pea-crop-frame {
 .light .msnp-item-label { color: rgba(0, 0, 0, 0.85); }
 .light .msnp-item-desc { color: rgba(0, 0, 0, 0.38); }
 .light .msnp-footer { color: rgba(0, 0, 0, 0.3); }
-.light .msnp-edges-preview { background: rgba(31, 162, 220, 0.03); }
+.light .msnp-edges-preview { background: rgba(var(--pea-accent-rgb), 0.03); }
 
 /* ═══════════════════════════════════════════════════════════════
    GroupNode — 打组容器
@@ -9738,8 +10003,8 @@ html:not(.dark) .pea-crop-frame {
 .pea-group-node > * { pointer-events: auto; }
 
 .pea-group-node.selected {
-  border-color: rgba(31, 162, 220, 0.80);
-  box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.12) inset, 0 0 16px rgba(31, 162, 220, 0.20);
+  border-color: rgba(var(--pea-accent-rgb), 0.80);
+  box-shadow: 0 0 0 2px rgba(var(--pea-accent-rgb), 0.12) inset, 0 0 16px rgba(var(--pea-accent-rgb), 0.20);
 }
 
 /* 组名称：浮在容器外左上角，无图标，白字阴影保证可读性（参考图2） */
@@ -9954,8 +10219,8 @@ html:not(.dark) .pea-crop-frame {
 }
 
 .pgn-layout-trigger.active {
-  background: rgba(31, 162, 220, 0.15);
-  color: #5bc8f7;
+  background: rgba(var(--pea-accent-rgb), 0.15);
+  color: #a78bfa;
 }
 
 .pgn-layout-icon {
@@ -10022,8 +10287,8 @@ html:not(.dark) .pea-crop-frame {
 }
 
 .pgn-layout-item.active {
-  color: #5bc8f7;
-  background: rgba(31, 162, 220, 0.1);
+  color: #a78bfa;
+  background: rgba(var(--pea-accent-rgb), 0.1);
 }
 
 .pgn-layout-item.pgn-danger:hover {
@@ -10119,8 +10384,8 @@ html:not(.dark) .pea-crop-frame {
   box-shadow: none;
 }
 .light .pea-group-node.selected {
-  border: 1px solid rgba(31, 162, 220, 0.78);
-  box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.10) inset, 0 0 16px rgba(31, 162, 220, 0.20);
+  border: 1px solid rgba(var(--pea-accent-rgb), 0.78);
+  box-shadow: 0 0 0 2px rgba(var(--pea-accent-rgb), 0.10) inset, 0 0 16px rgba(var(--pea-accent-rgb), 0.20);
 }
 
 /* 当系统偏好浅色但 html/body 未显式添加 .light 类时（常见于 headless 测试或未初始化主题），
@@ -10132,8 +10397,8 @@ html:not(.dark) .pea-crop-frame {
     box-shadow: none;
   }
   .pea-group-node.selected {
-    border: 1px solid rgba(31, 162, 220, 0.78);
-    box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.10) inset, 0 0 16px rgba(31, 162, 220, 0.20);
+    border: 1px solid rgba(var(--pea-accent-rgb), 0.78);
+    box-shadow: 0 0 0 2px rgba(var(--pea-accent-rgb), 0.10) inset, 0 0 16px rgba(var(--pea-accent-rgb), 0.20);
   }
   .pea-group-node-label { color: rgba(0, 0, 0, 0.82); text-shadow: none; }
 }
@@ -10178,7 +10443,7 @@ html:not(.dark) .pea-crop-frame {
 }
 .light .pgn-layout-item { color: rgba(0, 0, 0, 0.6); }
 .light .pgn-layout-item:hover { background: rgba(0, 0, 0, 0.04); color: rgba(0, 0, 0, 0.85); }
-.light .pgn-layout-item.active { color: #1a8ccf; background: rgba(31, 162, 220, 0.06); }
+.light .pgn-layout-item.active { color: #8b5cf6; background: rgba(var(--pea-accent-rgb), 0.06); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    文本节点全屏编辑弹窗 (TextNodeEditorModal)
@@ -10282,13 +10547,13 @@ html:not(.dark) .pea-crop-frame {
 }
 /* 激活态：光标所在的格式按钮高亮，让用户看清"当前处于哪种格式" */
 .tne-tool-btn--active {
-  background: rgba(31, 162, 220, 0.18);
-  color: var(--tne-accent, #1fa2dc);
-  box-shadow: inset 0 0 0 1px rgba(31, 162, 220, 0.4);
+  background: rgba(var(--pea-accent-rgb), 0.18);
+  color: var(--tne-accent, var(--pea-brand));
+  box-shadow: inset 0 0 0 1px rgba(var(--pea-accent-rgb), 0.4);
 }
 .tne-tool-btn--active:hover {
-  background: rgba(31, 162, 220, 0.26);
-  color: var(--tne-accent, #1fa2dc);
+  background: rgba(var(--pea-accent-rgb), 0.26);
+  color: var(--tne-accent, var(--pea-brand));
 }
 
 /* 颜色选择圆点 */
@@ -10378,7 +10643,7 @@ html:not(.dark) .pea-crop-frame {
   word-break: break-word;
 }
 .tne-editor-content {
-  caret-color: var(--tne-accent, #1fa2dc);
+  caret-color: var(--tne-accent, var(--pea-brand));
 }
 .tne-editor-content:focus {
   background: rgba(255, 255, 255, 0.02);
@@ -10407,7 +10672,7 @@ html:not(.dark) .pea-crop-frame {
 .tne-preview-content h3 { font-size: 1.12em; font-weight: 600; }
 .tne-preview-content p { margin: 0.5em 0; }
 .tne-preview-content blockquote {
-  border-left: 3px solid var(--tne-accent, #1fa2dc);
+  border-left: 3px solid var(--tne-accent, var(--pea-brand));
   padding-left: 14px;
   margin: 0.8em 0;
   color: var(--tne-muted, #888);
@@ -10474,13 +10739,13 @@ html:not(.dark) .tne-tool-btn:hover {
   color: var(--pea-text-primary);
 }
 html:not(.dark) .tne-tool-btn--active {
-  background: rgba(31, 162, 220, 0.14);
-  color: var(--tne-accent, #0084b8);
-  box-shadow: inset 0 0 0 1px rgba(31, 162, 220, 0.4);
+  background: rgba(var(--pea-accent-rgb), 0.14);
+  color: var(--tne-accent, #8b5cf6);
+  box-shadow: inset 0 0 0 1px rgba(var(--pea-accent-rgb), 0.4);
 }
 html:not(.dark) .tne-tool-btn--active:hover {
-  background: rgba(31, 162, 220, 0.22);
-  color: var(--tne-accent, #0084b8);
+  background: rgba(var(--pea-accent-rgb), 0.22);
+  color: var(--tne-accent, #8b5cf6);
 }
 html:not(.dark) .tne-editor-content {
   color: var(--pea-text-primary);
@@ -10501,7 +10766,7 @@ html:not(.dark) .tne-preview-content h3 {
   color: var(--pea-text-primary);
 }
 html:not(.dark) .tne-preview-content blockquote {
-  border-left-color: var(--pea-brand, #1A7FE8);
+  border-left-color: var(--pea-brand, #6d28d9);
   color: var(--pea-text-muted);
 }
 html:not(.dark) .tne-preview-content code {
@@ -10577,7 +10842,7 @@ html:not(.dark) .tne-color-ring {
   padding: 8px 12px;
 }
 .pea-search-input-wrap .ant-input-affix-wrapper:focus-within {
-  box-shadow: 0 0 0 2px rgba(31, 162, 220, 0.25);
+  box-shadow: 0 0 0 2px rgba(var(--pea-accent-rgb), 0.25);
 }
 .pea-search-input-icon {
   color: var(--pea-text-muted);
@@ -10612,8 +10877,8 @@ html:not(.dark) .tne-color-ring {
   color: var(--pea-text-primary);
 }
 .pea-search-tab.active {
-  background: rgba(31, 162, 220, 0.12);
-  border-color: rgba(31, 162, 220, 0.45);
+  background: rgba(var(--pea-accent-rgb), 0.12);
+  border-color: rgba(var(--pea-accent-rgb), 0.45);
   color: var(--pea-brand);
   font-weight: 600;
 }
@@ -10669,7 +10934,7 @@ html:not(.dark) .tne-color-ring {
   background: var(--pea-bg-elevated);
 }
 .pea-search-item.active {
-  background: rgba(31, 162, 220, 0.14);
+  background: rgba(var(--pea-accent-rgb), 0.14);
   border-left-color: var(--pea-brand);
 }
 .pea-search-item-thumb {
@@ -10809,3 +11074,5 @@ html.dark .pea-minimap-node-label {
 .pea-minimap-node:active rect {
   filter: brightness(1.25);
 }
+
+/* pea refactor: surface tokens applied (Runway cinematic + Vercel precision) */

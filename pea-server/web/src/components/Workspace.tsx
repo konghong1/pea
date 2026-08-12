@@ -13,6 +13,8 @@ import Account from './pages/Account';
 import Plans from './pages/Plans';
 import Admin from './pages/Admin';
 import { useUi } from '../store/ui';
+import { useCreatorDesign, CREATOR_SURFACE } from '../store/creatorDesign';
+import { useTheme } from '../store/theme';
 
 /**
  * 工作区布局 (FR-G1)：SPA 单实例。
@@ -29,6 +31,8 @@ export default function Workspace() {
   useWs();
   const active = useUi((s) => s.active);
   const { refreshMe, refreshToken } = useAuth();
+  const creatorDesign = useCreatorDesign((s) => s.design);
+  const surface = CREATOR_SURFACE[creatorDesign];
 
   // 静默续期（必须在常驻的 Workspace 里，而非 TopNav）：
   // TopNav 在画布模式下不挂载，若续期放那，画布里登录态会过期被踢。
@@ -58,6 +62,30 @@ export default function Workspace() {
 
   const inCanvas = active === 'canvas';
 
+  // 创作端表面传播：画布内把当前创作设计写到 documentElement（与全局主题同一元素），
+  // 这样既触发既有 70+ 处 html.dark / html.light 浮层覆写规则（Runway=暗、Figma=亮），
+  // 又通过 body[data-surface] 让 createPortal 到 body 的画布浮层继承 figma/cinematic 令牌。
+  // 离开画布时按全局主题模式（useTheme）恢复 documentElement，避免污染后台页面。
+  useEffect(() => {
+    if (!inCanvas) return;
+    const html = document.documentElement;
+    html.classList.toggle('dark', creatorDesign === 'runway');
+    html.classList.toggle('light', creatorDesign === 'figma');
+    document.body.dataset.surface = surface;
+    return () => {
+      html.classList.remove('dark', 'light');
+      delete document.body.dataset.surface;
+      // 恢复 precision 主题（按全局 useTheme 模式重新写到 <html>）
+      const m = useTheme.getState().mode;
+      const dark =
+        m === 'dark' ||
+        (m === 'system' &&
+          window.matchMedia('(prefers-color-scheme: dark)').matches);
+      html.classList.toggle('dark', dark);
+      html.classList.toggle('light', !dark);
+    };
+  }, [inCanvas, surface, creatorDesign]);
+
   return (
     <div className="flex h-screen flex-col">
       {!inCanvas && <TopNav />}
@@ -67,14 +95,14 @@ export default function Workspace() {
       <div className="relative flex-1 overflow-visible">
         {/* 画布：仅在 canvas 模式挂载（点击项目 / 新建项目后跳转） */}
         {inCanvas && (
-          <div className="absolute inset-0">
+          <div className="absolute inset-0" data-surface={surface}>
             <CanvasEditor />
           </div>
         )}
         {/* 副驾驶聊天侧边栏：固定在最右 380px，跨画布/页面常驻 */}
         <AgentPanel />
         {!inCanvas && (
-          <div className="absolute inset-0 z-20 bg-white dark:bg-[#0a0a0a]">
+          <div className="absolute inset-0 z-20 bg-[var(--pea-bg-deep)]" data-surface="precision">
             {active === 'home' && <Home />}
             {active === 'workspace' && <ProjectList />}
             {(active === 'account' || active === 'settings') && <Account />}

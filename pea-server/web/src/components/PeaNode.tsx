@@ -660,8 +660,6 @@ function ResultMediaView({
 }) {
   const [chromeReady, setChromeReady] = useState(false);
   useLayoutEffect(() => { setChromeReady(true); }, []);
-  const selectedIdsArr = useCanvas((s) => s.selectedIds);
-  const selected = selectedIdsArr.includes(id);
   const update = useCanvas((s) => s.updateNodeData);
   const addNode = useCanvas((s) => s.addNode);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -675,6 +673,8 @@ function ResultMediaView({
   const cubeOpenNodeId = useCanvas((s) => s.cubeOpenNodeId);
   const setCubeOpenNodeId = useCanvas((s) => s.setCubeOpenNodeId);
   const cubeOpen = cubeOpenNodeId === id;
+  // 面板可见性随节点选中态联动：点空白取消选中即隐藏，点节点选中即显示
+  const selected = useCanvas((s) => s.selectedIds.includes(id));
   const imageWrapRef = useRef<HTMLDivElement>(null);  // 图片容器 ref，裁切组件用它测量尺寸并原地覆盖
   // 角度魔方锚点：与 NodeChatPrompt 同一机制，确保 DOM 挂载后才 portal
   const [cubeAnchorEl, setCubeAnchorEl] = useState<HTMLElement | null>(null);
@@ -1102,7 +1102,11 @@ function ResultMediaView({
       )}
 
       {/* 角度魔方面板：portal 到编辑锚点（替代 NodeChatPrompt 输入框），相对节点固定。
-          只在节点被选中时显示；取消选中时收起但 cubeOpenNodeId 状态保留，再选中恢复。 */}
+          可见性由 cubeOpenNodeId + 节点选中态共同决定：
+          - 点空白 / 取消选中 → 面板隐藏（保留原行为）
+          - 点该节点选中 → 面板显示
+          - 刷新后 openCanvas 自动恢复选中 + cubeOpenNodeId → 面板显示
+          - 仅点面板右上角 × 才清空 cubeOpenNodeId 关闭 */}
       {cubeOpen && selected && currentUrl && cubeAnchorEl && createPortal(
         <AngleCubeOverlay
           nodeId={id}

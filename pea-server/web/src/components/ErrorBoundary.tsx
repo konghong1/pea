@@ -127,7 +127,7 @@ export default class ErrorBoundary extends Component<{ children: ReactNode }, St
                 appearance: 'none',
                 border: 'none',
                 cursor: 'pointer',
-                background: 'linear-gradient(135deg,#7f77dd,#5b8def)',
+                background: 'linear-gradient(135deg,#7f77dd,#8b5cf6)',
                 color: '#fff',
                 fontWeight: 600,
                 fontSize: 14,

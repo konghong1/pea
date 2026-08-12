@@ -172,7 +172,7 @@ export default function TextNodeToolbar({
       <Sep />
 
       {/* ── 颜色选择组 ── */}
-      <Btn title="蓝色" colorDot="#1fa2dc" onClick={() => exec('foreColor', '#1fa2dc')} />
+      <Btn title="蓝色" colorDot="#8b5cf6" onClick={() => exec('foreColor', '#8b5cf6')} />
       <Btn title="红色" colorDot="#e74c3c" onClick={() => exec('foreColor', '#e74c3c')} />
       <Btn title="绿色" colorDot="#27ae60" onClick={() => exec('foreColor', '#27ae60')} />
       <Btn title="橙色/警告" colorDot="#f39c12" onClick={() => exec('foreColor', '#f39c12')} />

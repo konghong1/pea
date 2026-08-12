@@ -41,7 +41,7 @@ export default function RichTextToolbar({ editorRef }: Props) {
       <Btn title="下划线" onClick={() => exec('underline')}>
         <UnderlineOutlined />
       </Btn>
-      <Btn title="颜色" onClick={() => exec('foreColor', '#0984E3')}>
+      <Btn title="颜色" onClick={() => exec('foreColor', '#8b5cf6')}>
         <FontColorsOutlined />
       </Btn>
       <Btn title="有序列表" onClick={() => exec('insertOrderedList')}>

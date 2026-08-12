@@ -15,7 +15,7 @@ import ReactFlow, {
   SelectionMode,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { App, Input, Modal, Select, Tooltip } from 'antd';
+import { App, Input, Modal, Select, Tooltip, ConfigProvider, theme as antdTheme } from 'antd';
 import {
   ShareAltOutlined,
   WalletOutlined,
@@ -38,7 +38,7 @@ import { useCanvas, PeaNodeData, cleanGraph } from '../store/canvas';
 import { getNodeSize } from '../lib/nodeSize';
 import { useUi } from '../store/ui';
 import { useAuth } from '../store/auth';
-import { useTheme } from '../store/theme';
+import { useCreatorDesign } from '../store/creatorDesign';
 import { canvasesApi } from '../api/canvases';
 import PeaNode from './PeaNode';
 import GroupNode from './GroupNode';
@@ -121,6 +121,7 @@ function CanvasHeader({
   const title = useCanvas((s) => s.title);
   const lastSavedAt = useCanvas((s) => s.lastSavedAt);
   const canvasId = useCanvas((s) => s.canvasId);
+  const { design: creatorDesign, setDesign: setCreatorDesign } = useCreatorDesign();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -175,6 +176,7 @@ function CanvasHeader({
               </div>
             </div>
           </div>
+          <div className="pea-canvas-dropdown-divider" />
           <button
             type="button"
             role="menuitem"
@@ -364,13 +366,11 @@ function DeleteItem({
   );
 }
 
-/** 画布右上角：Tapies 余额 + 社区 + 分享 */
+/** 画布右上角：创作主题切换 + Tapies 余额 + 社区 + 分享 */
 function CanvasActions() {
   const balance = useAuth((s) => s.balance);
-  // 统一走 store 的 refreshBalance：生成/退款时由 syncBalance 自动触发，
-  // 点击仅作为用户主动校准入口（此前是唯一的更新途径）
   const refreshBalance = useAuth((s) => s.refreshBalance);
-  const { mode, setMode } = useTheme();
+  const { design: creatorDesign, setDesign: setCreatorDesign } = useCreatorDesign();
   const [shareBusy, setShareBusy] = useState(false);
   const { message } = App.useApp();
 
@@ -401,18 +401,30 @@ function CanvasActions() {
 
   return (
     <div className="pea-canvas-actions">
-      <Select
-        className="pea-theme-select"
-        popupClassName="pea-canvas-portal"
-        value={mode}
-        onChange={(v) => setMode(v)}
-        suffixIcon={<span className="text-xs">▾</span>}
-        options={[
-          { label: '浅色', value: 'light' },
-          { label: '深色', value: 'dark' },
-          { label: '跟随系统', value: 'system' },
-        ]}
-      />
+      {/* 紧凑创作主题切换 */}
+      <div className="pea-canvas-theme-compact" role="radiogroup" aria-label="创作端设计主题">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={creatorDesign === 'runway'}
+          className={`pea-canvas-theme-pill${creatorDesign === 'runway' ? ' active' : ''}`}
+          onClick={() => setCreatorDesign('runway')}
+        >
+          <span className="pea-canvas-theme-swatch runway" aria-hidden />
+          Runway
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={creatorDesign === 'figma'}
+          className={`pea-canvas-theme-pill${creatorDesign === 'figma' ? ' active' : ''}`}
+          onClick={() => setCreatorDesign('figma')}
+        >
+          <span className="pea-canvas-theme-swatch figma" aria-hidden />
+          Figma
+        </button>
+      </div>
+
       <Tooltip title="账户余额 (Tapies) — 点击查看订阅套餐">
         <button
           type="button"
@@ -424,8 +436,8 @@ function CanvasActions() {
           <svg className="pea-balance-gem" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
             <defs>
               <radialGradient id="gemBg" cx="40%" cy="35%" r="60%">
-                <stop offset="0%" stopColor="#B8E2FF"/>
-                <stop offset="50%" stopColor="#3B9EFF"/>
+                <stop offset="0%" stopColor="#c4b5fd"/>
+                <stop offset="50%" stopColor="#a78bfa"/>
                 <stop offset="100%" stopColor="#5B7BF5"/>
               </radialGradient>
               <linearGradient id="gemShine" x1="6" y1="4" x2="18" y2="16">
@@ -2116,7 +2128,7 @@ function Flow() {
               variant={BackgroundVariant.Dots}
               gap={22}
               size={1.2}
-              color="rgba(255,255,255,0.06)"
+              color="var(--pea-edge-idle)"
             />
           )}
           {showMinimap && (
@@ -2212,12 +2224,48 @@ function Flow() {
 }
 
 export default function CanvasEditor() {
+  // 画布 Antd 主题跟随创作设计：Runway=暗，Figma=亮（与各自 surface 一致）。
+  const creatorDesign = useCreatorDesign((s) => s.design);
+  const canvasDark = creatorDesign === 'runway';
+  const canvasTokens = canvasDark
+    ? {
+        colorPrimary: '#f5f5f5', // 暗态主操作：浅药丸 + 深字（可见）
+        colorInfo: '#a78bfa', // AI 紫（暗态提亮保证对比）
+        colorText: '#f5f5f5',
+        colorTextSecondary: '#a7a7a7',
+        colorBgContainer: '#0a0a0a',
+        colorBgElevated: '#1a1a1a',
+        colorBorder: '#27272a',
+        colorBorderSecondary: '#27272a',
+      }
+    : {
+        colorPrimary: '#000000', // 亮态：黑药丸 + 白字
+        colorInfo: '#8b5cf6',
+        colorText: '#000000',
+        colorTextSecondary: '#4d4d4d',
+        colorBgContainer: '#ffffff',
+        colorBgElevated: '#ffffff',
+        colorBorder: '#e6e6e6',
+        colorBorderSecondary: '#e6e6e6',
+      };
   return (
-    <ReactFlowProvider>
-      <CanvasErrorBoundary>
-        <Flow />
-        <SelectionOverlay />
-      </CanvasErrorBoundary>
-    </ReactFlowProvider>
+    <ConfigProvider
+      theme={{
+        algorithm: canvasDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+        token: {
+          ...canvasTokens,
+          borderRadius: 6,
+          fontFamily:
+            "'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif",
+        },
+      }}
+    >
+      <ReactFlowProvider>
+        <CanvasErrorBoundary>
+          <Flow />
+          <SelectionOverlay />
+        </CanvasErrorBoundary>
+      </ReactFlowProvider>
+    </ConfigProvider>
   );
 }

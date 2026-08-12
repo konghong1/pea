@@ -1754,21 +1754,21 @@ useEffect(() => {
                   <defs>
                     <linearGradient id="pea-gen-spark" x1="0" y1="0" x2="1" y2="1">
                       <stop offset="0%" stopColor="#FFFFFF"/>
-                      <stop offset="100%" stopColor="#7DDDFF"/>
+                      <stop offset="100%" stopColor="#c4b5fd"/>
                     </linearGradient>
                     <linearGradient id="pea-gen-spark-light" x1="0" y1="0" x2="1" y2="1">
                       <stop offset="0%" stopColor="#FFFFFF"/>
-                      <stop offset="100%" stopColor="#3B9EFF"/>
+                      <stop offset="100%" stopColor="#a78bfa"/>
                     </linearGradient>
                   </defs>
                   {/* 中心火花核心: 象征「生成 / 创造」 */}
                   <path className="pe-gen-spark" d="M12 3 L13.4 10.6 L21 12 L13.4 13.4 L12 21 L10.6 13.4 L3 12 L10.6 10.6 Z" fill="url(#pea-gen-spark)"/>
                   {/* 轨道粒子: 环绕翻动 */}
                   <g className="pe-gen-particles">
-                    <circle className="pe-particle p1" cx="12" cy="2.5" r="1.4" fill="#7DDDFF"/>
-                    <circle className="pe-particle p2" cx="21.5" cy="12" r="1.4" fill="#BFE9FF"/>
-                    <circle className="pe-particle p3" cx="12" cy="21.5" r="1.4" fill="#7DDDFF"/>
-                    <circle className="pe-particle p4" cx="2.5" cy="12" r="1.4" fill="#BFE9FF"/>
+                    <circle className="pe-particle p1" cx="12" cy="2.5" r="1.4" fill="#c4b5fd"/>
+                    <circle className="pe-particle p2" cx="21.5" cy="12" r="1.4" fill="#C4B5FD"/>
+                    <circle className="pe-particle p3" cx="12" cy="21.5" r="1.4" fill="#c4b5fd"/>
+                    <circle className="pe-particle p4" cx="2.5" cy="12" r="1.4" fill="#C4B5FD"/>
                   </g>
                 </svg>
               )}

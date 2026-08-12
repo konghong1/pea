@@ -5,17 +5,19 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 对齐 pea-canvas-v12.html 设计令牌
+        // 统一设计系统：主操作为中性墨色，语义彩色仅 purple/lime
         pea: {
-          brand: '#1fa2dc', // 主强调色（青蓝）
-          brandStrong: '#0b86bd', // 浅色背景上的可读变体
-          purple: '#8b5cf6', // AI / 次强调（紫）
-          lime: '#34d399', // 第三强调（青柠）
+          brand: '#171717', // 主操作（中性黑/白，取代原青蓝）
+          brandStrong: '#000000',
+          purple: '#8b5cf6', // AI / 生成态信号
+          lime: '#34d399', // 成功/完成态
           accent: '#8b5cf6', // 兼容旧 to-pea-accent 用法
         },
       },
       fontFamily: {
         sans: [
+          'Geist',
+          'Inter',
           '-apple-system',
           'BlinkMacSystemFont',
           '"Segoe UI"',

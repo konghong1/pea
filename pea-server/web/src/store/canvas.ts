@@ -198,6 +198,30 @@ const nextId = (nodes: Node<PeaNodeData>[]) => {
   return `n${max + 1}`;
 };
 
+/** 角度魔方面板打开态持久化键：刷新后据此恢复 cubeOpenNodeId。 */
+const CUBE_OPEN_STORAGE_KEY = 'pea:cube-open-node-id';
+
+/** 节点选中态持久化键：刷新后原样恢复选中集合，使面板可见性与刷新前一致。 */
+const SELECTED_IDS_STORAGE_KEY = 'pea:selected-ids';
+const persistSelectedIds = (ids: string[]) => {
+  try {
+    if (ids.length) localStorage.setItem(SELECTED_IDS_STORAGE_KEY, JSON.stringify(ids));
+    else localStorage.removeItem(SELECTED_IDS_STORAGE_KEY);
+  } catch {
+    /* localStorage 不可用时静默降级（内存态仍生效） */
+  }
+};
+const readSelectedIds = (): string[] => {
+  try {
+    const raw = localStorage.getItem(SELECTED_IDS_STORAGE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
 /** 基于当前 edges 生成唯一边 ID，兼容 e1 / e1_xxx 等历史格式。 */
 const nextEdgeId = (edges: Edge[]) => {
   let max = 0;
@@ -460,6 +484,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       future,
       dirty: true,
     });
+    persistSelectedIds(prev.selectedIds);
   },
   redo: () => {
     const s = get();
@@ -478,14 +503,16 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       future,
       dirty: true,
     });
+    persistSelectedIds(next.selectedIds);
   },
   removeNodes: (ids) => {
     const idSet = new Set(ids);
     if (idSet.size === 0) return;
+    const cubeOpenId = get().cubeOpenNodeId;
+    const removeSet = new Set<string>();
     get().takeSnapshot(); // 一次批量删除合并为单条撤销项
     set((s) => {
       // 级联收集：组节点展开其子节点，并收集 parentNode 指向被删节点的孤立子节点
-      const removeSet = new Set<string>();
       const collect = (id: string) => {
         if (removeSet.has(id)) return;
         removeSet.add(id);
@@ -525,9 +552,18 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         edges: nextEdges,
         selectedId: s.selectedId != null && removeSet.has(s.selectedId) ? null : s.selectedId,
         selectedIds: s.selectedIds.filter((x) => !removeSet.has(x)),
+        cubeOpenNodeId: cubeOpenId != null && removeSet.has(cubeOpenId) ? null : s.cubeOpenNodeId,
         dirty: true,
       };
     });
+    persistSelectedIds(get().selectedIds);
+    if (cubeOpenId != null && removeSet.has(cubeOpenId)) {
+      try {
+        localStorage.removeItem(CUBE_OPEN_STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
   },
 
   setCanvasMeta: (id, version, title) =>
@@ -590,6 +626,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
         selectedId: ids.length ? ids[ids.length - 1] : null,
       } : {}),
     });
+    if (hasSelectChanges) persistSelectedIds(ids);
   },
   onEdgesChange: (changes) => {
     // 同上：select(受控选中) 不标脏，仅 remove/add/position 等实质变更标脏。
@@ -631,6 +668,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       selectedId: id,
       selectedIds: [id],
     });
+    persistSelectedIds([id]);
     return id;
   },
   updateNodeData: (id, patch, recordHistory = true) => {
@@ -644,30 +682,47 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       dirty: true,
     });
   },
-  setCubeOpenNodeId: (id) => set({ cubeOpenNodeId: id }),
-  select: (id) =>
+  setCubeOpenNodeId: (id) => {
+    set({ cubeOpenNodeId: id });
+    // 持久化打开态，刷新后仍可恢复魔方面板（仅 × / 确认生成会清为空）。
+    try {
+      if (id) localStorage.setItem(CUBE_OPEN_STORAGE_KEY, id);
+      else localStorage.removeItem(CUBE_OPEN_STORAGE_KEY);
+    } catch {
+      /* localStorage 不可用时静默降级（内存态仍生效） */
+    }
+  },
+  select: (id) => {
     set((s) => ({
       selectedId: id,
       selectedIds: id ? [id] : [],
       nodes: s.nodes.map((n) => ({ ...n, selected: !!id && n.id === id })),
-    })),
-  toggleSelect: (id) =>
+    }));
+    persistSelectedIds(id ? [id] : []);
+  },
+  toggleSelect: (id) => {
+    let nextIds: string[] = [];
     set((s) => {
       const has = s.selectedIds.includes(id);
       const next = has ? s.selectedIds.filter((x) => x !== id) : [...s.selectedIds, id];
+      nextIds = next;
       const selId = next.length ? (has ? next[next.length - 1] || id : id) : null;
       return {
         selectedIds: next,
         selectedId: selId,
         nodes: s.nodes.map((n) => ({ ...n, selected: next.includes(n.id) })),
       };
-    }),
-  setSelection: (ids) =>
+    });
+    persistSelectedIds(nextIds);
+  },
+  setSelection: (ids) => {
     set((s) => ({
       selectedIds: ids,
       selectedId: ids.length ? ids[ids.length - 1] : null,
       nodes: s.nodes.map((n) => ({ ...n, selected: ids.includes(n.id) })),
-    })),
+    }));
+    persistSelectedIds(ids);
+  },
   correctBoxSelection: () => {
     if (typeof window === 'undefined') return;
     const last = (window as any).__lastSelRect as
@@ -722,12 +777,14 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       });
     }
   },
-  clearSelection: () =>
+  clearSelection: () => {
     set((s) => ({
       selectedIds: [],
       selectedId: null,
       nodes: s.nodes.map((n) => ({ ...n, selected: false })),
-    })),
+    }));
+    persistSelectedIds([]);
+  },
   markSaved: (version) => set({ version, dirty: false, lastSavedAt: Date.now(), saveCount: get().saveCount + 1 }),
   loadGraph: (nodes, edges, version) => {
     lastHistoryLabel = null;
@@ -785,6 +842,42 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       version: g.data.version,
       dirty: false,
     });
+    // 刷新后恢复角度魔方面板：cubeOpenNodeId 持久化在 localStorage，
+    // 若对应节点仍存在且为带图媒体节点，则重开面板、选中并居中；否则清理残留键。
+    try {
+      const savedCubeId = localStorage.getItem(CUBE_OPEN_STORAGE_KEY);
+      if (savedCubeId) {
+        const node = get().nodes.find((n) => n.id === savedCubeId);
+        const hasImage = node?.data.kind === 'image'
+          && !!(
+            (node.data as any).resultUrl
+            || ((node.data as any).resultUrls && (node.data as any).resultUrls.length)
+            || (node.data as any).url
+            || (node.data as any).fileKey
+          );
+        if (node && hasImage) {
+          // 恢复刷新前的选中集合（原样），而非强制选中魔方节点：
+          // 「刷新前点空白隐藏」→ 刷新后仍是隐藏；「刷新前显示」→ 刷新后显示。
+          const savedSel = readSelectedIds().filter((x) => get().nodes.some((n) => n.id === x));
+          set((s) => ({
+            cubeOpenNodeId: savedCubeId,
+            selectedId: savedSel.length ? savedSel[savedSel.length - 1] : null,
+            selectedIds: savedSel,
+            nodes: s.nodes.map((n) => ({ ...n, selected: savedSel.includes(n.id) })),
+          }));
+          // 仅当魔方节点仍在刷新前的选中集合内（面板会显示）才居中，避免无谓跳动。
+          if (savedSel.includes(savedCubeId)) {
+            window.dispatchEvent(
+              new CustomEvent('pea:center-node', { detail: { id: savedCubeId, mode: 'cube' } }),
+            );
+          }
+        } else {
+          localStorage.removeItem(CUBE_OPEN_STORAGE_KEY);
+        }
+      }
+    } catch {
+      /* localStorage 不可用时忽略恢复 */
+    }
     // 加载完成后异步核对：所有 generating=true 的节点拿 lastJobId 去后端查真实状态，
     // 防止 WS 事件丢失/页面重开导致节点永远停「生成中」（stale state）。
     // 没 lastJobId 的旧节点直接置 false（无法重建关联的 job）。

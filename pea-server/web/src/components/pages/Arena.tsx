@@ -11,7 +11,7 @@ export default function Arena() {
     <div className="pea-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ textAlign: 'center', maxWidth: 420 }}>
         <div className="pea-card" style={{ padding: 36 }}>
-          <div style={{ fontSize: 48, marginBottom: 12, color: '#1fa2dc' }}>
+          <div style={{ fontSize: 48, marginBottom: 12, color: '#8b5cf6' }}>
             <TrophyOutlined />
           </div>
           <div className="pea-hero-title">创作竞技场</div>

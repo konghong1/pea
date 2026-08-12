@@ -157,20 +157,20 @@ export function kindColor(kind: string): string {
   const map: Record<string, string> = {
     text: '#34d399',
     image: '#FD79A8',
-    video: '#1fa2dc',
+    video: '#8b5cf6',
     audio: '#8b5cf6',
     ref: '#64748b',
-    generate: '#1fa2dc',
+    generate: '#8b5cf6',
     agent: '#8b5cf6',
     story: '#f59e0b',
-    world3d: '#06b6d4',
+    world3d: '#6366f1',
     camera: '#ec4899',
     light: '#fbbf24',
     playlist: '#22c55e',
     replace: '#ef4444',
     prompt: '#34d399',
   };
-  return map[kind] || '#1fa2dc';
+  return map[kind] || '#8b5cf6';
 }
 
 /** 生成态徽标：小闪电 */

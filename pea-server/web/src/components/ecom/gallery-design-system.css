@@ -2,7 +2,7 @@
    电商套图 · 设计系统 (Gallery Design System) — pea 适配版
    ---------------------------------------------------------
    配色对齐 pea 设计令牌：
-   - 品牌强调色：pea 蓝 (#1fa2dc) / AI 紫 (#8b5cf6) / 确认绿 (#34d399)
+   - 品牌强调色：pea 蓝 (#8b5cf6) / AI 紫 (#8b5cf6) / 确认绿 (#34d399)
    - 表面/文字复用应用级 --ice-*（深浅模式自动适配）
    - 字体：Space Grotesk（标题/数字）+ Inter（正文）
    ========================================================= */
@@ -14,9 +14,9 @@
    ========================================================= */
 :root {
   /* ---- 品牌色（对齐 pea） ---- */
-  --g-brand: var(--pea-brand, #1fa2dc);
-  --g-brand-strong: var(--pea-brand-strong, #0b86bd);
-  --g-brand-weak: rgba(31, 162, 220, .08);
+  --g-brand: var(--pea-brand, #8b5cf6);
+  --g-brand-strong: var(--pea-brand-strong, #6d28d9);
+  --g-brand-weak: rgba(var(--pea-accent-rgb), .08);
   --g-ai-purple: var(--pea-purple, #8b5cf6);
   --g-ai-purple-2: #7c3aed;
   --g-ai-purple-light: rgba(139, 92, 246, .10);
@@ -86,9 +86,9 @@
   --ice-text-primary: var(--pea-text-primary, #1a1a1f);
   --ice-text-secondary: var(--pea-text-secondary, #555560);
   --ice-text-muted: var(--pea-text-muted, #9999a8);
-  --ice-primary: var(--pea-brand, #1fa2dc);
-  --ice-primary-10: rgba(31, 162, 220, .10);
-  --ice-primary-dark: var(--pea-brand-strong, #0b86bd);
+  --ice-primary: var(--pea-brand, #8b5cf6);
+  --ice-primary-10: rgba(var(--pea-accent-rgb), .10);
+  --ice-primary-dark: var(--pea-brand-strong, #6d28d9);
   --ice-danger: #e5484d;
   --ice-success: var(--pea-lime, #34d399);
   --ice-warning: #fbbf24;
@@ -99,9 +99,9 @@
 
 /* ---- 深色模式：仅覆盖颜色相关令牌，几何/阴影沿用 :root ---- */
 .dark {
-  --g-brand: var(--pea-brand, #1fa2dc);
-  --g-brand-strong: var(--pea-brand-strong, #90c4e5);
-  --g-brand-weak: rgba(31, 162, 220, .14);
+  --g-brand: var(--pea-brand, #8b5cf6);
+  --g-brand-strong: var(--pea-brand-strong, #c4b5fd);
+  --g-brand-weak: rgba(var(--pea-accent-rgb), .14);
   --g-ai-purple: var(--pea-purple, #8b5cf6);
   --g-ai-purple-2: #7c3aed;
   --g-ai-purple-light: rgba(139, 92, 246, .18);
@@ -139,9 +139,9 @@
   --ice-text-primary: var(--pea-text-primary, #f5f5f5);
   --ice-text-secondary: var(--pea-text-secondary, #d4d4d8);
   --ice-text-muted: var(--pea-text-muted, #7a7a7a);
-  --ice-primary: var(--pea-brand, #1fa2dc);
-  --ice-primary-10: rgba(31, 162, 220, .18);
-  --ice-primary-dark: var(--pea-brand-strong, #90c4e5);
+  --ice-primary: var(--pea-brand, #8b5cf6);
+  --ice-primary-10: rgba(var(--pea-accent-rgb), .18);
+  --ice-primary-dark: var(--pea-brand-strong, #c4b5fd);
   --ice-danger: #f0707a;
   --ice-success: var(--pea-lime, #34d399);
   --ice-warning: #fbbf24;
@@ -225,18 +225,18 @@
   border-radius: 12px;
   cursor: pointer;
   display: flex; flex-direction: column; align-items: center; gap: 2px;
-  box-shadow: 0 4px 14px rgba(29, 162, 220, .25);
+  box-shadow: 0 4px 14px rgba(139, 92, 246, .25);
   transition: all .15s var(--g-ease);
 }
 .btn-generate small { font-size: 11px; font-weight: 500; opacity: .85; }
-.btn-generate:hover:not(:disabled) { background: var(--g-brand-strong); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(29, 162, 220, .35); }
+.btn-generate:hover:not(:disabled) { background: var(--g-brand-strong); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(139, 92, 246, .35); }
 .btn-generate:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
 .btn-generate-hint {
   margin-top: 10px;
   padding: 8px 12px;
   border-radius: 8px;
-  background: rgba(29, 162, 220, .08);
-  color: var(--g-brand, #1fa2dc);
+  background: rgba(139, 92, 246, .08);
+  color: var(--g-brand, #8b5cf6);
   font-size: 12px;
   font-weight: 500;
   text-align: center;
@@ -452,7 +452,7 @@
   margin-top: 20px;
   padding: 20px 24px;
   border-radius: 18px;
-  background: linear-gradient(135deg, rgba(29, 162, 220, .06), rgba(139, 92, 246, .06));
+  background: linear-gradient(135deg, rgba(139, 92, 246, .06), rgba(139, 92, 246, .06));
   border: 1px solid var(--ice-border);
   flex-wrap: wrap;
 }

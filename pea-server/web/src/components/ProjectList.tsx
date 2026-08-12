@@ -42,13 +42,13 @@ type View = 'grid' | 'list';
 /** 基于 canvas id 生成稳定的 CSS gradient（不依赖网络图片）。 */
 function gradientFor(id: number): string {
   const palettes = [
-    'linear-gradient(135deg,#7c5cff 0%,#1fa2dc 55%,#b6f09c 100%)',
-    'linear-gradient(135deg,#1fa2dc 0%,#16a34a 70%,#b6f09c 100%)',
-    'linear-gradient(135deg,#ff7eb3 0%,#7c5cff 60%,#1fa2dc 100%)',
+    'linear-gradient(135deg,#7c5cff 0%,#8b5cf6 55%,#b6f09c 100%)',
+    'linear-gradient(135deg,#8b5cf6 0%,#16a34a 70%,#b6f09c 100%)',
+    'linear-gradient(135deg,#ff7eb3 0%,#7c5cff 60%,#8b5cf6 100%)',
     'linear-gradient(135deg,#f59e0b 0%,#ef4444 70%,#7c5cff 100%)',
-    'linear-gradient(135deg,#0ea5e9 0%,#1fa2dc 60%,#7c5cff 100%)',
-    'linear-gradient(135deg,#22d3ee 0%,#1fa2dc 55%,#16a34a 100%)',
-    'linear-gradient(135deg,#f43f5e 0%,#7c5cff 70%,#1fa2dc 100%)',
+    'linear-gradient(135deg,#8b5cf6 0%,#8b5cf6 60%,#7c5cff 100%)',
+    'linear-gradient(135deg,#8b5cf6 0%,#8b5cf6 55%,#16a34a 100%)',
+    'linear-gradient(135deg,#f43f5e 0%,#7c5cff 70%,#8b5cf6 100%)',
     'linear-gradient(135deg,#a855f7 0%,#ec4899 60%,#f97316 100%)',
   ];
   // 简单稳定哈希

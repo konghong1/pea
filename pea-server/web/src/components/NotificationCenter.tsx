@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { useNotif, NotifLevel } from '../store/notifications';
 
 const LEVEL_COLOR: Record<NotifLevel, string> = {
-  info: '#1fa2dc',
+  info: '#8b5cf6',
   success: '#52c41a',
   warning: '#faad14',
   error: '#ff4d4f',
