@@ -25,7 +25,10 @@ _MAX_RETRIES = 3
 
 def refund_on_failure(job_id: str, user_id: int, cost_tapies: int, *, reason: str = "generation_failed") -> bool:
     """调用 BFF 内部退款. 成功返回 True; 穷尽重试仍失败返回 False (交对账脚本兜底)."""
-    url = f"{settings.bff_internal_base_url}/internal/billing/refund"
+    # BFF 全局路由前缀为 /api (main.ts setGlobalPrefix('api')), 内部退款接口真实路径
+    # 为 /api/internal/billing/refund. 之前漏掉 /api 导致 404, 失败补偿退款全部落空,
+    # 预扣积分只能靠每日对账脚本兜底. 见 2026-08-13 排查.
+    url = f"{settings.bff_internal_base_url}/api/internal/billing/refund"
     last_err: str | None = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:

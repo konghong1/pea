@@ -32,6 +32,10 @@
   --pea-warn: #f5a623;
   --pea-warn-soft: #ffefcf;
   --pea-success: #34d399;
+  /* 生成中状态专用 token：暗色终端面板 + 高对比强调色（亮底 surface 用 AI 紫，避免 spinner 与暗底同化） */
+  --pea-gen-bg: #222228;
+  --pea-gen-accent: #8b5cf6;
+  --pea-gen-accent-soft: #d8ccf1;
 
   /* 字体（precision=Vercel：Geist 主导；创作者端在各自 surface 覆写为 Inter） */
   --pea-font-sans: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
@@ -93,6 +97,10 @@
   --pea-warn: #f5a623;
   --pea-warn-soft: #ab570a;
   --pea-success: #34d399;
+  /* 生成中状态专用 token（暗态：近白强调色，与 cinematic 一致） */
+  --pea-gen-bg: #222228;
+  --pea-gen-accent: #f5f5f5;
+  --pea-gen-accent-soft: #525252;
 
   /* 字体（precision 暗态仍用 Geist 主导） */
   --pea-font-sans: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
@@ -145,6 +153,10 @@
   --pea-warn: #f5a623;
   --pea-warn-soft: #ffefcf;
   --pea-success: #34d399;
+  /* 生成中状态专用 token（cinematic 暗底：近白强调色） */
+  --pea-gen-bg: #222228;
+  --pea-gen-accent: #f5f5f5;
+  --pea-gen-accent-soft: #c9ccd1;
   /* 字体（cinematic=Runway：Inter 主导的单一几何无衬线，全文本同字族） */
   --pea-font-sans: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --pea-font-mono: 'Geist Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
@@ -214,6 +226,10 @@
   --pea-warn: #f5a623;
   --pea-warn-soft: #ffefcf;
   --pea-success: #34d399;
+  /* 生成中状态专用 token（figma 亮底：AI 紫强调色，确保 spinner 在暗面板可见） */
+  --pea-gen-bg: #222228;
+  --pea-gen-accent: #8b5cf6;
+  --pea-gen-accent-soft: #d8ccf1;
   /* 字体（figma=Inter 主导，figmaSans 的开源替代） */
   --pea-font-sans: 'Inter', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
   --pea-font-mono: 'Geist Mono', 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
@@ -520,7 +536,7 @@ body {
 /* 生成中：body-card 改为完全不透明，杜绝圆角处透出浅色画布的"半透明"感；
    同时取消 overflow:hidden，避免 TechLoader 同心圆 + drop-shadow 光晕被裁切 */
 .pea-node.is-generating .pea-node-body-card {
-  background: #222228;
+  background: var(--pea-gen-bg);
   overflow: visible;
 }
 
@@ -538,11 +554,11 @@ body {
   /* 整节点外柔光呼吸 (只留 blur 光晕, 不出实心环 —— 实心环会和 HUD 4 角叠加成两层框) */
   0%, 100% {
     box-shadow:
-      0 0 24px -4px color-mix(in srgb, var(--pea-accent, var(--pea-brand)) 20%, transparent);
+      0 0 24px -4px color-mix(in srgb, var(--pea-gen-accent, var(--pea-accent, var(--pea-brand))) 20%, transparent);
   }
   50% {
     box-shadow:
-      0 0 48px -2px color-mix(in srgb, var(--pea-accent, var(--pea-brand)) 45%, transparent);
+      0 0 48px -2px color-mix(in srgb, var(--pea-gen-accent, var(--pea-accent, var(--pea-brand))) 45%, transparent);
   }
 }
 .pea-node:hover {
@@ -615,14 +631,18 @@ body {
 .pea-node-image.pea-node-has-media.selected .pea-node-body-card,
 .pea-node-video.pea-node-has-media.selected .pea-node-body-card {
   border-color: var(--pea-purple, #8b5cf6);
-  border-width: 1.5px;
+  border-width: 2px;
   overflow: hidden;
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--pea-purple, #8b5cf6) 14%, transparent),
-    var(--pea-node-shadow-selected, 0 12px 28px rgba(0, 0, 0, 0.35));
+  box-shadow: var(--pea-node-shadow-selected, 0 12px 28px rgba(0, 0, 0, 0.35));
 }
 
-/* 选中外层光晕 - 已在 .pea-node.selected .pea-node-body-card 中通过 box-shadow 实现 */
+/* 选中指示 = 单一 2px 紫边框 + 柔和投影，不叠半透明辉光。
+   原因①：box-shadow 辉光用 color-mix(purple, transparent) 叠在节点自身背景上，
+   视频纯黑底会把半透明紫压暗、图片/文本又是别的底色，导致辉光与实心边框
+   永远对不上色，且各节点表现不一致。
+   原因②：1.5px 非整数边框在圆角处亚像素抗锯齿会混进画布底色（浅色画布上
+   圆角弧线比直边更浅、发灰/发白），改用整数 2px 后圆角渲染更干净，
+   直边与弧线颜色统一、无双色问题。 */
 /* 节点框比例（所有节点统一标准，详见 PeaNode.tsx 的 nodeSize）：
    - 框尺寸由 PeaNode.tsx 锁定：最长边恒 340px，按 kind 默认比例
      （image 9:16 / video·audio 16:9 / 其余 1:1）+ data.aspectRatio 覆盖；
@@ -862,6 +882,13 @@ body {
 /* 生成中图片节点：取消 overflow:hidden，让 TechLoader 动画完整显示 */
 .pea-node-image.pea-node-has-media.is-generating .pea-node-body-card {
   overflow: visible;
+}
+/* 媒体节点（非生成中/裁剪/魔方）：body-card 强制裁切，杜绝图片/视频溢出边框。
+   生成中保留 visible 以显示 TechLoader 光晕；裁剪/魔方由更具体的 !important 规则接管。
+   用 :not() 把生成中/裁剪/魔方排除在外，避免与它们的 visible 规则冲突。 */
+.pea-node-image.pea-node-has-media:not(.is-generating):not(.is-cropping):not(.is-cube-mode) .pea-node-body-card,
+.pea-node-video.pea-node-has-media:not(.is-generating):not(.is-cropping):not(.is-cube-mode) .pea-node-body-card {
+  overflow: hidden !important;
 }
 /* 媒体卡片去内边距，让图片完全贴合 body-card */
 .pea-node-image.pea-node-has-media .pea-node-media-card {
@@ -1169,7 +1196,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   min-height: 110px;
   min-width: 168px;
   border-radius: 18px;
-  background: #222228;
+  background: var(--pea-gen-bg);
 }
 /* 极淡扫描线纹理，增加生成中面板的科技感，同时不抢眼 */
 .pea-node-generating::before {
@@ -1195,7 +1222,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   left: 12px;
   right: 12px;
   height: 1px;
-  background: linear-gradient(90deg, transparent, var(--pea-accent-soft), var(--pea-accent), var(--pea-accent-soft), transparent);
+  background: linear-gradient(90deg, transparent, var(--pea-gen-accent-soft), var(--pea-gen-accent), var(--pea-gen-accent-soft), transparent);
   background-size: 200% 100%;
   opacity: 0.8;
   animation: pea-rail-flow 2.4s linear infinite;
@@ -1206,7 +1233,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
   height: 32px;
   border-radius: 50%;
   border: 3px solid rgba(255, 255, 255, 0.12);
-  border-top-color: var(--pea-brand, var(--pea-brand));
+  border-top-color: var(--pea-gen-accent, var(--pea-brand));
   animation: pea-spin 0.8s linear infinite;
 }
 @keyframes pea-spin {
@@ -1222,7 +1249,7 @@ html:not(.dark) .pea-node-prompt-echo-params {
    已上移到 .pea-node.is-generating 内的 .pea-node-hud，让 4 个角贴在节点框 4 角，
    "在节点框内动"的视觉感更直接。 */
 .tech-loader {
-  --tech-color: var(--pea-accent, var(--pea-brand));
+  --tech-color: var(--pea-gen-accent, var(--pea-accent, var(--pea-brand)));
   color: var(--tech-color);
   display: flex;
   flex-direction: column;
@@ -6056,24 +6083,6 @@ html:not(.dark) .node-count-btn-hint {
   border-color: rgba(255, 255, 255, 0.18);
   color: #fff;
 }
-.node-count-btn:hover + .node-count-btn-hint,
-.node-count-btn-wrapper:hover .node-count-btn-hint {
-  opacity: 1;
-  transform: translateY(0);
-}
-.node-count-btn-hint {
-  position: absolute;
-  top: -22px;
-  left: 50%;
-  transform: translateX(-50%) translateY(4px);
-  font-size: 10.5px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.55);
-  white-space: nowrap;
-  pointer-events: none;
-  opacity: 0;
-  transition: all 0.18s ease;
-}
 /* 出图数弹窗（与模型选择器样式一致） — Portal 渲染时 position 由内联样式覆盖 */
 .node-count-btn-dropdown {
   /* position: fixed;  ← 由内联 style 设置，CSS 只需兜底 absolute */
@@ -7090,47 +7099,54 @@ html:not(.dark) .text-node-toolbar {
   border-color: rgba(0, 0, 0, 0.2);
 }
 
-/* ---- 右上角紧凑创作主题切换（inline pill） ---- */
-.pea-canvas-theme-compact {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--pea-bg-panel);
-  border: 1px solid var(--pea-border);
-  margin-right: 10px;
+/* ---- 右上角创作主题下拉选择（antd Select） ---- */
+.pea-canvas-theme-select {
+  min-width: 120px;
+  margin-right: 4px;
 }
-.pea-canvas-theme-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--pea-text-muted);
-  font-size: 12px;
+.pea-canvas-theme-select .ant-select-selector {
+  border-radius: 8px !important;
+  padding: 0 8px !important;
+  background: var(--pea-bg-panel) !important;
+  border: 1px solid var(--pea-border) !important;
+}
+/* 选中文字：亮暗主题都清晰可见 */
+.pea-canvas-theme-select .ant-select-selection-item {
+  color: var(--pea-text-primary) !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  line-height: 28px !important;
+}
+/* 下拉菜单：高对比度，亮暗通用 */
+.pea-canvas-theme-dropdown .ant-select-item {
+  font-size: 12.5px;
   font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-  line-height: 1;
-}
-.pea-canvas-theme-pill:hover {
-  color: var(--pea-text-secondary);
-  background: color-mix(in srgb, var(--pea-text-primary) 6%, transparent);
-}
-.pea-canvas-theme-pill.active {
+  padding: 7px 12px;
+  border-radius: 6px;
   color: var(--pea-text-primary);
-  background: color-mix(in srgb, var(--pea-purple) 16%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pea-purple) 30%, transparent);
 }
-.pea-canvas-theme-pill .pea-canvas-theme-swatch {
-  width: 11px;
-  height: 11px;
-  border-radius: 3px;
-  border-width: 1px;
+.pea-canvas-theme-dropdown .ant-select-item-option-active {
+  background: color-mix(in srgb, var(--pea-purple) 14%, transparent);
+}
+.pea-canvas-theme-dropdown .ant-select-item-option-selected {
+  background: color-mix(in srgb, var(--pea-purple) 20%, transparent);
+  font-weight: 700;
+}
+/* 暗色主题下拉面板 */
+html.dark .pea-canvas-theme-dropdown {
+  background: #22252e !important;
+  border: 1px solid rgba(255,255,255,0.09) !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5) !important;
+}
+html.dark .pea-canvas-theme-dropdown .ant-select-item {
+  color: #eee;
+}
+html.dark .pea-canvas-theme-dropdown .ant-select-item-option-active {
+  background: rgba(139,92,246,0.18);
+}
+html.dark .pea-canvas-theme-dropdown .ant-select-item-option-selected {
+  background: rgba(139,92,246,0.25);
+  color: #fff;
 }
 
 /* ---- 画布右上角操作区 ---- */
@@ -8594,11 +8610,12 @@ html:not(.dark) .pea-crop-custom-colon {
   overflow: visible !important;
 }
 
-/* 关键：角度魔方模式取消 body-card 的 overflow:hidden，
-   否则祖先的 overflow:hidden 会破坏 CSS preserve-3d 上下文，
-   导致立方体被压成扁平平面（这是 8 轮调试的根本原因） */
+/* 角度魔方模式：body-card 必须 overflow:visible 以保留 CSS preserve-3d 上下文（否则立方体压扁）。
+   同时用 clip-path 替代 overflow:hidden 做圆角裁切，防止图片溢出圆角。
+   clip-path 不破坏 preserve-3d，两者可并存。 */
 .pea-node.is-cube-mode .pea-node-body-card {
   overflow: visible !important;
+  clip-path: inset(0 round 18px);
 }
 
 /* 浅色主题：stage 同样保持透明无背景，不画额外色块 */

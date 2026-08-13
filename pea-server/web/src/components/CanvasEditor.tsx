@@ -401,29 +401,20 @@ function CanvasActions() {
 
   return (
     <div className="pea-canvas-actions">
-      {/* 紧凑创作主题切换 */}
-      <div className="pea-canvas-theme-compact" role="radiogroup" aria-label="创作端设计主题">
-        <button
-          type="button"
-          role="radio"
-          aria-checked={creatorDesign === 'runway'}
-          className={`pea-canvas-theme-pill${creatorDesign === 'runway' ? ' active' : ''}`}
-          onClick={() => setCreatorDesign('runway')}
-        >
-          <span className="pea-canvas-theme-swatch runway" aria-hidden />
-          Runway
-        </button>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={creatorDesign === 'figma'}
-          className={`pea-canvas-theme-pill${creatorDesign === 'figma' ? ' active' : ''}`}
-          onClick={() => setCreatorDesign('figma')}
-        >
-          <span className="pea-canvas-theme-swatch figma" aria-hidden />
-          Figma
-        </button>
-      </div>
+      {/* 创作主题切换（下拉选择） */}
+      <Select
+        size="small"
+        value={creatorDesign}
+        onChange={(v) => setCreatorDesign(v as 'runway' | 'figma')}
+        popupClassName="pea-canvas-theme-dropdown"
+        variant="borderless"
+        className="pea-canvas-theme-select"
+        options={[
+          { value: 'runway', label: '🎬 暗调电影感' },
+          { value: 'figma', label: '✨ 明亮创作' },
+        ]}
+        aria-label="创作端设计主题"
+      />
 
       <Tooltip title="账户余额 (Tapies) — 点击查看订阅套餐">
         <button
@@ -1719,6 +1710,11 @@ function Flow() {
 
   const onNodeCtx = (e: React.MouseEvent, node: Node) => {
     e.preventDefault();
+    // 若刚发生了右键拖拽平移，抑制随之触发的节点菜单（保留纯右键单击的菜单）
+    if (suppressCtxRef.current) {
+      suppressCtxRef.current = false;
+      return;
+    }
     setMenu({ x: e.clientX, y: e.clientY, nodeId: node.id });
   };
   const onPaneCtx = (e: React.MouseEvent) => {
@@ -1742,23 +1738,8 @@ function Flow() {
   };
 
   const onFlowPointerDown = (e: React.PointerEvent) => {
-    if (e.button === 2) {
-      // 右键拖拽平移（与左键框选、右键菜单互不冲突）
-      if (!isCanvasBackground(e.target)) return;
-      suppressCtxRef.current = false; // 每次右键交互重置抑制标记
-      const vp = getViewport();
-      panRef.current = {
-        active: true,
-        moved: false,
-        startX: e.clientX,
-        startY: e.clientY,
-        vx: vp.x,
-        vy: vp.y,
-      };
-      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-      e.preventDefault();
-      return;
-    }
+    // 右键拖拽平移已迁移至 window 捕获阶段监听（覆盖节点/浮层，见下方 right-drag pan effect），
+    // 此处仅处理左键在空白画布的框选。
     if (e.button === 0 && isCanvasBackground(e.target)) {
       // 左键在空白画布按下并拖拽 = 框选：标记进行中，抑制经过节点的 hover 手柄/弹框
       selectingRef.current = true;
@@ -1766,30 +1747,11 @@ function Flow() {
     }
   };
 
-  const onFlowPointerMove = (e: React.PointerEvent) => {
-    const p = panRef.current;
-    if (!p || !p.active) return;
-    const dx = e.clientX - p.startX;
-    const dy = e.clientY - p.startY;
-    if (!p.moved) {
-      if (Math.hypot(dx, dy) < 4) return; // 拖动阈值：区分"单击"与"拖拽"
-      p.moved = true;
-      flowRef.current?.classList.add('pea-panning');
-    }
-    // 视口 translate 为屏幕像素，平移量 = 指针位移
-    setViewport({ x: p.vx + dx, y: p.vy + dy, zoom: getViewport().zoom }, { duration: 0 });
+  const onFlowPointerMove = (_e: React.PointerEvent) => {
+    // 平移逻辑已迁移至 window 级监听（见下方 right-drag pan effect），此处不再处理。
   };
 
-  const onFlowPointerUp = (e: React.PointerEvent) => {
-    const p = panRef.current;
-    if (p && p.active) {
-      if (p.moved) {
-        suppressCtxRef.current = true; // 松开后抑制 contextmenu，避免误弹菜单
-        flowRef.current?.classList.remove('pea-panning');
-      }
-      panRef.current = null;
-      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-    }
+  const onFlowPointerUp = (_e: React.PointerEvent) => {
     // 框选结束：延迟一帧关闭标记，避免与框选提交的选中态竞争导致手柄/弹框瞬时闪现。
     if (selectingRef.current) {
       selectingRef.current = false;
@@ -1848,19 +1810,81 @@ function Flow() {
       if (!inCanvas) return;
       // 拦截浏览器整页缩放（关键：必须在捕获阶段 + 非 passive 才能生效）
       e.preventDefault();
-      // 已在 ReactFlow pane 子树内（含节点内联编辑框）→ ReactFlow 已接管缩放，避免重复
-      const inPane =
+      // 区分「空白画布区」与「节点/浮层」：
+      //  - 命中 pane/viewport/renderer 且【不在节点内】→ ReactFlow 自身已接管缩放，直接放行避免重复；
+      //  - 命中节点内部或 portal 浮层 → ReactFlow 不会对该目标缩放，拦截并手动以光标为锚点缩放。
+      const inNode = !!t.closest('.react-flow__node');
+      const inPaneArea =
         !!t.closest('.react-flow__pane') ||
         !!t.closest('.react-flow__viewport') ||
-        !!t.closest('.react-flow__renderer') ||
-        !!t.closest('.react-flow__node');
-      if (inPane) return;
-      // 落在 portal/浮层上：ReactFlow 收不到该 wheel，手动以光标为锚点缩放画布
+        !!t.closest('.react-flow__renderer');
+      if (inPaneArea && !inNode) return; // 空白画布区：交给 ReactFlow 自身缩放
+      // 节点内或浮层：阻止冒泡（避免 ReactFlow 重复缩放），手动以光标为锚点缩放画布
+      e.stopPropagation();
       zoomCanvasAtPointer(e.clientX, e.clientY, e.deltaY);
     };
     window.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
     return () => window.removeEventListener('wheel', onWheelCapture, true);
   }, [zoomCanvasAtPointer]);
+
+  // 右键拖拽平移画布（覆盖节点/功能条/浮层，不依赖 ReactFlow 的 panOnDrag）。
+  // 用 window 捕获阶段监听：节点内部会 stopPropagation 阻止事件冒泡到 flowRef，
+  // 捕获阶段可在其之前截获，从而保证「在画布任意位置（含节点上）右键拖拽都能平移」。
+  // 纯右键单击（未拖动）仍触发节点/画布右键菜单；拖动超过阈值则抑制随之而来的菜单。
+  useEffect(() => {
+    const EXCLUDE = 'input, textarea, [contenteditable="true"], .ant-dropdown, .pea-ctx-menu, .pea-canvas-controls, .pea-canvas-header, .pea-canvas-actions, .pea-canvas-bottom-prompt, .pea-add-menu, .pea-edge-menu, .pea-canvas-dropdown, .react-flow__minimap, .react-flow__controls, .react-flow__panel';
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 2) return; // 仅右键
+      const t = e.target as HTMLElement | null;
+      if (!t || !t.closest) return;
+      if (!t.closest('.pea-canvas-host')) return; // 必须在画布范围内
+      // 排除需要自身右键交互的控件（菜单/输入框/画布工具等），这些保持原生行为
+      if (t.closest(EXCLUDE)) return;
+      // 注意： deliberately 不排除 .react-flow__node —— 节点上也允许右键拖拽平移
+      suppressCtxRef.current = false; // 每次右键交互重置抑制标记
+      const vp = getViewport();
+      panRef.current = {
+        active: true,
+        moved: false,
+        startX: e.clientX,
+        startY: e.clientY,
+        vx: vp.x,
+        vy: vp.y,
+      };
+      e.preventDefault(); // 阻止原生文本选择/图片拖拽，不影响随后的 contextmenu
+    };
+    const onMove = (e: PointerEvent) => {
+      const p = panRef.current;
+      if (!p || !p.active) return;
+      const dx = e.clientX - p.startX;
+      const dy = e.clientY - p.startY;
+      if (!p.moved) {
+        if (Math.hypot(dx, dy) < 4) return; // 拖动阈值：区分"单击"与"拖拽"
+        p.moved = true;
+        flowRef.current?.classList.add('pea-panning');
+      }
+      // 视口 translate 为屏幕像素，平移量 = 指针位移（与 ReactFlow 平移一致）
+      setViewport({ x: p.vx + dx, y: p.vy + dy, zoom: getViewport().zoom }, { duration: 0 });
+    };
+    const onUp = () => {
+      const p = panRef.current;
+      if (p && p.active) {
+        if (p.moved) {
+          suppressCtxRef.current = true; // 拖动过 → 抑制随之触发的右键菜单
+          flowRef.current?.classList.remove('pea-panning');
+        }
+        panRef.current = null;
+      }
+    };
+    window.addEventListener('pointerdown', onDown, true); // 捕获阶段：早于节点 stopPropagation
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [getViewport, setViewport]);
 
   return (
     <div

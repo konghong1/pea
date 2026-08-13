@@ -1704,7 +1704,7 @@ useEffect(() => {
         {/* 右侧操作区 */}
         <div className="node-input-status-right">
           <button type="button" className="node-input-icon-btn" title="语音输入" aria-label="语音">🎤</button>
-          {kind !== 'audio' && (
+          {(genType === 'image' || genType === 'video') && (
             <div className="node-count-btn-wrapper" ref={countRef}>
               <button
                 type="button"
@@ -1718,8 +1718,6 @@ useEffect(() => {
               >
                 {count}x
               </button>
-              {/* hover 提示 "生成数量" */}
-              <span className="node-count-btn-hint" aria-hidden>生成数量</span>
             </div>
           )}
           <span
