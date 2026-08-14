@@ -10,6 +10,7 @@ function systemPrefersDark() {
 function apply(mode: Mode) {
   const dark = mode === 'dark' || (mode === 'system' && systemPrefersDark());
   document.documentElement.classList.toggle('dark', dark);
+  document.documentElement.classList.toggle('light', !dark);
   localStorage.setItem('pea_theme', mode);
 }
 
@@ -27,7 +28,11 @@ export const useTheme = create<ThemeState>((set) => ({
   },
   init: () => {
     const m = (localStorage.getItem('pea_theme') as Mode) ?? 'system';
-    apply(m);
+    // 若当前处于创作端画布（body[data-surface] 存在），创作端主题由 Workspace
+    // 画布 effect 接管，此处必须跳过，避免把 html.dark/light 覆盖成 precision 主题。
+    if (!document.body.dataset.surface) {
+      apply(m);
+    }
     set({ mode: m });
   },
 }));

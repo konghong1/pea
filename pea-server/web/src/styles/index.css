@@ -196,7 +196,8 @@
   --pea-node-border-hover: rgba(255, 255, 255, 0.22);
   --pea-node-shadow: none;
   --pea-node-shadow-hover: 0 0 0 1px rgba(255, 255, 255, 0.10);
-  --pea-node-shadow-selected: 0 22px 50px rgba(0, 0, 0, 0.55);
+  --pea-node-shadow-selected: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --pea-node-radius: 16px;
 }
 
 /* ══ 创作端表面 #2：Figma 明亮创作 ══
@@ -270,6 +271,7 @@
   --pea-node-shadow: 0 8px 28px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.02);
   --pea-node-shadow-hover: 0 12px 36px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(0, 0, 0, 0.05);
   --pea-node-shadow-selected: 0 16px 40px rgba(0, 0, 0, 0.16);
+  --pea-node-radius: 16px;
 }
 
 /* Figma：主 CTA = 纯黑药丸（白底），与 Runway 共享黑药丸语言 */
@@ -595,7 +597,7 @@ body {
   margin-top: 0;
   width: 100%;          /* 撑满 .pea-node 父节点，不被内容（audio/video 等）撑窄 */
   box-sizing: border-box;
-  border-radius: 18px;
+  border-radius: var(--pea-node-radius, 16px);
   background: var(--pea-node-bg, rgba(34, 34, 40, 0.96));
   border: 1px solid var(--pea-node-border, rgba(255, 255, 255, 0.07));
   box-shadow: var(--pea-node-shadow, 0 18px 40px rgba(0, 0, 0, 0.45));
@@ -624,25 +626,28 @@ body {
 /* 选中态 = AI 紫环（语义：选中即"即将 AI 活动"，与全局 AI 紫信号统一，三表面一致）。
    纯静态状态变化，无装饰性动画；边框/阴影平滑过渡由 .pea-node-body-card 既有
    transition（border-color/box-shadow）承担，不属于"动画"。
-   ring 用 box-shadow 模拟（不影响布局，避免 1px→2px 边框抖动）。
+   设计决策：
+   - 底边框设为 transparent（去掉 1px 原边框），仅用 box-shadow: 0 0 0 1px 紫环做选中指示，
+     避免"1px边框 + 1px shadow"双层叠加导致的厚重感。
+   - 魔方模式(.is-cube-mode)由专用规则接管（统一用 box-shadow 紫环，不再用 clip-path）。
    注意：必须覆盖 .pea-node-image/video.pea-node-has-media .pea-node-body-card 的
    border/box-shadow 简写（同特异性、源码位置更靠后），故选择器带上 has-media 变体提权。 */
 .pea-node.selected .pea-node-body-card,
 .pea-node-image.pea-node-has-media.selected .pea-node-body-card,
 .pea-node-video.pea-node-has-media.selected .pea-node-body-card {
-  border-color: var(--pea-purple, #8b5cf6);
-  border-width: 2px;
+  border-color: transparent;
   overflow: hidden;
-  box-shadow: var(--pea-node-shadow-selected, 0 12px 28px rgba(0, 0, 0, 0.35));
+  box-shadow:
+    0 0 0 1px var(--pea-purple, #8b5cf6),
+    var(--pea-node-shadow-selected, 0 8px 24px rgba(0, 0, 0, 0.35));
 }
 
-/* 选中指示 = 单一 2px 紫边框 + 柔和投影，不叠半透明辉光。
-   原因①：box-shadow 辉光用 color-mix(purple, transparent) 叠在节点自身背景上，
-   视频纯黑底会把半透明紫压暗、图片/文本又是别的底色，导致辉光与实心边框
-   永远对不上色，且各节点表现不一致。
-   原因②：1.5px 非整数边框在圆角处亚像素抗锯齿会混进画布底色（浅色画布上
-   圆角弧线比直边更浅、发灰/发白），改用整数 2px 后圆角渲染更干净，
-   直边与弧线颜色统一、无双色问题。 */
+/* 选中指示 = 单层 1px box-shadow 紫环 + 柔和投影，不叠底边框、不叠半透明辉光。
+   设计要点：
+   - 底边框 border-color:transparent → 避免与 shadow 累加成"双层边框"厚重感。
+   - 紫环仅 1px（非 1.5px/2px）→ 轻量选中反馈，符合 Runway/Figma 的克制美学。
+   - 魔方模式(.is-cube-mode)同样用 box-shadow 紫环（已去掉 clip-path，不再有裁切问题）。
+   - 不用 color-mix 辉光 → 视频纯黑底压暗半透明紫、各节点底色不一致导致表现不统一。 */
 /* 节点框比例（所有节点统一标准，详见 PeaNode.tsx 的 nodeSize）：
    - 框尺寸由 PeaNode.tsx 锁定：最长边恒 340px，按 kind 默认比例
      （image 9:16 / video·audio 16:9 / 其余 1:1）+ data.aspectRatio 覆盖；
@@ -876,7 +881,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
   aspect-ratio: auto;  /* inline height 已锁定框高，aspect-ratio 不生效 */
-  border-radius: 16px;
+  border-radius: var(--pea-node-radius, 16px);
   overflow: hidden;
 }
 /* 生成中图片节点：取消 overflow:hidden，让 TechLoader 动画完整显示 */
@@ -899,7 +904,9 @@ body {
 .pea-node-image.pea-node-has-media .pea-node-media-label {
   display: none;
 }
-/* 图片填满锁定框：cover 裁切，杜绝白边；圆角由 body-card 承担 */
+/* 图片填满锁定框：cover 裁切，杜绝白边；圆角由 body-card 承担
+   image-rendering: -webkit-optimize-contrast 确保缩放/拖拽时图片保持锐利，
+   避免浏览器默认双线性滤波导致的模糊感（尤其画布 zoom ≠ 100% 时） */
 .pea-node-image.pea-node-has-media .pea-node-media-preview,
 .pea-node-image.pea-node-has-media .pea-node-result-image-wrap .pea-node-media-preview {
   display: block;
@@ -912,6 +919,8 @@ body {
   object-fit: cover;
   border-radius: 0;
   background: #000;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
 }
 
 /* 有图时媒体卡片与图片容器回到正常文档流：节点尺寸由图片原始比例决定（完整包裹，不裁切）。
@@ -939,7 +948,7 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.06);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
   aspect-ratio: auto;
-  border-radius: 16px;
+  border-radius: var(--pea-node-radius, 16px);
   overflow: hidden;  /* 同图片节点：锁定框 + 媒体 cover 填满，功能条已 portal 到 chrome */
 }
 /* 生成中视频节点：取消 overflow:hidden，让 TechLoader 动画完整显示 */
@@ -1053,6 +1062,7 @@ body {
   object-fit: contain;
   border-radius: 10px;
   background: #000;
+  image-rendering: -webkit-optimize-contrast;
 }
 .pea-node-audio {
   width: 100%;
@@ -7117,19 +7127,20 @@ html:not(.dark) .text-node-toolbar {
   font-weight: 600 !important;
   line-height: 28px !important;
 }
-/* 下拉菜单：高对比度，亮暗通用 */
+/* 下拉菜单：高对比度，亮暗通用。!important 覆盖 antd CSS-in-JS 默认样式 */
 .pea-canvas-theme-dropdown .ant-select-item {
   font-size: 12.5px;
   font-weight: 500;
   padding: 7px 12px;
   border-radius: 6px;
-  color: var(--pea-text-primary);
+  color: var(--pea-text-primary) !important;
 }
 .pea-canvas-theme-dropdown .ant-select-item-option-active {
-  background: color-mix(in srgb, var(--pea-purple) 14%, transparent);
+  background: color-mix(in srgb, var(--pea-purple) 14%, transparent) !important;
 }
 .pea-canvas-theme-dropdown .ant-select-item-option-selected {
-  background: color-mix(in srgb, var(--pea-purple) 20%, transparent);
+  background: color-mix(in srgb, var(--pea-purple) 20%, transparent) !important;
+  color: var(--pea-text-primary) !important;
   font-weight: 700;
 }
 /* 暗色主题下拉面板 */
@@ -8237,19 +8248,17 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
  * ═════════════════════════════════════════════════════════════════════════════ */
 
 /* 裁切覆盖层：填满图片容器（absolute），不固定到视口。
-   z-index 盖住节点内所有内容（原图 visibility:hidden 但仍占位） */
+   z-index 盖住节点内所有内容（原图 visibility:hidden 但仍占位）
+   ⚠️ 必须有暗色兜底背景：亮色主题下 --pea-bg-deep=#fafafa/#fff，
+   若 transparent 则透出白色画布 → 裁切区域全白 */
 .pea-crop-overlay {
   position: absolute;
   inset: 0;
   z-index: 50;
   display: flex;
-  /* 不再用 align-items:center / justify-content:center
-     —— 而是用 padding 让 stage 紧贴 wrap 边，不溢出。
-     之前因 stage 比 wrap 大，flex 居中导致 stage 向四面溢出 wrap → 露出下面的画布/原图，
-     视觉上像"两张图"。 */
   align-items: stretch;
   justify-content: flex-start;
-  background: transparent;
+  background: #111;
 }
 
 /* 居中舞台：完全填满 wrap（position:absolute, inset: 0）— 不溢出、不依赖 flex 居中。
@@ -8293,12 +8302,15 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
   transform: translate(-50%, -50%);
   overflow: visible;
 }
-/* 图片 + 遮罩裁剪在内部，填满图片舞台。 */
+/* 图片 + 遮罩裁剪在内部，填满图片舞台。
+   暗色兜底背景：(1) object-fit: contain 的 letterbox 留白区域不透白；
+   (2) 图片加载中/失败时不露出亮色主题的白色画布底（--pea-bg-deep=#fafafa/#fff） */
 .pea-crop-img-clip {
   position: absolute;
   inset: 0;
   overflow: hidden;
   z-index: 0; /* 底层：图片+遮罩 */
+  background: #111;
 }
 .pea-crop-image {
   position: absolute;
@@ -8311,6 +8323,7 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
   -webkit-user-drag: none;
   user-select: none;
   pointer-events: none;
+  background: #111;          /* 第三层暗色兜底：确保图片加载失败/CORS时绝不露白 */
 }
 
 /* 裁剪框外区域：半透明暗化遮罩。
@@ -8349,70 +8362,69 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 .pea-crop-frame:active {
   user-select: none;
 }
-/* 拖动态：关闭过渡 + 提升合成层，rAF 写 DOM 时不产生动画滞后 → 顺滑无抖动 */
+/* 拖动态：关闭过渡 + 提升合成层，rAF 写 DOM 时不产生动画滞后 → 顺滑无抖动
+   注意：不再移除 box-shadow vignette —— 移除会导致框外露出亮色底色（#bug）
+   现代浏览器对 transform + box-shadow 的 GPU 合成优化已足够好，无需为此牺牲视觉正确性。 */
 .pea-crop-frame--dragging {
   transition: none !important;
   will-change: transform;
   cursor: grabbing;
-  /* 拖动期间移除 3000px 全屏 box-shadow vignette：超大阴影随框移动会被重新
-     光栅化导致掉帧。移除后拖动过程零重绘 → 60fps 顺滑，松手后自动恢复遮罩。 */
-  box-shadow: none;
 }
 .pea-crop-frame--dragging .pea-crop-handle {
   transition: none !important;
 }
-/* 四角拖拽把手：v4.2 精致细线风格。
-   参考截图2/专业裁切工具(iOS Photos / Figma)：控制点应是"几乎不可见的小十字"，
-   不是显眼的大白方块。
-   方案：6×6 空心方块(白色描边+透明填充)，hover 时才轻微填色。
-   hit area 通过 ::before 扩展到 18×18，z-index:2 高于 frame 本体。 */
+/* 四角拖拽把手：参考样张样式 —— 20×20 hit area + 1px 白线 L 型，
+   从裁剪框角点向框内仅延伸 10px，形成紧凑角标；无四边中点把手。 */
 .pea-crop-handle {
   position: absolute;
   z-index: 2;
-  width: 6px;
-  height: 6px;
+  width: 20px;
+  height: 20px;
   pointer-events: auto;
   touch-action: none;
   background: transparent;
-  border: 1.5px solid #fff;
-  border-radius: 1px;
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.35);
-  transition: transform 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+  border: none;
+  transition: opacity 0.15s ease;
 }
-/* 扩大 hit area: ::before 透明 padding 区域接收 pointer 事件,本体仍只显示 6×6 */
+/* 容器与裁剪框角点重合，透明区域扩大抓取范围。 */
+.pea-crop-handle.nw { top: 0; left: 0; cursor: nwse-resize; }
+.pea-crop-handle.ne { top: 0; right: 0; cursor: nesw-resize; }
+.pea-crop-handle.sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.pea-crop-handle.se { bottom: 0; right: 0; cursor: nwse-resize; }
+/* 横线：沿水平框边，长度 10px */
 .pea-crop-handle::before {
   content: '';
   position: absolute;
-  inset: -6px;       /* 6 + 6*2 = 18×18 hit area */
-  background: transparent;
+  height: 1px;
+  width: 10px;
+  background: #fff;
 }
+/* 竖线：沿垂直框边，长度 10px */
+.pea-crop-handle::after {
+  content: '';
+  position: absolute;
+  width: 1px;
+  height: 10px;
+  background: #fff;
+}
+/* 顶边横臂（nw/ne）贴容器顶部，底边横臂（sw/se）贴容器底部 */
+.pea-crop-handle.nw::before { top: 0; left: 0; }
+.pea-crop-handle.ne::before { top: 0; right: 0; }
+.pea-crop-handle.sw::before { bottom: 0; left: 0; }
+.pea-crop-handle.se::before { bottom: 0; right: 0; }
+/* 左边竖臂（nw/sw）贴容器左边，右边竖臂（ne/se）贴容器右边 */
+.pea-crop-handle.nw::after { top: 0; left: 0; }
+.pea-crop-handle.ne::after { top: 0; right: 0; }
+.pea-crop-handle.sw::after { bottom: 0; left: 0; }
+.pea-crop-handle.se::after { bottom: 0; right: 0; }
+
 .pea-crop-handle:hover {
-  transform: scale(1.5);
-  background: rgba(255, 255, 255, 0.85);
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.5);
+  opacity: 0.85;
 }
-/* 拖动中（:active）移除 transition，防止把手动画与拖动帧冲突导致抖动 */
 .pea-crop-handle:active,
 .pea-crop-handle:active:hover {
   transition: none !important;
-  transform: scale(1.2);
 }
-.pea-crop-handle.nw { top: -3.5px; left: -3.5px; cursor: nwse-resize; }
-.pea-crop-handle.ne { top: -3.5px; right: -3.5px; cursor: nesw-resize; }
-.pea-crop-handle.sw { bottom: -3.5px; left: -3.5px; cursor: nesw-resize; }
-.pea-crop-handle.se { bottom: -3.5px; right: -3.5px; cursor: nwse-resize; }
-/* 四边中点把手：v4.2 细线短条（1.5px 白色描边 + 透明填充），与角把手统一风格。
-   视觉 14×2 / 2×14，hit area 扩到 20×8 / 8×20 方便拖动 */
-.pea-crop-handle.edge { width: 14px; height: 2px; border-radius: 0; background: transparent; border: 1.5px solid #fff; box-shadow: none; }
-.pea-crop-handle.edge::before { inset: -3px -5px; }   /* 加宽 hit area */
-.pea-crop-handle.edge.n, .pea-crop-handle.edge.s { cursor: ns-resize; }
-.pea-crop-handle.edge.e, .pea-crop-handle.edge.w { cursor: ew-resize; }
-.pea-crop-handle.edge.n { top: -1.5px; left: 50%; margin-left: -7px; }
-.pea-crop-handle.edge.s { bottom: -1.5px; left: 50%; margin-left: -7px; }
-.pea-crop-handle.edge.w { left: -1.5px; top: 50%; margin-top: -7px; width: 2px; height: 14px; }
-.pea-crop-handle.edge.e { right: -1.5px; top: 50%; margin-top: -7px; width: 2px; height: 14px; }
-/* W/E 把手是竖条,hit area 横向上多扩一点(左右各 6)、纵向上下各 2 */
-.pea-crop-handle.edge.w::before, .pea-crop-handle.edge.e::before { inset: -2px -6px; }
 
 /* 裁剪功能条：浮在图片舞台正下方的独立胶囊。
    用 --pea-inv-zoom counter-scale 让工具栏始终以 CSS 原始尺寸显示在屏幕上，
@@ -8611,11 +8623,34 @@ html:not(.dark) .pea-crop-custom-colon {
 }
 
 /* 角度魔方模式：body-card 必须 overflow:visible 以保留 CSS preserve-3d 上下文（否则立方体压扁）。
-   同时用 clip-path 替代 overflow:hidden 做圆角裁切，防止图片溢出圆角。
-   clip-path 不破坏 preserve-3d，两者可并存。 */
+   ⚠️ 不再使用 clip-path 做圆角裁切！clip-path 与 border/box-shadow 在圆角处存在亚像素
+   错位（尤其画布 zoom ≠ 100% 时），导致紫线在圆角弧线处"断裂"。
+   改由内部 .pea-node-media-card 接管圆角裁切责任（border-radius + overflow:hidden），
+   body-card 只负责 3D 上下文 + 选中态紫环。 */
 .pea-node.is-cube-mode .pea-node-body-card {
   overflow: visible !important;
-  clip-path: inset(0 round 18px);
+}
+
+/* 魔方模式：body-card 的直接子元素承担圆角裁切，防止图片溢出节点圆角。
+   body-card 的 overflow:visible 保住了 preserve-3d，但意味着 body-card 自身不再裁切
+   子内容；所以必须让直接子元素来做这个裁切。
+   注意：图片/视频结果的实际容器是 .pea-node-result-image-wrap / -video-wrap / -audio-wrap
+   （由 ResultMediaView 的 wrapClass 决定），不是 .pea-node-media-card（仅用于生成中/错误/空态）。
+   用 > * 通配直接子元素，覆盖所有可能的容器类型。 */
+.pea-node.is-cube-mode .pea-node-body-card > * {
+  border-radius: var(--pea-node-radius, 16px);
+  overflow: hidden;
+}
+
+/* 魔方模式选中态：与普通选中态统一使用 box-shadow 紫环。
+   因为已经去掉了 clip-path，box-shadow 不会再被裁切，紫环完整显示圆角。
+   border-color 设为 transparent 避免与 box-shadow 叠加成双层边框。 */
+.pea-node.is-cube-mode.selected .pea-node-body-card,
+.pea-node-image.pea-node-has-media.is-cube-mode.selected .pea-node-body-card {
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1px var(--pea-purple, #8b5cf6),
+    var(--pea-node-shadow-selected, 0 8px 24px rgba(0, 0, 0, 0.35));
 }
 
 /* 浅色主题：stage 同样保持透明无背景，不画额外色块 */

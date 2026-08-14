@@ -592,16 +592,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
                   tabIndex={-1}
                 />
               ))}
-              {(['n', 's', 'e', 'w'] as const).map((h) => (
-                <span
-                  key={h}
-                  className={`pea-crop-handle edge ${h}`}
-                  onPointerDown={(e) => startDrag(h, e)}
-                  role="button"
-                  aria-label={`调整 ${h} 边`}
-                  tabIndex={-1}
-                />
-              ))}
             </div>
           </div>
         )}
