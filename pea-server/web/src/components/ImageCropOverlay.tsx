@@ -582,13 +582,25 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
               aria-label="拖动裁切区"
               tabIndex={0}
             >
+              {/* 四个角的 T 型把手（向框外延伸） */}
               {(['nw', 'ne', 'sw', 'se'] as const).map((h) => (
                 <span
                   key={h}
-                  className={`pea-crop-handle ${h}`}
+                  className={`pea-crop-handle pea-crop-corner ${h}`}
                   onPointerDown={(e) => startDrag(h, e)}
                   role="button"
                   aria-label={`调整 ${h}`}
+                  tabIndex={-1}
+                />
+              ))}
+              {/* 四条边中点的短横线 */}
+              {(['n', 's', 'e', 'w'] as const).map((h) => (
+                <span
+                  key={h}
+                  className={`pea-crop-handle pea-crop-edge ${h}`}
+                  onPointerDown={(e) => startDrag(h, e)}
+                  role="button"
+                  aria-label={`调整 ${h}边`}
                   tabIndex={-1}
                 />
               ))}

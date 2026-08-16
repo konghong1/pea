@@ -8373,58 +8373,130 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 .pea-crop-frame--dragging .pea-crop-handle {
   transition: none !important;
 }
-/* 四角拖拽把手：参考样张样式 —— 20×20 hit area + 1px 白线 L 型，
-   从裁剪框角点向框内仅延伸 10px，形成紧凑角标；无四边中点把手。 */
+/* 九宫格裁切框样式：
+   四个角的直角V型把手沿裁切框外边缘延伸（贴着外边框）；
+   四条边中点各一条短横线。 */
+
+/* 基础把手样式 */
 .pea-crop-handle {
   position: absolute;
   z-index: 2;
-  width: 20px;
-  height: 20px;
   pointer-events: auto;
   touch-action: none;
   background: transparent;
   border: none;
   transition: opacity 0.15s ease;
 }
-/* 容器与裁剪框角点重合，透明区域扩大抓取范围。 */
-.pea-crop-handle.nw { top: 0; left: 0; cursor: nwse-resize; }
-.pea-crop-handle.ne { top: 0; right: 0; cursor: nesw-resize; }
-.pea-crop-handle.sw { bottom: 0; left: 0; cursor: nesw-resize; }
-.pea-crop-handle.se { bottom: 0; right: 0; cursor: nwse-resize; }
-/* 横线：沿水平框边，长度 10px */
-.pea-crop-handle::before {
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 四个角的直角V型把手（V型直角与裁切框角同向，在外侧包裹）
+ * 
+ * 裁切框角：nw=┌ ne=┐ sw=└ se=┘
+ * V型把手同向在外侧，线条沿边的**外侧面**延伸
+ * nw角：V型也是 ┌ 形，横线在上边外侧面（向上延伸），竖线在左边外侧面（向左延伸）
+ * ne角：V型也是 ┐ 形，横线在上边外侧面（向上延伸），竖线在右边外侧面（向右延伸）
+ * sw角：V型也是 └ 形，横线在下边外侧面（向下延伸），竖线在左边外侧面（向左延伸）
+ * se角：V型也是 ┘ 形，横线在下边外侧面（向下延伸），竖线在右边外侧面（向右延伸）
+ * ═════════════════════════════════════════════════════════════════════════════ */
+.pea-crop-handle.pea-crop-corner {
+  width: 12px;
+  height: 12px;
+  overflow: visible;
+}
+/* 容器定位在裁切框角点上 */
+.pea-crop-handle.pea-crop-corner.nw { top: 0; left: 0; cursor: nwse-resize; }
+.pea-crop-handle.pea-crop-corner.ne { top: 0; right: 0; cursor: nesw-resize; }
+.pea-crop-handle.pea-crop-corner.sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.pea-crop-handle.pea-crop-corner.se { bottom: 0; right: 0; cursor: nwse-resize; }
+
+/* 横线：沿边的方向延伸 */
+.pea-crop-handle.pea-crop-corner::before {
   content: '';
   position: absolute;
   height: 1px;
-  width: 10px;
   background: #fff;
 }
-/* 竖线：沿垂直框边，长度 10px */
-.pea-crop-handle::after {
+/* 竖线：沿边的方向延伸 */
+.pea-crop-handle.pea-crop-corner::after {
   content: '';
   position: absolute;
   width: 1px;
-  height: 10px;
   background: #fff;
 }
-/* 顶边横臂（nw/ne）贴容器顶部，底边横臂（sw/se）贴容器底部 */
-.pea-crop-handle.nw::before { top: 0; left: 0; }
-.pea-crop-handle.ne::before { top: 0; right: 0; }
-.pea-crop-handle.sw::before { bottom: 0; left: 0; }
-.pea-crop-handle.se::before { bottom: 0; right: 0; }
-/* 左边竖臂（nw/sw）贴容器左边，右边竖臂（ne/se）贴容器右边 */
-.pea-crop-handle.nw::after { top: 0; left: 0; }
-.pea-crop-handle.ne::after { top: 0; right: 0; }
-.pea-crop-handle.sw::after { bottom: 0; left: 0; }
-.pea-crop-handle.se::after { bottom: 0; right: 0; }
 
-.pea-crop-handle:hover {
-  opacity: 0.85;
+/* nw角：┌ 形（同向），横线在上边外面向上伸，竖线在左边外面向左伸 */
+.pea-crop-handle.pea-crop-corner.nw::before { 
+  top: -12px; left: 0; width: 12px; 
 }
-.pea-crop-handle:active,
-.pea-crop-handle:active:hover {
-  transition: none !important;
+.pea-crop-handle.pea-crop-corner.nw::after { 
+  top: 0; left: -12px; height: 12px; 
 }
+
+/* ne角：┐ 形（同向），横线在上边外面向上伸，竖线在右边外面向右伸 */
+.pea-crop-handle.pea-crop-corner.ne::before { 
+  top: -12px; right: 0; width: 12px; 
+}
+.pea-crop-handle.pea-crop-corner.ne::after { 
+  top: 0; right: -12px; height: 12px; 
+}
+
+/* sw角：└ 形（同向），横线在下边外面向下伸，竖线在左边外面向左伸 */
+.pea-crop-handle.pea-crop-corner.sw::before { 
+  bottom: -12px; left: 0; width: 12px; 
+}
+.pea-crop-handle.pea-crop-corner.sw::after { 
+  bottom: 0; left: -12px; height: 12px; 
+}
+
+/* se角：┘ 形（同向），横线在下边外面向下伸，竖线在右边外面向右伸 */
+.pea-crop-handle.pea-crop-corner.se::before { 
+  bottom: -12px; right: 0; width: 12px; 
+}
+.pea-crop-handle.pea-crop-corner.se::after { 
+  bottom: 0; right: -12px; height: 12px; 
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════
+ * 四条边中点的短横线（紧贴裁切框边缘向外延伸）
+ * ═════════════════════════════════════════════════════════════════════════════ */
+.pea-crop-handle.pea-crop-edge {
+  width: 12px;
+  height: 12px;
+  overflow: visible;
+}
+/* 边把手位置：紧贴裁切框边缘中点 */
+.pea-crop-handle.pea-crop-edge.n { top: 0; left: 50%; transform: translate(-50%, -1px); cursor: ns-resize; }
+.pea-crop-handle.pea-crop-edge.s { bottom: 0; left: 50%; transform: translate(-50%, 1px); cursor: ns-resize; }
+.pea-crop-handle.pea-crop-edge.e { right: 0; top: 50%; transform: translate(1px, -50%); cursor: ew-resize; }
+.pea-crop-handle.pea-crop-edge.w { left: 0; top: 50%; transform: translate(-1px, -50%); cursor: ew-resize; }
+
+/* 边把手短横线：紧贴裁切框边缘向外延伸 */
+/* n/s 边：水平短横线，贴着边缘向外延伸 */
+.pea-crop-handle.pea-crop-edge.n::before,
+.pea-crop-handle.pea-crop-edge.s::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  height: 1px;
+  width: 12px;
+  background: #fff;
+}
+.pea-crop-handle.pea-crop-edge.n::before { top: 0; }
+.pea-crop-handle.pea-crop-edge.s::before { bottom: 0; }
+/* e/w 边：垂直短横线，贴着边缘向外延伸 */
+.pea-crop-handle.pea-crop-edge.e::after,
+.pea-crop-handle.pea-crop-edge.w::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 12px;
+  background: #fff;
+}
+.pea-crop-handle.pea-crop-edge.e::after { right: 0; }
+.pea-crop-handle.pea-crop-edge.w::after { left: 0; }
+
+/* 通用 hover/active 状态 */
 
 /* 裁剪功能条：浮在图片舞台正下方的独立胶囊。
    用 --pea-inv-zoom counter-scale 让工具栏始终以 CSS 原始尺寸显示在屏幕上，
