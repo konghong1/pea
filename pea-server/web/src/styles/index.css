@@ -8442,13 +8442,13 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
    方向 = 可拖拽方向。拖拽中也不显示任何叠加箭头。 */
 .pea-crop-handle.pea-crop-edge { width: 30px; height: 30px; overflow: visible; background: transparent; }
 .pea-crop-handle.pea-crop-edge.n { top: -15px; left: 50%; transform: translateX(-50%);
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M12%202L8%207L16%207Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M12%2022L8%2017L16%2017Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%2712%27%20y1=%277%27%20x2=%2712%27%20y2=%2717%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, ns-resize; }
+  cursor: ns-resize; }
 .pea-crop-handle.pea-crop-edge.s { bottom: -15px; left: 50%; transform: translateX(-50%);
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M12%202L8%207L16%207Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M12%2022L8%2017L16%2017Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%2712%27%20y1=%277%27%20x2=%2712%27%20y2=%2717%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, ns-resize; }
+  cursor: ns-resize; }
 .pea-crop-handle.pea-crop-edge.e { right: -15px; top: 50%; transform: translateY(-50%);
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M2%2012L7%208L7%2016Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M22%2012L17%208L17%2016Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%277%27%20y1=%2712%27%20x2=%2717%27%20y2=%2712%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, ew-resize; }
+  cursor: ew-resize; }
 .pea-crop-handle.pea-crop-edge.w { left: -15px; top: 50%; transform: translateY(-50%);
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M2%2012L7%208L7%2016Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M22%2012L17%208L17%2016Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%277%27%20y1=%2712%27%20x2=%2717%27%20y2=%2712%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, ew-resize; }
+  cursor: ew-resize; }
 
 /* 边中点装饰：沿边框的水平/垂直线（始终可见） */
 .pea-crop-handle.pea-crop-edge.n::before,
@@ -8480,13 +8480,13 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 .pea-crop-handle.pea-crop-corner { width: 20px; height: 20px; overflow: visible; }
 /* nw/se 沿 \ 对角线；ne/sw 沿 / 对角线 */
 .pea-crop-handle.pea-crop-corner.nw { top: -10px; left: -10px;
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M4%204L10%204L4%2010Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M20%2020L14%2020L20%2014Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%276%27%20y1=%276%27%20x2=%2718%27%20y2=%2718%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, nwse-resize; }
+  cursor: nwse-resize; }
 .pea-crop-handle.pea-crop-corner.se { bottom: -10px; right: -10px;
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M4%204L10%204L4%2010Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M20%2020L14%2020L20%2014Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%276%27%20y1=%276%27%20x2=%2718%27%20y2=%2718%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, nwse-resize; }
+  cursor: nwse-resize; }
 .pea-crop-handle.pea-crop-corner.ne { top: -10px; right: -10px;
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M20%204L14%204L20%2010Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M4%2020L10%2020L4%2014Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%2718%27%20y1=%276%27%20x2=%276%27%20y2=%2718%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, nesw-resize; }
+  cursor: nesw-resize; }
 .pea-crop-handle.pea-crop-corner.sw { bottom: -10px; left: -10px;
-  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M20%204L14%204L20%2010Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M4%2020L10%2020L4%2014Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%2718%27%20y1=%276%27%20x2=%276%27%20y2=%2718%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, nesw-resize; }
+  cursor: nesw-resize; }
 
 /* 角点装饰：L 形双线（始终可见） */
 .pea-crop-handle.pea-crop-corner::before {
