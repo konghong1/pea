@@ -582,7 +582,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
               aria-label="拖动裁切区"
               tabIndex={0}
             >
-              {/* 四个角的 T 型把手（向框外延伸） */}
+              {/* 四个角的把手（带对角箭头） */}
               {(['nw', 'ne', 'sw', 'se'] as const).map((h) => (
                 <span
                   key={h}
@@ -593,7 +593,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
                   tabIndex={-1}
                 />
               ))}
-              {/* 四条边中点的短横线 */}
+              {/* 四条边的把手（带双箭头） */}
               {(['n', 's', 'e', 'w'] as const).map((h) => (
                 <span
                   key={h}
@@ -604,6 +604,13 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
                   tabIndex={-1}
                 />
               ))}
+              {/* 动态九宫格辅助线（拖拽时显示） */}
+              <div className="pea-crop-grid" aria-hidden="true">
+                <span className="pea-crop-grid-line v1" />
+                <span className="pea-crop-grid-line v2" />
+                <span className="pea-crop-grid-line h1" />
+                <span className="pea-crop-grid-line h2" />
+              </div>
             </div>
           </div>
         )}
