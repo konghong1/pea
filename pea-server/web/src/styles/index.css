@@ -8347,7 +8347,7 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: contain;       /* 图片等比缩放填满容器，不拉伸变形 */
+  object-fit: cover;         /* 与节点图片一致（cover 填满，比例一致时等同 contain） */
   object-position: center;
   -webkit-user-drag: none;
   user-select: none;
@@ -8421,203 +8421,95 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 }
 
 /* ═════════════════════════════════════════════════════════════════════════════
- * 裁切把手 - 统一设计原则
- * 默认状态：双线装饰（角和边中点）
- * hover 状态：小箭头包裹选中边
- * 拖拽状态：保持箭头样式
+ * 裁切把手
+ *  - 装饰线（边中点 / 四角 L 形）始终可见，颜色用 --pea-crop-frame-border
+ *  - 鼠标移到边线/角点时，光标本身变成方向箭头（跟着鼠标，不叠加固定图标）
+ *  - 箭头方向 = 可拖拽方向；拖拽过程中不再显示任何叠加箭头
  * ═════════════════════════════════════════════════════════════════════════════ */
-/* 基础把手样式 */
 .pea-crop-handle {
   position: absolute;
-  z-index: 2;
-  pointer-events: auto;
-  touch-action: none;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   background: transparent;
   border: none;
-  transition: all 0.15s ease;
+  pointer-events: auto;
+  touch-action: none;
 }
+/* 手柄光标：鼠标移到边线/角点时，光标本身变成方向箭头（跟着鼠标走，不叠加固定图标）。
+   方向 = 可拖拽方向。拖拽中也不显示任何叠加箭头。 */
+.pea-crop-handle.pea-crop-edge { width: 30px; height: 30px; overflow: visible; background: transparent; }
+.pea-crop-handle.pea-crop-edge.n { top: -15px; left: 50%; transform: translateX(-50%);
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M12%202L8%207L16%207Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M12%2022L8%2017L16%2017Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%2712%27%20y1=%277%27%20x2=%2712%27%20y2=%2717%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, ns-resize; }
+.pea-crop-handle.pea-crop-edge.s { bottom: -15px; left: 50%; transform: translateX(-50%);
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M12%202L8%207L16%207Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M12%2022L8%2017L16%2017Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%2712%27%20y1=%277%27%20x2=%2712%27%20y2=%2717%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, ns-resize; }
+.pea-crop-handle.pea-crop-edge.e { right: -15px; top: 50%; transform: translateY(-50%);
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M2%2012L7%208L7%2016Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M22%2012L17%208L17%2016Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%277%27%20y1=%2712%27%20x2=%2717%27%20y2=%2712%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, ew-resize; }
+.pea-crop-handle.pea-crop-edge.w { left: -15px; top: 50%; transform: translateY(-50%);
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M2%2012L7%208L7%2016Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M22%2012L17%208L17%2016Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%277%27%20y1=%2712%27%20x2=%2717%27%20y2=%2712%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, ew-resize; }
 
-/* ═════════════════════════════════════════════════════════════════════════════
- * 四个角把手 - 默认：双线装饰（向外延伸到暗色区域），hover：对角箭头
- * ═════════════════════════════════════════════════════════════════════════════ */
-.pea-crop-handle.pea-crop-corner {
-  width: 20px;
-  height: 20px;
-  overflow: visible;
-}
-/* 角把手定位：中心对齐裁切框角点 */
-.pea-crop-handle.pea-crop-corner.nw { top: -10px; left: -10px; cursor: nwse-resize; }
-.pea-crop-handle.pea-crop-corner.ne { top: -10px; right: -10px; cursor: nesw-resize; }
-.pea-crop-handle.pea-crop-corner.sw { bottom: -10px; left: -10px; cursor: nesw-resize; }
-.pea-crop-handle.pea-crop-corner.se { bottom: -10px; right: -10px; cursor: nwse-resize; }
-
-/* 默认状态：双线装饰（从裁切框角点向外延伸，在暗色遮罩区域） */
-/* 角把手的双线装饰 - 横线（向外延伸） */
-.pea-crop-handle.pea-crop-corner::before {
-  content: '';
-  position: absolute;
-  height: 2px;
-  background: var(--pea-crop-frame-border);
-}
-/* 角把手的双线装饰 - 竖线（向外延伸） */
-.pea-crop-handle.pea-crop-corner::after {
-  content: '';
-  position: absolute;
-  width: 2px;
-  background: var(--pea-crop-frame-border);
-}
-
-/* nw 角：双线装饰，包裹裁切框角 */
-/* 把手中心（10px, 10px）对齐裁切框 border 中心线 */
-/* 裁切框角指向右下，双线也向右下延伸 */
-/* 双线在把手内部，靠近 border 中心线，在角点重叠形成完整直角 */
-/* 横线：贴着裁切框上边，向右延伸 */
-.pea-crop-handle.pea-crop-corner.nw::before {
-  top: 8px;          /* 线条上边缘在 y=8px */
-  left: 8px;         /* 从 x=8px 开始，让线条在角点重叠 */
-  width: 14px;       /* 从 x=8 延伸到 x=22，覆盖角点 */
-  height: 1px;       /* 线条更细：1px */
-}
-/* 竖线：贴着裁切框左边，向下延伸 */
-.pea-crop-handle.pea-crop-corner.nw::after {
-  left: 8px;         /* 线条左边缘在 x=8px */
-  top: 8px;          /* 从 y=8px 开始，让线条在角点重叠 */
-  width: 1px;        /* 线条更细：1px */
-  height: 14px;      /* 从 y=8 延伸到 y=22，覆盖角点 */
-}
-
-/* ne 角：双线装饰（与角的方向相同：向左下延伸） */
-/* 裁切框角指向左下，双线也向左下延伸 */
-.pea-crop-handle.pea-crop-corner.ne::before {
-  top: 8px;          /* 线条上边缘在 y=8px */
-  right: 8px;        /* 从 x=8px 开始，让线条在角点重叠 */
-  width: 14px;       /* 从 x=8 延伸到 x=22，覆盖角点 */
-  height: 1px;       /* 线条更细：1px */
-}
-.pea-crop-handle.pea-crop-corner.ne::after {
-  right: 8px;        /* 线条右边缘在 x=8px */
-  top: 8px;          /* 从 y=8px 开始，让线条在角点重叠 */
-  width: 1px;        /* 线条更细：1px */
-  height: 14px;      /* 从 y=8 延伸到 y=22，覆盖角点 */
-}
-
-/* sw 角：双线装饰（与角的方向相同：向右上延伸） */
-/* 裁切框角指向右上，双线也向右上延伸 */
-.pea-crop-handle.pea-crop-corner.sw::before {
-  bottom: 8px;       /* 线条下边缘在 y=8px */
-  left: 8px;         /* 从 x=8px 开始，让线条在角点重叠 */
-  width: 14px;       /* 从 x=8 延伸到 x=22，覆盖角点 */
-  height: 1px;       /* 线条更细：1px */
-}
-.pea-crop-handle.pea-crop-corner.sw::after {
-  left: 8px;         /* 线条左边缘在 x=8px */
-  bottom: 8px;       /* 线条下边缘在 y=8px */
-  width: 1px;        /* 线条更细：1px */
-  height: 14px;      /* 从 y=8 延伸到 y=22，覆盖角点 */
-}
-
-/* se 角：双线装饰（与角的方向相同：向左上延伸） */
-/* 裁切框角指向左上，双线也向左上延伸 */
-.pea-crop-handle.pea-crop-corner.se::before {
-  bottom: 8px;       /* 线条下边缘在 y=8px */
-  right: 8px;        /* 从 x=8px 开始，让线条在角点重叠 */
-  width: 14px;       /* 从 x=8 延伸到 x=22，覆盖角点 */
-  height: 1px;       /* 线条更细：1px */
-}
-.pea-crop-handle.pea-crop-corner.se::after {
-  right: 8px;        /* 线条右边缘在 x=8px */
-  bottom: 8px;       /* 线条下边缘在 y=8px */
-  width: 1px;        /* 线条更细：1px */
-  height: 14px;      /* 从 y=8 延伸到 y=22，覆盖角点 */
-}
-
-/* hover 状态：保持双线样式不变 */
-/* 双线不消失，箭头已通过 cursor 属性设置 */
-.pea-crop-handle.pea-crop-corner:hover::before,
-.pea-crop-handle.pea-crop-corner:hover::after {
-  /* 保持双线样式不变 */
-  background: var(--pea-crop-frame-border);
-}
-
-/* ═════════════════════════════════════════════════════════════════════════════
- * 四条边把手 - 默认：双线装饰，hover：小箭头包裹
- * ═════════════════════════════════════════════════════════════════════════════ */
-.pea-crop-handle.pea-crop-edge {
-  width: 30px;
-  height: 30px;
-  overflow: visible;
-  background: transparent;
-}
-/* 边把手定位 */
-.pea-crop-handle.pea-crop-edge.n { top: -15px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
-.pea-crop-handle.pea-crop-edge.s { bottom: -15px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
-.pea-crop-handle.pea-crop-edge.e { right: -15px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
-.pea-crop-handle.pea-crop-edge.w { left: -15px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
-
-/* 默认状态：双线装饰（沿着裁切框边，完全在暗色区域） */
-/* 把手中心（15px）对齐裁切框 border 中心线 */
-/* 暗区边界：y=15 或 x=15，线条必须完全在暗区内 */
-/* n/s 边：水平双线 */
+/* 边中点装饰：沿边框的水平/垂直线（始终可见） */
 .pea-crop-handle.pea-crop-edge.n::before,
 .pea-crop-handle.pea-crop-edge.s::before {
   content: '';
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  width: 20px;
-  height: 1px;
+  width: 22px;
+  height: 1.5px;
   background: var(--pea-crop-frame-border);
 }
-/* n 边：把手在上方，暗区在上半部分（y < 15） */
-/* 关键：absolute 子元素偏移相对于 padding box（每边内缩 1px border），
-   把手中心对齐的是 border 内边缘，故 13.5px 会让线条外缘跨进 border 0.5px
-   与同色边框融合成一条线。用 13px 让线条外缘正好落在 border 外边缘（暗区侧）。 */
-.pea-crop-handle.pea-crop-edge.n::before {
-  top: 13px;        /* 线条外缘贴 border 上外边缘，完全在暗区 */
-}
-/* s 边：把手在下方，暗区在下半部分（y > 15） */
-.pea-crop-handle.pea-crop-edge.s::before {
-  bottom: 13px;     /* 线条外缘贴 border 下外边缘，完全在暗区 */
-}
-
-/* e/w 边：垂直双线 */
+.pea-crop-handle.pea-crop-edge.n::before { top: 13px; }
+.pea-crop-handle.pea-crop-edge.s::before { bottom: 13px; }
 .pea-crop-handle.pea-crop-edge.e::before,
 .pea-crop-handle.pea-crop-edge.w::before {
   content: '';
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  width: 1px;
-  height: 20px;
+  width: 1.5px;
+  height: 22px;
   background: var(--pea-crop-frame-border);
 }
-/* e 边：把手在右侧，暗区在右半部分（x > 15） */
-/* 关键：必须用 right（从把手右边/外侧测量），不能用 left。
-   同理 13px 让线条外缘正好落在 border 右外边缘（暗区侧）。
-   注：e 边 right:13px 与 left:17px 定位到的线条位置相同（把手宽30，left+width+right=30），
-   所以方向(left/right)不影响最终位置，真正决定贴边的是这个偏移量。 */
-.pea-crop-handle.pea-crop-edge.e::before {
-  right: 13px;       /* 线条外缘贴 border 右外边缘，完全在暗区 */
-}
-/* w 边：把手在左侧，暗区在左半部分（x < 15） */
-/* 关键：必须用 left（从把手左边/外侧测量），不能用 right */
-.pea-crop-handle.pea-crop-edge.w::before {
-  left: 13px;        /* 线条外缘贴 border 左外边缘，完全在暗区 */
-}
+.pea-crop-handle.pea-crop-edge.e::before { right: 13px; }
+.pea-crop-handle.pea-crop-edge.w::before { left: 13px; }
 
-/* hover 状态：双线保持不变 */
+/* 角点手柄：覆盖在四角 */
+.pea-crop-handle.pea-crop-corner { width: 20px; height: 20px; overflow: visible; }
+/* nw/se 沿 \ 对角线；ne/sw 沿 / 对角线 */
+.pea-crop-handle.pea-crop-corner.nw { top: -10px; left: -10px;
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M4%204L10%204L4%2010Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M20%2020L14%2020L20%2014Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%276%27%20y1=%276%27%20x2=%2718%27%20y2=%2718%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, nwse-resize; }
+.pea-crop-handle.pea-crop-corner.se { bottom: -10px; right: -10px;
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M4%204L10%204L4%2010Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M20%2020L14%2020L20%2014Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%276%27%20y1=%276%27%20x2=%2718%27%20y2=%2718%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, nwse-resize; }
+.pea-crop-handle.pea-crop-corner.ne { top: -10px; right: -10px;
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M20%204L14%204L20%2010Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M4%2020L10%2020L4%2014Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%2718%27%20y1=%276%27%20x2=%276%27%20y2=%2718%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, nesw-resize; }
+.pea-crop-handle.pea-crop-corner.sw { bottom: -10px; left: -10px;
+  cursor: url("data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2724%27%20height=%2724%27%20viewBox=%270%200%2024%2024%27%3E%3Cpath%20d=%27M20%204L14%204L20%2010Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cpath%20d=%27M4%2020L10%2020L4%2014Z%27%20fill=white%20stroke=black%20stroke-width=%271%27/%3E%3Cline%20x1=%2718%27%20y1=%276%27%20x2=%276%27%20y2=%2718%27%20stroke=black%20stroke-width=%271.5%27/%3E%3C/svg%3E") 12 12, nesw-resize; }
 
-/* 拖拽状态：保持箭头样式（与 hover 相同） */
-.pea-crop-frame--dragging .pea-crop-handle.pea-crop-corner::before,
-.pea-crop-frame--dragging .pea-crop-handle.pea-crop-corner::after {
-  /* 保持 hover 状态的箭头样式 */
-  opacity: 1;
+/* 角点装饰：L 形双线（始终可见） */
+.pea-crop-handle.pea-crop-corner::before {
+  content: '';
+  position: absolute;
+  height: 1.5px;
+  background: var(--pea-crop-frame-border);
 }
-.pea-crop-frame--dragging .pea-crop-handle.pea-crop-edge::before,
-.pea-crop-frame--dragging .pea-crop-handle.pea-crop-edge::after {
-  /* 保持 hover 状态的箭头样式 */
-  opacity: 1;
+.pea-crop-handle.pea-crop-corner::after {
+  content: '';
+  position: absolute;
+  width: 1.5px;
+  background: var(--pea-crop-frame-border);
 }
+.pea-crop-handle.pea-crop-corner.nw::before { top: 8px; left: 8px; width: 14px; }
+.pea-crop-handle.pea-crop-corner.nw::after { left: 8px; top: 8px; height: 14px; }
+.pea-crop-handle.pea-crop-corner.ne::before { top: 8px; right: 8px; width: 14px; }
+.pea-crop-handle.pea-crop-corner.ne::after { right: 8px; top: 8px; height: 14px; }
+.pea-crop-handle.pea-crop-corner.sw::before { bottom: 8px; left: 8px; width: 14px; }
+.pea-crop-handle.pea-crop-corner.sw::after { left: 8px; bottom: 8px; height: 14px; }
+.pea-crop-handle.pea-crop-corner.se::before { bottom: 8px; right: 8px; width: 14px; }
+.pea-crop-handle.pea-crop-corner.se::after { right: 8px; bottom: 8px; height: 14px; }
+
 
 /* ═════════════════════════════════════════════════════════════════════════════
  * 动态九宫格辅助线 - 拖拽时显示

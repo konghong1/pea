@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useStore } from 'reactflow';
 import { Dropdown } from 'antd';
 import { toast } from '../store/toast';
 import { updateCrop, clamp, MIN_CROP, type Rect, type CropDragType } from './cropMath';
@@ -7,8 +6,6 @@ import { resolveDragType } from '../lib/cropDrag';
 import { computeCropExportPlan } from './cropExport';
 
 export type CropRatio = 'original' | '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | '21:9' | 'custom';
-
-type Disp = { w: number; h: number; scale: number };
 
 interface Props {
   url: string;
@@ -38,87 +35,27 @@ const RATIO_VALUES: Record<Exclude<CropRatio, 'original' | 'custom'>, number> = 
 
 const INSET = 0.10;
 
-/** Calculate crop image display size.
+/**
+ * 测量图片容器的「布局尺寸」（未经 ReactFlow viewport scale 放大的原始像素）。
  *
- *  Core rule: crop image's visual size = the node's actual rendered pixel size
- *  on screen (×1.0). We read the container's getBoundingClientRect() to get the
- *  real screen pixels the user sees on canvas, then use that directly — no
- *  scaling, no viewport ratios.
+ * 关键：裁切浮层渲染在节点内部，会被 ReactFlow 的 `transform: scale(zoom)` 一起缩放。
+ * 因此舞台尺寸只需写成容器的 layout 尺寸（offsetWidth/offsetHeight），渲染后自然与节点
+ * 图片视觉等大 —— 完全不需要手动 ÷zoom，也避免了 store zoom 与真实缩放不同步导致的
+ * 「裁切图被二次放大 / 与节点不一致」问题。
  *
- *  ⚠️ Critical: getBoundingClientRect() returns *visual* (post-transform)
- *  pixels. The container lives inside ReactFlow's viewport which applies
- *  `transform: scale(zoom)`, so a CSS pixel we write as inline `width: W`
- *  will be visually multiplied by zoom. To make the crop image visually equal
- *  to the node (i.e. visualSize = baseW × zoom / zoom = baseW), we convert
- *  the visual pixel target back to a flow coordinate by dividing by zoom.
- *  This is purely a coordinate-space conversion, NOT a "scale factor"
- *  amplification — it cancels the transform ReactFlow would otherwise apply.
- *
- *  Safety: clamp to max 90% of viewport as safety net for extreme cases.
+ * 节点图片容器已被 CSS 锁定为「图片原始比例」，故裁切图用 object-fit: contain 可完整铺满，
+ * 与节点 cover 图在比例一致时视觉完全一致。
  */
-function fitDisplay(natW: number, natH: number, containerEl: HTMLDivElement | null, zoom: number): Disp {
-  const rect = containerEl?.getBoundingClientRect();
-  const baseW = rect?.width ?? 400;
-  const baseH = rect?.height ?? 300;
-
-  // Preserve the original image aspect ratio. The crop UI shows the full,
-  // uncropped image, so its display bounds must match the image ratio — not
-  // the node's ratio. Fit the largest such rectangle inside the node bounds.
-  const imageRatio = natW / natH;
-  const nodeRatio = baseW / baseH;
-  let visualW: number;
-  let visualH: number;
-  if (nodeRatio > imageRatio) {
-    // Node is wider than the image -> height is the limiting axis.
-    visualH = baseH;
-    visualW = visualH * imageRatio;
-  } else {
-    // Node is taller than or equal to the image -> width is the limiting axis.
-    visualW = baseW;
-    visualH = visualW / imageRatio;
-  }
-
-  // Clamp to 90% viewport as safety net, maintaining aspect ratio.
-  const viewMaxW = window.innerWidth * 0.90;
-  const viewMaxH = window.innerHeight * 0.90;
-  if (visualW > viewMaxW) {
-    visualW = viewMaxW;
-    visualH = visualW / imageRatio;
-  }
-  if (visualH > viewMaxH) {
-    visualH = viewMaxH;
-    visualW = visualH * imageRatio;
-  }
-
-  // Convert visual pixel target to flow coordinate (÷ zoom) so the rendered
-  // size after ReactFlow's `transform: scale(zoom)` equals the intended visual
-  // pixels. Guard zoom=0 just in case.
-  const safeZoom = zoom > 0 ? zoom : 1;
-  const finalW = visualW / safeZoom;
-  const finalH = visualH / safeZoom;
-
-  // Scale maps display pixels back to original image coordinates.
-  // Because aspect ratio is preserved, visualW/natW == visualH/natH.
-  const scale = visualW / natW;
-  return { w: Math.round(finalW), h: Math.round(finalH), scale };
+function measureStage(containerEl: HTMLDivElement | null): { w: number; h: number } | null {
+  if (!containerEl) return null;
+  const w = containerEl.offsetWidth;
+  const h = containerEl.offsetHeight;
+  if (w <= 0 || h <= 0) return null;
+  return { w, h };
 }
 
-/** Calculate initial crop rectangle position and size. */
-function centerFitRect(W: number, H: number, ratio: number | null) {
-  if (ratio != null) {
-    const byWidth = { w: W, h: W / ratio };
-    const byHeight = { w: H * ratio, h: H };
-    const use = byWidth.h <= H ? byWidth : byHeight;
-    return { x: (W - use.w) / 2, y: (H - use.h) / 2, w: use.w, h: use.h };
-  }
-  const inset = 1 - INSET * 2;
-  let w = clamp(W * inset, MIN_CROP, W);
-  let h = clamp(H * inset, MIN_CROP, H);
-  return { x: (W - w) / 2, y: (H - h) / 2, w, h };
-}
-
-/** Default crop rectangle on first open: preserve image ratio with a small inset,
- *  so the frame does not hug the image edges (matches the reference design). */
+/** Initial crop rectangle: preserve image ratio with a small inset so the frame
+ *  does not hug the image edges on first open. */
 function initialCropRect(W: number, H: number, ratio: number | null) {
   const inset = 1 - INSET * 2; // 80% of the display area
   if (ratio == null) {
@@ -126,7 +63,6 @@ function initialCropRect(W: number, H: number, ratio: number | null) {
     const h = clamp(H * inset, MIN_CROP, H);
     return { x: (W - w) / 2, y: (H - h) / 2, w, h };
   }
-  // Fit a ratio-locked rectangle inside the 80% display area.
   let w = W * inset;
   let h = w / ratio;
   if (h > H * inset) {
@@ -136,12 +72,14 @@ function initialCropRect(W: number, H: number, ratio: number | null) {
   return { x: (W - w) / 2, y: (H - h) / 2, w: clamp(w, MIN_CROP, W), h: clamp(h, MIN_CROP, H) };
 }
 
-/** 根据按下点在裁切框内的相对位置，判定拖拽类型（实现见 ./lib/cropDrag，纯函数便于单测）。
- *  band：边框命中带宽度（屏幕 px），任意缩放下都用屏幕 px 判定，抓取手感一致。
- *  - 同时贴近两条边 → 角点(nw/ne/sw/se)
- *  - 仅贴近一条边 → 对应边(n/s/e/w)（整条边都可抓，不再只有中点把手）
- *  - 都不贴近 → 整体平移(move)
- * 这样「点哪条边，就拖哪条边」，鼠标始终锁在按下那条边上。 */
+/** 居中按比例的裁切框（比例锁定时用） */
+function centerFitRect(W: number, H: number, ratio: number): Rect {
+  const byWidth = { w: W, h: W / ratio };
+  const byHeight = { w: H * ratio, h: H };
+  const use = byWidth.h <= H ? byWidth : byHeight;
+  return { x: (W - use.w) / 2, y: (H - use.h) / 2, w: use.w, h: use.h };
+}
+
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -167,48 +105,25 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 }
 
 /** Sync crop Rect to DOM node styles (used during drag to bypass React re-render) */
-function syncDomStyles(
-  rect: Rect,
-  _W: number,
-  _H: number,
-  frameEl: HTMLDivElement | null,
-) {
+function syncDomStyles(rect: Rect, frameEl: HTMLDivElement | null) {
   if (frameEl) {
     frameEl.style.transform = `translate3d(${rect.x}px, ${rect.y}px, 0)`;
     frameEl.style.width = `${rect.w}px`;
     frameEl.style.height = `${rect.h}px`;
   }
-  // Masks removed: v4 uses box-shadow vignette on .pea-crop-frame instead of
-  // 4 independent mask divs (no corner overlap / alpha doubling issues).
 }
 
-/** In-place image crop overlay component.
- *
- *  Design points:
- *  - No createPortal — renders directly inside the node's image container (position:absolute fills parent)
- *  - No full-screen darkening mask — canvas content completely unaffected
- *  - Image centered and enlarged in container, with its own dark background card
- *  - Four-side semi-transparent darkening mask outside crop area (pea-crop-mask)
- *  - Toolbar right below the image
- *  - Single-layer structure: overlay > stage > [image-stage + toolbar]
- */
 export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm }: Props) {
-  const [disp, setDisp] = useState<Disp | null>(null);
+  const [disp, setDisp] = useState<{ w: number; h: number } | null>(null);
   const [crop, setCrop] = useState<Rect | null>(null);
   const [ratioKey, setRatioKey] = useState<CropRatio>('original');
   const [customRatio, setCustomRatio] = useState<number | null>(null);
   const [originalRatio, setOriginalRatio] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Subscribe to ReactFlow viewport zoom so the crop image's visual size matches
-  // the node's visual size regardless of canvas zoom level.
-  const zoom = useStore((s) => s.transform[2]) || 1;
-
   const naturalRef = useRef<{ w: number; h: number } | null>(null);
-  const dispRef = useRef<Disp | null>(null);
+  const dispRef = useRef<{ w: number; h: number } | null>(null);
 
-  // DOM refs for direct style manipulation during drag
   const frameRef = useRef<HTMLDivElement | null>(null);
 
   const W = disp?.w ?? 0;
@@ -221,9 +136,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   }, [ratioKey, customRatio, originalRatio]);
 
   // ── Lock canvas while crop overlay is open ────────────────────────────────
-  // CanvasEditor listens for `crop-mode-change` to disable canvas pan/zoom and
-  // add `.pea-canvas-locked`. We dispatch on mount/unmount so the lock is always
-  // released even if the component is unmounted by an external route change.
   useEffect(() => {
     try {
       window.dispatchEvent(new CustomEvent('crop-mode-change', { detail: { active: true } }));
@@ -235,7 +147,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     };
   }, []);
 
-  // Load image → measure container via getBoundingClientRect → calc display size → init crop rect
+  // Load image → measure container layout size → init crop rect
   useEffect(() => {
     let alive = true;
     loadImage(url)
@@ -245,31 +157,35 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
         naturalRef.current = nat;
         setOriginalRatio(nat.w / nat.h);
 
-        const d = fitDisplay(nat.w, nat.h, containerRef.current, zoom);
-        dispRef.current = d;
-        setDisp(d);
+        const measured = measureStage(containerRef.current);
+        if (!measured) {
+          toast.error('无法获取图片容器尺寸');
+          onClose();
+          return;
+        }
+        dispRef.current = measured;
+        setDisp(measured);
       })
       .catch(() => {
         toast.error('图片加载失败，无法裁剪');
         onClose();
       });
     return () => { alive = false; };
-  }, [url, onClose, containerRef, zoom]);
+  }, [url, onClose, containerRef]);
 
   // Init crop rect once display size is ready.
-  // Default ratio is 'original' -> crop frame preserves the image ratio with a small inset,
-  // so it does not hug the image edges on first open.
   useEffect(() => {
     if (!disp || crop) return;
     setCrop(initialCropRect(disp.w, disp.h, originalRatio ?? null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, originalRatio]);
 
-  // Window resize: recalc display size and sync crop rect
+  // Window resize: re-measure stage and rescale crop proportionally.
   const onResize = useCallback(() => {
     const nat = naturalRef.current;
     if (!nat) return;
-    const next = fitDisplay(nat.w, nat.h, containerRef.current, zoom);
+    const next = measureStage(containerRef.current);
+    if (!next) return;
     const prev = dispRef.current;
     dispRef.current = next;
     setDisp(next);
@@ -278,31 +194,12 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       const ry = next.h / prev.h;
       setCrop((c) => (c ? { x: c.x * rx, y: c.y * ry, w: c.w * rx, h: c.h * ry } : c));
     }
-  }, [containerRef, zoom]);
+  }, [containerRef]);
 
   useLayoutEffect(() => {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [onResize]);
-
-  // Re-fit when canvas zoom changes (covers cases where the user pans/zooms
-  // the canvas while crop is open, or zoom is set asynchronously after mount).
-  // The crop overlay is locked against canvas panning/zoom, but Pro features
-  // (e.g. modal overlays that change viewport) can still trigger a zoom change.
-  useEffect(() => {
-    const nat = naturalRef.current;
-    if (!nat) return;
-    const next = fitDisplay(nat.w, nat.h, containerRef.current, zoom);
-    const prev = dispRef.current;
-    dispRef.current = next;
-    setDisp(next);
-    if (prev && prev.w > 0 && prev.h > 0) {
-      const rx = next.w / prev.w;
-      const ry = next.h / prev.h;
-      setCrop((c) => (c ? { x: c.x * rx, y: c.y * ry, w: c.w * rx, h: c.h * ry } : c));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoom]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -312,9 +209,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Close crop when clicking outside the overlay: other nodes, canvas blank area,
-  // or the current node's chrome (badge/toolbar). Keep open for the overlay itself
-  // and its antd dropdown menu so ratio selection and drag interactions work.
+  // Close crop when clicking outside the overlay.
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   useEffect(() => {
@@ -364,34 +259,29 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     setCrop(centerFitRect(W, H, r));
   };
 
-  // Drag core: direct DOM manipulation + rAF merge + pointer capture for stable 60fps
-  // Drag core: 直接从真实 DOM 测量 stage 矩形反算 flow 坐标（不依赖 zoom 变量），
-  // 并用「鼠标按下时的 grab offset」保持鼠标与裁切框的相对位置恒定 —— 任意画布缩放下都不偏移。
+  // ── Drag core ────────────────────────────────────────────────────────────
+  // 直接用 stage 的真实渲染矩形反算「屏幕 px → flow px」比例（不依赖 store zoom），
+  // 任意画布缩放下都能稳定抓取；指针捕获落在真实按下元素上，move/边/角走同一管线。
   const startDrag = (type: CropDragType, e: React.PointerEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    if (!crop) return;
-
-    const startRect = { ...crop };
-    const target = e.currentTarget as HTMLElement;
-
-    try { target.setPointerCapture(e.pointerId); } catch { /* noop */ }
-    setIsDragging(true);
+    if (!crop || !W || !H) return;
 
     const frameEl = frameRef.current;
     const stageEl = frameEl?.parentElement ?? null;
     if (!frameEl || !stageEl) return;
 
-    // 直接从真实 DOM 测量 stage 的屏幕矩形，反算「屏幕 px → flow px」比例。
-    // 关键：不看 useStore 的 zoom 变量，避免其与裁切框实际渲染 scale 不同步导致偏移。
-    const stageRect = stageEl.getBoundingClientRect();
-    const sx = W > 0 ? stageRect.width / W : 1;
-    const sy = H > 0 ? stageRect.height / H : 1;
+    const target = e.currentTarget as HTMLElement;
+    try { target.setPointerCapture(e.pointerId); } catch { /* noop */ }
+    setIsDragging(true);
 
-    // 鼠标按下瞬间在 stage 坐标系(flow)中的位置
+    const stageRect = stageEl.getBoundingClientRect();
+    const sx = stageRect.width / W || 1;
+    const sy = stageRect.height / H || 1;
+
+    const startRect = { ...crop };
     const startMouseFx = (e.clientX - stageRect.left) / sx;
     const startMouseFy = (e.clientY - stageRect.top) / sy;
-    // 鼠标相对裁切框左上角的 flow 偏移（grab offset）—— move 拖拽全程保持此偏移
     const grabX = startMouseFx - startRect.x;
     const grabY = startMouseFy - startRect.y;
 
@@ -407,7 +297,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
         const y = clamp(curFy - grabY, 0, H - startRect.h);
         return { x, y, w: startRect.w, h: startRect.h };
       }
-      // 边/角拖拽：用当前鼠标相对按下点的 flow 位移，走原 updateCrop（保持单方向/比例锁语义）
       const dx = curFx - startMouseFx;
       const dy = curFy - startMouseFy;
       return updateCrop(type, startRect, dx, dy, W, H, ratioValue);
@@ -415,18 +304,16 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
 
     const apply = () => {
       rafId = 0;
-      syncDomStyles(compute(latestX, latestY), W, H, frameEl);
+      syncDomStyles(compute(latestX, latestY), frameEl);
     };
     const schedule = () => {
       if (!rafId) rafId = requestAnimationFrame(apply);
     };
-
     const move = (ev: PointerEvent) => {
       latestX = ev.clientX;
       latestY = ev.clientY;
       schedule();
     };
-
     const up = () => {
       if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       try { target.releasePointerCapture(e.pointerId); } catch { /* noop */ }
@@ -434,7 +321,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
       const next = compute(latestX, latestY);
-      syncDomStyles(next, W, H, frameEl);
+      syncDomStyles(next, frameEl);
       setIsDragging(false);
       setCrop(next);
     };
@@ -444,11 +331,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     window.addEventListener('pointercancel', up);
   };
 
-  // 整框按下时，按点击位置判定拖拽类型：
-  //  - 落在边框 band 内 → 对应边/角拖拽（整条边都可抓，不再只有中点把手）；
-  //  - 否则 → 整体平移(move)。
-  // 这样「点哪条边，鼠标就锁在那条边上」：边拖拽用按下点的精确 flow 坐标，
-  // 拖动时该边始终跟随鼠标，不会因误触整框 move 而让鼠标跑进框内。
   const onFramePointerDown = (e: React.PointerEvent) => {
     const frameEl = frameRef.current;
     if (!frameEl) {
@@ -462,19 +344,10 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
 
   const handleConfirm = async () => {
     if (!crop || !disp || !naturalRef.current) return;
-    setLoading(true);
     try {
       const img = await loadImage(url);
       const nat = naturalRef.current;
 
-      // ── High-resolution crop export (no upscaling blur) ──────────────────
-      // All decision logic lives in ./cropExport (pure, unit-tested in
-      // verify/crop_export.test.ts). Here we only execute the plan.
-      //
-      // Why: 「裁小图后变模糊」的根因不是坐标算错，而是 1:1 导出的位图像素
-      // 不足以支撑新节点在画布上的显示尺寸，浏览器只能插值拉伸。方案是从
-      // 原图真实像素采样 + 按 DPR 超采样（封顶 2×），同时兜底 canvas 面积
-      // 上限，避免 Safari/iOS 上 toDataURL 静默返回空白图。
       const plan = computeCropExportPlan({
         crop,
         disp: { w: disp.w, h: disp.h },
@@ -493,25 +366,10 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       canvas.height = outHeight;
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('canvas context');
-      // High-quality resampling when supersampling.
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(
-        img,
-        source.sx,
-        source.sy,
-        source.sw,
-        source.sh,
-        0,
-        0,
-        outWidth,
-        outHeight,
-      );
+      ctx.drawImage(img, source.sx, source.sy, source.sw, source.sh, 0, 0, outWidth, outHeight);
 
-      // Honest warning: if the crop's own source pixels are already small,
-      // no frontend trick can invent detail — only a higher-res source image
-      // or AI super-resolution can help. Tell the user instead of silently
-      // shipping a blurry node.
       if (plan.lowResSource) {
         toast.warning('裁剪区域在原图中分辨率偏低，放大显示可能仍会模糊（建议选用原图更大区域或更高清的源图）');
       }
@@ -519,8 +377,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       onConfirm(canvas.toDataURL('image/png'), { width: outWidth, height: outHeight });
     } catch {
       toast.error('裁剪失败');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -536,20 +392,20 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
 
   const isReady = W > 0 && H > 0 && crop != null;
 
-  // Block wheel events from bubbling to canvas
   const onWheel = useCallback((e: React.WheelEvent) => {
     e.stopPropagation();
     e.preventDefault();
   }, []);
 
-  // 裁切区域内禁止触发节点的右键菜单（复制/添加并连接/删除等），同时阻止浏览器默认菜单。
-  // 否则在裁切框内右击会冒泡到 ReactFlow 节点，误弹节点上下文菜单并导致裁切被取消。
   const onCtxMenu = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
   }, []);
 
-  // Render: in-place overlay, single layer
+  // 裁切框手柄类型列表
+  const EDGES = ['n', 's', 'e', 'w'] as const;
+  const CORNERS = ['nw', 'ne', 'sw', 'se'] as const;
+
   return (
     <div
       className="pea-crop-overlay"
@@ -559,7 +415,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       onWheel={onWheel}
       onContextMenu={onCtxMenu}
     >
-      {/* Stage: transparent container that exactly matches the node wrap */}
       <div className="pea-crop-stage" onClick={stop} onWheel={onWheel}>
         {!isReady ? (
           <div className="pea-crop-loading">
@@ -567,12 +422,10 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
           </div>
         ) : (
           <div className="pea-crop-image-stage" style={{ width: W, height: H }}>
-            {/* Image + vignette mask via frame box-shadow */}
             <div className="pea-crop-img-clip">
               <img className="pea-crop-image" src={url} alt="裁剪图片" draggable={false} />
             </div>
 
-            {/* Crop frame */}
             <div
               ref={frameRef}
               className={`pea-crop-frame${isDragging ? ' pea-crop-frame--dragging' : ''}`}
@@ -582,8 +435,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
               aria-label="拖动裁切区"
               tabIndex={0}
             >
-              {/* 四个角的把手（带对角箭头） */}
-              {(['nw', 'ne', 'sw', 'se'] as const).map((h) => (
+              {CORNERS.map((h) => (
                 <span
                   key={h}
                   className={`pea-crop-handle pea-crop-corner ${h}`}
@@ -593,8 +445,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
                   tabIndex={-1}
                 />
               ))}
-              {/* 四条边的把手（带双箭头） */}
-              {(['n', 's', 'e', 'w'] as const).map((h) => (
+              {EDGES.map((h) => (
                 <span
                   key={h}
                   className={`pea-crop-handle pea-crop-edge ${h}`}
@@ -604,7 +455,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
                   tabIndex={-1}
                 />
               ))}
-              {/* 动态九宫格辅助线（拖拽时显示） */}
               <div className="pea-crop-grid" aria-hidden="true">
                 <span className="pea-crop-grid-line v1" />
                 <span className="pea-crop-grid-line v2" />
@@ -616,7 +466,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
         )}
       </div>
 
-      {/* Toolbar: floats below the image stage, outside the node bounds */}
       {isReady && (
         <div className="pea-crop-toolbar" onClick={stop}>
           <button type="button" className="pea-crop-toolbar-btn" onClick={onClose} aria-label="取消裁剪" title="取消">
@@ -642,17 +491,12 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
             type="button"
             className="pea-crop-toolbar-btn pea-crop-confirm"
             onClick={handleConfirm}
-            disabled={loading}
             aria-label="确认裁剪"
             title="确认裁剪"
           >
-            {loading ? (
-              <span className="pea-crop-spinner" aria-hidden />
-            ) : (
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
-                <path d="M20 6L9 17l-5-5" />
-              </svg>
-            )}
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
             <span className="pea-crop-confirm-text">确认裁剪</span>
           </button>
         </div>
@@ -661,9 +505,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   );
 }
 
-/* ═════════════════════════════════════════════════════════════════════════════
- * Custom ratio input
- * ═════════════════════════════════════════════════════════════════════════════ */
 function CustomRatioInput({
   current,
   onApply,
@@ -728,8 +569,6 @@ function CustomRatioInput({
     </div>
   );
 }
-
-/* Crop math extracted to ./cropHash (pure functions, testable). This component handles only DOM/interaction. */
 
 function formatRatio(n: number) {
   if (Math.abs(n - Math.round(n)) < 0.001) return `${Math.round(n)}:1`;
