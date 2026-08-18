@@ -8440,17 +8440,47 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 }
 /* 手柄光标：鼠标移到边线/角点时，光标本身变成方向箭头（跟着鼠标走，不叠加固定图标）。
    方向 = 可拖拽方向。拖拽中也不显示任何叠加箭头。 */
-.pea-crop-handle.pea-crop-edge { width: 30px; height: 30px; overflow: visible; background: transparent; }
-.pea-crop-handle.pea-crop-edge.n { top: -15px; left: 50%; transform: translateX(-50%);
-  cursor: ns-resize; }
-.pea-crop-handle.pea-crop-edge.s { bottom: -15px; left: 50%; transform: translateX(-50%);
-  cursor: ns-resize; }
-.pea-crop-handle.pea-crop-edge.e { right: -15px; top: 50%; transform: translateY(-50%);
-  cursor: ew-resize; }
-.pea-crop-handle.pea-crop-edge.w { left: -15px; top: 50%; transform: translateY(-50%);
-  cursor: ew-resize; }
+/* 边线手柄：保持 height:30px 不变（装饰线定位依赖此值），只扩大水平/垂直覆盖范围 */
+.pea-crop-handle.pea-crop-edge {
+  height: 30px;
+  width: 30px;
+  overflow: visible;
+  background: transparent;
+  z-index: 10;
+}
+/* 上/下边线：覆盖整条边（left:0/right:0 替代 left:50%/translateX），height 保持 30px */
+.pea-crop-handle.pea-crop-edge.n {
+  top: -15px;
+  left: 0;
+  right: 0;
+  width: auto;
+  cursor: ns-resize !important;
+}
+.pea-crop-handle.pea-crop-edge.s {
+  bottom: -15px;
+  left: 0;
+  right: 0;
+  width: auto;
+  cursor: ns-resize !important;
+}
+/* 左/右边线：覆盖整条边（top:0/bottom:0 替代 top:50%/translateY），width 保持 30px */
+.pea-crop-handle.pea-crop-edge.e {
+  right: -15px;
+  top: 0;
+  bottom: 0;
+  height: auto;
+  cursor: ew-resize !important;
+}
+.pea-crop-handle.pea-crop-edge.w {
+  left: -15px;
+  top: 0;
+  bottom: 0;
+  height: auto;
+  cursor: ew-resize !important;
+}
 
-/* 边中点装饰：沿边框的水平/垂直线（始终可见） */
+/* 边中点装饰：沿边框的水平/垂直线（始终可见）
+   装饰线定位与原始版本完全一致，不因手柄尺寸变化而改变 */
 .pea-crop-handle.pea-crop-edge.n::before,
 .pea-crop-handle.pea-crop-edge.s::before {
   content: '';
@@ -8476,17 +8506,17 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 .pea-crop-handle.pea-crop-edge.e::before { right: 13px; }
 .pea-crop-handle.pea-crop-edge.w::before { left: 13px; }
 
-/* 角点手柄：覆盖在四角 */
-.pea-crop-handle.pea-crop-corner { width: 20px; height: 20px; overflow: visible; }
+/* 角点手柄：覆盖在四角，z-index 高于边线确保角点优先触发 */
+.pea-crop-handle.pea-crop-corner { width: 20px; height: 20px; overflow: visible; z-index: 12; }
 /* nw/se 沿 \ 对角线；ne/sw 沿 / 对角线 */
 .pea-crop-handle.pea-crop-corner.nw { top: -10px; left: -10px;
-  cursor: nwse-resize; }
+  cursor: nwse-resize !important; }
 .pea-crop-handle.pea-crop-corner.se { bottom: -10px; right: -10px;
-  cursor: nwse-resize; }
+  cursor: nwse-resize !important; }
 .pea-crop-handle.pea-crop-corner.ne { top: -10px; right: -10px;
-  cursor: nesw-resize; }
+  cursor: nesw-resize !important; }
 .pea-crop-handle.pea-crop-corner.sw { bottom: -10px; left: -10px;
-  cursor: nesw-resize; }
+  cursor: nesw-resize !important; }
 
 /* 角点装饰：L 形双线（始终可见） */
 .pea-crop-handle.pea-crop-corner::before {
@@ -8512,6 +8542,26 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 
 
 /* ═════════════════════════════════════════════════════════════════════════════
+ * 动态九宫格辅助线 - 拖拽时显示
+ * ═════════════════════════════════════════════════════════════════════════════ */
+.pea-crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.pea-crop-frame--dragging .pea-crop-grid {
+  opacity: 1;
+}
+/* 三分网格线：2条横线 + 2条竖线 */
+.pea-crop-grid-line {
+  position: absolute;
+  background: var(--pea-crop-frame-border);
+  opacity: 0.3;
+}
+/* 竖线（.v1 和 .v2） */
+.pea-crop-grid-line.v1,
  * 动态九宫格辅助线 - 拖拽时显示
  * ═════════════════════════════════════════════════════════════════════════════ */
 .pea-crop-grid {

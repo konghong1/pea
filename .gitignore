@@ -59,6 +59,15 @@ verify/**/*.txt
 verify/**/*.yaml
 verify/**/*.yml
 verify/**/__pycache__/
+# Agent 调试/一次性脚本与产物（保留 *.py 主验证脚本，忽略 debug/临时脚本）
+verify/debug_*.py
+verify/debug_*.mjs
+verify/test_*.mjs
+verify/*_style_test.py
+verify/generate_*.py
+verify/crop_*.py
+verify/cursor*.png
+verify/cursor*.txt
 
 # ===== WorkBuddy / agent working artifacts (NEVER commit) =====
 # 记忆、技能、运行产物、变更概览等均不进版本管理；只保留项目本身的源码与文档
@@ -67,6 +76,19 @@ verify/**/__pycache__/
 docs/overviews/
 overview_*.md
 pea-server/*_overview.md
+
+# ===== Agent Teams / deep agent working artifacts (NEVER commit) =====
+# AgentTeams 团队会话产物：成员inbox、archive、retired-members 等均为运行时数据
+.agent-teams/
+
+# ===== Agent build / debug logs (NEVER commit) =====
+verify/build_*.log
+verify/cursors*.txt
+
+# ===== AI agent scratch / temp files =====
+*.tmp
+*.temp
+*~
 
 # 兜底：仓库根目录下的一切报告类产物（前导 / 表示仅匹配根目录，不影响子目录同名源码）
 /overview.md

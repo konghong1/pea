@@ -81,34 +81,34 @@ export function updateCrop(
   }
 
   // 角点 + 锁定比例：以对角为锚点等比缩放
-  const fitByWidth = (w: number, maxW: number, maxH: number) => {
-    const safeW = clamp(w, MIN_CROP, maxW);
-    let h = safeW / ratio;
-    if (h > maxH) h = clamp(maxH, MIN_CROP, maxH);
-    return { w: h * ratio, h };
-  };
-  const fitByHeight = (h: number, maxH: number, maxW: number) => {
-    const safeH = clamp(h, MIN_CROP, maxH);
-    let w = safeH * ratio;
-    if (w > maxW) w = clamp(maxW, MIN_CROP, maxW);
-    return { w, h: w / ratio };
+  // 用对角线距离比例缩放，确保 X/Y 两个方向的变化均匀，
+  // 避免 fitByWidth 只以 X 方向驱动导致 Y 方向裁切框移动比鼠标快的问题。
+  const oldDiag = Math.sqrt(start.w * start.w + start.h * start.h);
+  const scaleByDiag = (newDiagX: number, newDiagY: number, maxW: number, maxH: number) => {
+    const newDiag = Math.sqrt(newDiagX * newDiagX + newDiagY * newDiagY);
+    const rawScale = oldDiag > 0 ? newDiag / oldDiag : 1;
+    // 用统一的 scale 缩放两个方向，clamp 时取两个方向都能满足的限制
+    const maxScale = Math.min(maxW / start.w, maxH / start.h);
+    const minScale = Math.max(MIN_CROP / start.w, MIN_CROP / start.h);
+    const scale = clamp(rawScale, minScale, maxScale);
+    return { w: start.w * scale, h: start.h * scale };
   };
 
   switch (type) {
     case 'se': {
-      const { w, h } = fitByWidth(start.w + dx, W - start.x, H - start.y);
+      const { w, h } = scaleByDiag(start.w + dx, start.h + dy, W - start.x, H - start.y);
       return { ...start, w, h };
     }
     case 'sw': {
-      const { w, h } = fitByWidth(start.w - dx, start.x + start.w, H - start.y);
+      const { w, h } = scaleByDiag(start.w - dx, start.h + dy, start.x + start.w, H - start.y);
       return { x: start.x + start.w - w, y: start.y, w, h };
     }
     case 'ne': {
-      const { w, h } = fitByWidth(start.w + dx, W - start.x, start.y + start.h);
+      const { w, h } = scaleByDiag(start.w + dx, start.h - dy, W - start.x, start.y + start.h);
       return { ...start, y: start.y + start.h - h, w, h };
     }
     case 'nw': {
-      const { w, h } = fitByWidth(start.w - dx, start.x + start.w, start.y + start.h);
+      const { w, h } = scaleByDiag(start.w - dx, start.h - dy, start.x + start.w, start.y + start.h);
       return { x: start.x + start.w - w, y: start.y + start.h - h, w, h };
     }
     default:

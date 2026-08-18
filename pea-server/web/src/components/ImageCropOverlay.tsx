@@ -275,9 +275,13 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     try { target.setPointerCapture(e.pointerId); } catch { /* noop */ }
     setIsDragging(true);
 
+    // 用 stageEl 自身的 offsetWidth/offsetHeight 计算「屏幕 px → flow px」比例，
+    // 而非外部传入的 W/H，避免 containerRef 与 stageEl 尺寸不一致导致坐标转换错误。
     const stageRect = stageEl.getBoundingClientRect();
-    const sx = stageRect.width / W || 1;
-    const sy = stageRect.height / H || 1;
+    const stageW = stageEl.offsetWidth || W;
+    const stageH = stageEl.offsetHeight || H;
+    const sx = stageRect.width / stageW || 1;
+    const sy = stageRect.height / stageH || 1;
 
     const startRect = { ...crop };
     const startMouseFx = (e.clientX - stageRect.left) / sx;
@@ -287,7 +291,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
 
     let latestX = e.clientX;
     let latestY = e.clientY;
-    let rafId = 0;
 
     const compute = (clientX: number, clientY: number): Rect => {
       const curFx = (clientX - stageRect.left) / sx;
@@ -302,20 +305,13 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       return updateCrop(type, startRect, dx, dy, W, H, ratioValue);
     };
 
-    const apply = () => {
-      rafId = 0;
-      syncDomStyles(compute(latestX, latestY), frameEl);
-    };
-    const schedule = () => {
-      if (!rafId) rafId = requestAnimationFrame(apply);
-    };
+    // 直接更新 DOM，不用 requestAnimationFrame 节流，避免快速拖拽时裁切框滞后鼠标
     const move = (ev: PointerEvent) => {
       latestX = ev.clientX;
       latestY = ev.clientY;
-      schedule();
+      syncDomStyles(compute(latestX, latestY), frameEl);
     };
     const up = () => {
-      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
       try { target.releasePointerCapture(e.pointerId); } catch { /* noop */ }
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
