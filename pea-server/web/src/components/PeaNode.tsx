@@ -93,6 +93,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   const fileRef = useRef<HTMLInputElement>(null);
   // 持有当前节点的文件 Object URL，用于组件卸载时释放，防止内存泄漏
   const objectUrlRef = useRef<string>('');
+  const kind = data.kind;
   const isText = kind === 'text';
   const isMedia = kind === 'image' || kind === 'video' || kind === 'audio';
   const hasImage = kind === 'image' && !!(data.resultUrl || data.resultUrls?.length || data.url || data.fileKey);
