@@ -20,7 +20,13 @@ async function bootstrap() {
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: false }),
   );
-  app.enableCors({ origin: '*' });
+  // CORS 配置：生产环境限制为已知前端域名，开发环境允许 localhost
+  const corsOrigin = process.env.PEA_CORS_ORIGIN
+    ? process.env.PEA_CORS_ORIGIN.split(',')
+    : (process.env.NODE_ENV === 'production'
+      ? ['https://pea.ai', 'https://www.pea.ai']
+      : ['http://localhost:5173', 'http://127.0.0.1:5173']);
+  app.enableCors({ origin: corsOrigin });
   const port = Number(process.env.PEA_PORT ?? 4000);
   await app.listen(port);
   // eslint-disable-next-line no-console

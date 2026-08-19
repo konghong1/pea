@@ -81,6 +81,10 @@ pea-server/*_overview.md
 # AgentTeams 团队会话产物：成员inbox、archive、retired-members 等均为运行时数据
 .agent-teams/
 
+# ===== Code analysis reports (NEVER commit) =====
+# 代码分析报告、优化报告等分析产物
+pea-code-analyzer/
+
 # ===== Agent build / debug logs (NEVER commit) =====
 verify/build_*.log
 verify/cursors*.txt

@@ -47,7 +47,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const [rows] = await this.pool.query(sql, params);
       return rows as T;
     } catch (e) {
-      throw new InternalServerErrorException(`DB error: ${(e as Error).message}`);
+      // 生产环境不暴露数据库错误细节，防止信息泄露
+      const isProd = process.env.NODE_ENV === 'production';
+      const message = isProd
+        ? 'database error'
+        : `DB error: ${(e as Error).message}`;
+      throw new InternalServerErrorException(message);
     }
   }
 

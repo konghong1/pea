@@ -25,11 +25,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
         ? exception.message
         : 'internal error';
 
-    res.status(status).json({
+    // 生产环境不返回请求路径，防止信息泄露
+    const isProd = process.env.NODE_ENV === 'production';
+    const response: Record<string, unknown> = {
       code: status,
       message,
-      path: req.url,
       ts: new Date().toISOString(),
-    });
+    };
+    if (!isProd) {
+      response['path'] = req.url;
+    }
+    res.status(status).json(response);
   }
 }

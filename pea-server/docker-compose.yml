@@ -39,8 +39,9 @@ services:
     image: minio/minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${PEA_MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${PEA_MINIO_SECRET_KEY:-minioadmin}
+      # MinIO 凭据必须通过环境变量设置
+      MINIO_ROOT_USER: ${PEA_MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${PEA_MINIO_SECRET_KEY}
     ports:
       - "127.0.0.1:9000:9000"   # 仅本机; 媒体经 web 容器 /media 代理对外, 无需公网暴露
       - "127.0.0.1:9001:9001"   # MinIO 控制台仅本机; 运维走 ssh 隧道访问
@@ -75,7 +76,8 @@ services:
       dockerfile: infra/docker/bff.Dockerfile
     environment:
       PEA_PORT: "4000"
-      PEA_JWT_SECRET: "${PEA_JWT_SECRET:-dev-secret-change-me}"
+      # JWT 密钥必须通过环境变量设置，禁止使用默认值
+      PEA_JWT_SECRET: "${PEA_JWT_SECRET}"
       PEA_DB_HOST: mysql
       PEA_DB_PORT: "3306"
       PEA_DB_USER: ${PEA_DB_USER:-pea}
@@ -100,7 +102,8 @@ services:
       # 管理员账户: BFF 启动时把该账户密码幂等同步为下面的值 (bcrypt 入库)。
       # 改密码只需改 PEA_ADMIN_PASSWORD 后 docker compose up -d bff 重启即可。
       PEA_ADMIN_EMAIL: "admin@pea.ai"
-      PEA_ADMIN_PASSWORD: "${PEA_ADMIN_PASSWORD:-admin12345}"
+      # 管理员密码必须通过环境变量设置
+      PEA_ADMIN_PASSWORD: "${PEA_ADMIN_PASSWORD}"
       # AI 网关兜底: 仅当显式配置 PEA_AI_GATEWAY 时启用(官方 base_url 不可达时回退到该地址)。
       # ★ 默认空 = 不兜底。切勿默认指向 host.docker.internal:33210 —— 那是开发机专属代理,
       #   服务器上没有, 会把真实错误掩盖成 "ECONNREFUSED 172.17.0.1:33210"。

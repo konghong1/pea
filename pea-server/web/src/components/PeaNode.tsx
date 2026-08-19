@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Handle, Position, NodeProps, useStore } from 'reactflow';
+import { Handle, Position, NodeProps } from 'reactflow';
 import { useCanvas, PeaNodeData } from '../store/canvas';
 import { toast } from '../store/toast';
 import { useAuth } from '../store/auth';
@@ -91,8 +91,8 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   // 不能挂到外层 chrome，否则功能条会跟着画布缩放变得点不动。
   const chromeFixedRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-
-  const kind = data.kind;
+  // 持有当前节点的文件 Object URL，用于组件卸载时释放，防止内存泄漏
+  const objectUrlRef = useRef<string>('');
   const isText = kind === 'text';
   const isMedia = kind === 'image' || kind === 'video' || kind === 'audio';
   const hasImage = kind === 'image' && !!(data.resultUrl || data.resultUrls?.length || data.url || data.fileKey);
@@ -125,12 +125,27 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   //   2. 内层 .pea-node-chrome-fixed —— 只包交互控件（功能条 / 上传条 / 文本工具条），
   //      仍做 counter-scale 保证按钮在任何缩放下都是可点击的屏幕尺寸。
   //
-  // counter-scale 的缩放源只有一个：本组件按节点写入的 --pea-node-inv-zoom
-  // （订阅 ReactFlow 内部 store transform[2]，比 useViewport 在节点内更可靠）。
-  // 全局 --pea-inv-zoom 仅作 fallback，避免两套机制互相覆盖导致「改了没生效」。
-  const zoom = useStore((s) => s.transform[2]) || 1;
-  const invZoom = zoom ? 1 / zoom : 1;
-  const chromeStyle = { '--pea-node-inv-zoom': String(invZoom) } as React.CSSProperties;
+  // counter-scale 的缩放源：使用全局 CSS 变量 --pea-inv-zoom（由 ZoomVarSync 组件更新），
+  // 避免每个节点都订阅 ReactFlow store 导致 zoom 变化时全量重渲。
+  // --pea-node-inv-zoom 作为节点级 fallback，优先使用全局变量。
+  const chromeStyle = { '--pea-node-inv-zoom': 'var(--pea-inv-zoom, 1)' } as React.CSSProperties;
+  // 读取当前 zoom 值用于手柄跟随计算（从 CSS 变量读取，不触发重渲）
+  const zoomRef = useRef(1);
+  useEffect(() => {
+    const updateZoom = () => {
+      const el = rootRef.current;
+      if (el) {
+        const invZoom = parseFloat(getComputedStyle(el).getPropertyValue('--pea-node-inv-zoom') || '1');
+        zoomRef.current = invZoom ? 1 / invZoom : 1;
+      }
+    };
+    // 初始读取
+    updateZoom();
+    // 监听全局 CSS 变量变化（通过 MutationObserver 监听 root 样式变化）
+    const observer = new MutationObserver(updateZoom);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    return () => observer.disconnect();
+  }, []);
   const handleOffset = -(HANDLE_GAP + HANDLE_HALF);
 
   // 节点框尺寸标准（锁定，不再随内容跳变）：
@@ -160,6 +175,16 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   useEffect(() => {
     if (!selected && editing) setEditing(false);
   }, [selected, editing]);
+
+  // 组件卸载时释放 Object URL，防止内存泄漏
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) {
+        URL.revokeObjectURL(objectUrlRef.current);
+        objectUrlRef.current = '';
+      }
+    };
+  }, []);
 
   // 打开全屏编辑弹窗时，主动取消底层节点选中并退出编辑态。
   // 否则弹窗盖住画布后，TextNodeToolbar 和 NodeChatPrompt 输入栏仍依赖 selectedIds 显示，
@@ -222,7 +247,13 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
         fileKey = undefined;
       }
     }
+    // 释放旧的 Object URL，防止内存泄漏
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = '';
+    }
     const url = fileKey ? '' : URL.createObjectURL(f);
+    objectUrlRef.current = url;
     // 替换/上传都走同一个文件输入：清掉旧的生成结果，让新上传立刻展示。
     update(id, {
       fileKey,
@@ -280,7 +311,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
         const r = el.getBoundingClientRect();
         const mx = e.clientX;
         const my = e.clientY;
-        const z = Math.max(zoom, 0.1);
+        const z = Math.max(zoomRef.current, 0.1);
 
         const HOT_RADIUS = 45;        // 热区半径（屏幕 px）
         const FOLLOW_MAX_X = 14;      // 向外最大跟随距离（屏幕 px）
@@ -380,7 +411,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
           不撑大 .react-flow__node 的 bounding box。
           - 外层不做 counter-scale → 标题徽章与节点框等比缩放（相对大小恒定）；
           - 内层 .pea-node-chrome-fixed 做 counter-scale → 交互控件屏幕大小恒定。 */}
-      <div className="pea-node-chrome" ref={chromeRef} style={chromeStyle} data-zoom={zoom.toFixed(2)}>
+      <div className="pea-node-chrome" ref={chromeRef} style={chromeStyle} data-zoom={zoomRef.current.toFixed(2)}>
         {!cropping && <NodeBadge id={id} kind={kind} data={data} />}
         <div className="pea-node-chrome-fixed" ref={chromeFixedRef}>
           {isText && isSingleSelected && (
