@@ -80,7 +80,7 @@
   --pea-crop-handle-arrow: rgba(23, 23, 23, 0.9);
   --pea-crop-handle-hover: var(--pea-purple);
   --pea-crop-handle-active: var(--pea-purple);
-  --pea-crop-grid-line: rgba(255, 255, 255, 0.25);
+  --pea-crop-grid-line: rgba(255, 255, 255, 0.65);
   --pea-crop-vignette: rgba(0, 0, 0, 0.30);
 }
 
@@ -141,6 +141,7 @@
   --pea-crop-handle-bg: rgba(255, 255, 255, 0.85);
   --pea-crop-handle-border: rgba(0, 0, 0, 0.5);
   --pea-crop-handle-arrow: rgba(0, 0, 0, 0.7);
+  --pea-crop-grid-line: rgba(0, 0, 0, 0.65);
   --pea-crop-vignette: rgba(0, 0, 0, 0.30);
 }
 
@@ -220,6 +221,7 @@
   --pea-crop-handle-bg: rgba(0, 0, 0, 0.7);
   --pea-crop-handle-border: rgba(255, 255, 255, 0.95);
   --pea-crop-handle-arrow: rgba(255, 255, 255, 0.9);
+  --pea-crop-grid-line: rgba(255, 255, 255, 0.65);
   --pea-crop-vignette: rgba(0, 0, 0, 0.30);
 }
 
@@ -300,6 +302,7 @@
   --pea-crop-handle-bg: rgba(255, 255, 255, 0.85);
   --pea-crop-handle-border: rgba(23, 23, 23, 0.95);
   --pea-crop-handle-arrow: rgba(23, 23, 23, 0.9);
+  --pea-crop-grid-line: rgba(0, 0, 0, 0.65);
   --pea-crop-vignette: rgba(0, 0, 0, 0.30);
 }
 
@@ -8364,6 +8367,18 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
   will-change: transform;
   cursor: grabbing !important;
   border-color: var(--pea-purple) !important;
+}
+
+/* 九宫格参考线：在 frame 内部，随 frame 一起移动；pointer-events:none 不抢拖拽事件 */
+.pea-crop-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, transparent 33.33%, var(--pea-crop-grid-line) 33.33%, var(--pea-crop-grid-line) 33.67%, transparent 33.67%),
+    linear-gradient(to right, transparent 66.66%, var(--pea-crop-grid-line) 66.66%, var(--pea-crop-grid-line) 66.99%, transparent 66.99%),
+    linear-gradient(to bottom, transparent 33.33%, var(--pea-crop-grid-line) 33.33%, var(--pea-crop-grid-line) 33.67%, transparent 33.67%),
+    linear-gradient(to bottom, transparent 66.66%, var(--pea-crop-grid-line) 66.66%, var(--pea-crop-grid-line) 66.99%, transparent 66.99%);
 }
 
 /* 拖拽手柄：边缘命中区域，确保鼠标靠近边框任意位置即触发对应光标 */

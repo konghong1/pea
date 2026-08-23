@@ -102,6 +102,10 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   const [customRatio, setCustomRatio] = useState<number | null>(null);
   const [originalRatio, setOriginalRatio] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const isDraggingRef = useRef(false);
+  isDraggingRef.current = isDragging;
+  // grid opacity via state — no rAF delay, no flicker
+  const [gridOpacity, setGridOpacity] = useState(0);
 
   const naturalRef = useRef<{ w: number; h: number } | null>(null);
   const dispRef = useRef<{ w: number; h: number } | null>(null);
@@ -216,19 +220,25 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     const target = e.currentTarget as HTMLElement;
     try { target.setPointerCapture(e.pointerId); } catch {}
     setIsDragging(true);
-    const stageRect = stageEl.getBoundingClientRect();
-    const sx = stageRect.width / (stageEl.offsetWidth || W) || 1;
-    const sy = stageRect.height / (stageEl.offsetHeight || H) || 1;
+    setGridOpacity(1);
+    // 统一用 W/H（与 crop 初始化坐标空间一致）计算拖拽偏移，
+    // 避免 sRect.width / sW 因 CSS 缩放/transform 与 crop 坐标系不一致导致位置偏移。
     const startRect = { ...crop };
-    const sx0 = (e.clientX - stageRect.left) / sx;
-    const sy0 = (e.clientY - stageRect.top) / sy;
-    const gx = sx0 - startRect.x;
-    const gy = sy0 - startRect.y;
+    const frameRect = frameEl.getBoundingClientRect();
+    const offX = e.clientX - frameRect.left - startRect.x;
+    const offY = e.clientY - frameRect.top - startRect.y;
     let lx = e.clientX, ly = e.clientY;
     const compute = (cx: number, cy: number): Rect => {
-      const fx = (cx - stageRect.left) / sx, fy = (cy - stageRect.top) / sy;
-      if (type === 'move') return { x: clamp(fx - gx, 0, W - startRect.w), y: clamp(fy - gy, 0, H - startRect.h), w: startRect.w, h: startRect.h };
-      return updateCrop(type, startRect, fx - sx0, fy - sy0, W, H, ratioValue);
+      const fx = cx - frameRect.left;
+      const fy = cy - frameRect.top;
+      if (type === 'move') {
+        return {
+          x: clamp(fx - offX, 0, W - startRect.w),
+          y: clamp(fy - offY, 0, H - startRect.h),
+          w: startRect.w, h: startRect.h,
+        };
+      }
+      return updateCrop(type, startRect, fx - (offX + startRect.x), fy - (offY + startRect.y), W, H, ratioValue);
     };
     const move = (ev: PointerEvent) => {
       lx = ev.clientX; ly = ev.clientY;
@@ -236,13 +246,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       frameEl.style.transform = `translate3d(${next.x}px,${next.y}px,0)`;
       frameEl.style.width = `${next.w}px`;
       frameEl.style.height = `${next.h}px`;
-      const s = calcVignetteStyles(next, W, H);
-      if (s) {
-        if (vignetteRefs.current.top) vignetteRefs.current.top.style.height = s.top.height;
-        if (vignetteRefs.current.bottom) vignetteRefs.current.bottom.style.height = s.bottom.height;
-        if (vignetteRefs.current.left) vignetteRefs.current.left.style.cssText = `position:absolute;left:0;top:${s.left.top};bottom:${s.left.bottom};width:${s.left.width};background:var(--pea-crop-vignette);pointer-events:none;`;
-        if (vignetteRefs.current.right) vignetteRefs.current.right.style.cssText = `position:absolute;right:0;top:${s.right.top};bottom:${s.right.bottom};width:${s.right.width};background:var(--pea-crop-vignette);pointer-events:none;`;
-      }
+      // vignette 由 useLayoutEffect([crop, W, H]) 统一管理，拖拽中无需重复计算
     };
     const up = () => {
       try { target.releasePointerCapture(e.pointerId); } catch {}
@@ -251,6 +255,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       window.removeEventListener('pointercancel', up);
       setCrop(compute(lx, ly));
       setIsDragging(false);
+      setGridOpacity(0);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -264,29 +269,38 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     startDrag(resolveDragType(rect, e.clientX, e.clientY), e);
   };
 
-  // 鼠标在裁切框附近（含外侧）时动态切换光标方向
-  const THRESHOLD = 20;
+  // 只注册一次 mousemove，用 ref 读最新 isDragging，避免每次拖拽状态变化都卸载/重装监听器
+  // 卸载时（组件销毁）才清除 cursor，拖拽中途不清
+  const THRESHOLD = 12;
   useEffect(() => {
-    const frameEl = frameRef.current;
-    if (!frameEl) return;
-    // 初始化光标
-    const onDocMove = (e: MouseEvent) => {
-      if (isDragging) return;
+    const applyCursor = (e: MouseEvent) => {
+      const frameEl = frameRef.current;
+      if (!frameEl || isDraggingRef.current) return;
       const rect = frameEl.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const nearX = x < THRESHOLD || x > rect.width - THRESHOLD;
-      const nearY = y < THRESHOLD || y > rect.height - THRESHOLD;
-      if (nearX && nearY) frameEl.style.setProperty('cursor', 'nwse-resize', 'important');
-      else if (nearX) frameEl.style.setProperty('cursor', 'ew-resize', 'important');
-      else if (nearY) frameEl.style.setProperty('cursor', 'ns-resize', 'important');
-      else frameEl.style.setProperty('cursor', 'move', 'important');
+      const w = rect.width;
+      const h = rect.height;
+      const nearLeft   = x <  THRESHOLD;
+      const nearRight  = x >  w - THRESHOLD;
+      const nearTop    = y <  THRESHOLD;
+      const nearBottom = y >  h - THRESHOLD;
+      if (nearLeft && nearTop)       frameEl.style.setProperty('cursor', 'nwse-resize', 'important');
+      else if (nearRight && nearTop) frameEl.style.setProperty('cursor', 'nesw-resize', 'important');
+      else if (nearLeft && nearBottom) frameEl.style.setProperty('cursor', 'nesw-resize', 'important');
+      else if (nearRight && nearBottom) frameEl.style.setProperty('cursor', 'nwse-resize', 'important');
+      else if (nearLeft || nearRight) frameEl.style.setProperty('cursor', 'ew-resize', 'important');
+      else if (nearTop || nearBottom) frameEl.style.setProperty('cursor', 'ns-resize', 'important');
+      else if (x >= 0 && x <= w && y >= 0 && y <= h) frameEl.style.setProperty('cursor', 'move', 'important');
+      else frameEl.style.removeProperty('cursor');
     };
-    // 初始状态
-    onDocMove({ clientX: -9999, clientY: -9999 } as MouseEvent);
-    document.addEventListener('mousemove', onDocMove);
-    return () => { frameEl.style.removeProperty('cursor'); document.removeEventListener('mousemove', onDocMove); };
-  }, [isDragging]);
+    document.addEventListener('mousemove', applyCursor);
+    return () => {
+      const frameEl = frameRef.current;
+      if (frameEl) frameEl.style.removeProperty('cursor');
+      document.removeEventListener('mousemove', applyCursor);
+    };
+  }, []);
 
   const handleConfirm = async () => {
     if (!crop || !disp || !naturalRef.current) return;
@@ -341,6 +355,8 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
               aria-label="拖动裁切区"
               tabIndex={0}
             >
+              {/* 九宫格参考线 */}
+              <div className="pea-crop-grid" style={{ opacity: gridOpacity }} />
               {/* 四角拖拽区 */}
               {(['nw', 'ne', 'sw', 'se'] as const).map(dir => (
                 <div key={dir} className={`pea-crop-resize pea-crop-resize--${dir}`} onPointerDown={e => startDrag(dir, e)} role="button" aria-label={`调整 ${dir}`} tabIndex={-1} />
