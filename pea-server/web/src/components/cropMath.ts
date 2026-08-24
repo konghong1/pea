@@ -7,7 +7,7 @@
 export type Rect = { x: number; y: number; w: number; h: number };
 export type CropDragType = 'move' | 'nw' | 'ne' | 'sw' | 'se' | 'n' | 's' | 'e' | 'w';
 
-export const MIN_CROP = 32;
+export const MIN_CROP = 64;
 
 export function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -36,18 +36,27 @@ export function updateCrop(
     const next: Rect = { ...start };
     if (type === 'n') {
       // 顶边上下移动：x / w（横线长度）不变
-      next.y = clamp(start.y + dy, 0, start.y + start.h - MIN_CROP);
+      // 若当前高度已至 MIN_CROP，继续同向拖拽 (dy>0) 应锁定 y 不变，防止 next.h 回弹变大
+      const maxDy = start.h - MIN_CROP;
+      const clampedDy = dy > 0 ? Math.min(dy, maxDy) : dy;
+      next.y = clamp(start.y + clampedDy, 0, start.y + start.h - MIN_CROP);
       next.h = start.h + start.y - next.y;
     } else if (type === 's') {
       // 底边上下移动：x / w 不变
-      next.h = clamp(start.h + dy, MIN_CROP, H - start.y);
+      const maxDy = MIN_CROP - start.h; // start.h 已到 MIN_CROP 时，dy<0 应锁定
+      const clampedDy = dy < 0 ? Math.max(dy, maxDy) : dy;
+      next.h = clamp(start.h + clampedDy, MIN_CROP, H - start.y);
     } else if (type === 'w') {
       // 左边左右移动：y / h（竖线长度）不变
-      next.x = clamp(start.x + dx, 0, start.x + start.w - MIN_CROP);
+      const maxDx = start.w - MIN_CROP;
+      const clampedDx = dx > 0 ? Math.min(dx, maxDx) : dx;
+      next.x = clamp(start.x + clampedDx, 0, start.x + start.w - MIN_CROP);
       next.w = start.w + start.x - next.x;
     } else {
       // e 右边左右移动：y / h 不变
-      next.w = clamp(start.w + dx, MIN_CROP, W - start.x);
+      const maxDx = MIN_CROP - start.w;
+      const clampedDx = dx < 0 ? Math.max(dx, maxDx) : dx;
+      next.w = clamp(start.w + clampedDx, MIN_CROP, W - start.x);
     }
     return next;
   }
@@ -56,62 +65,81 @@ export function updateCrop(
   if (ratio == null) {
     const next: Rect = { ...start };
     switch (type) {
-      case 'nw':
-        next.x = clamp(start.x + dx, 0, start.x + start.w - MIN_CROP);
-        next.y = clamp(start.y + dy, 0, start.y + start.h - MIN_CROP);
-        next.w = start.w + start.x - next.x;
-        next.h = start.h + start.y - next.y;
+      case 'nw': {
+        const nx = clamp(start.x + dx, 0, start.x + start.w - MIN_CROP);
+        const ny = clamp(start.y + dy, 0, start.y + start.h - MIN_CROP);
+        // 一旦某方向已触底（start 本身被冻结到 MIN_CROP），继续同向拖拽时
+        // 对边不应继续外移导致框变大——直接用 start 的冻结尺寸算对边位置
+        next.x = nx;
+        next.y = ny;
+        next.w = start.w + start.x - nx;
+        next.h = start.h + start.y - ny;
         break;
-      case 'ne':
-        next.y = clamp(start.y + dy, 0, start.y + start.h - MIN_CROP);
-        next.w = clamp(start.w + dx, MIN_CROP, W - start.x);
-        next.h = start.h + start.y - next.y;
+      }
+      case 'ne': {
+        const ny = clamp(start.y + dy, 0, start.y + start.h - MIN_CROP);
+        const nw = clamp(start.w + dx, MIN_CROP, W - start.x);
+        next.y = ny;
+        next.w = nw;
+        next.h = start.h + start.y - ny;
         break;
-      case 'sw':
-        next.x = clamp(start.x + dx, 0, start.x + start.w - MIN_CROP);
-        next.w = start.w + start.x - next.x;
-        next.h = clamp(start.h + dy, MIN_CROP, H - start.y);
+      }
+      case 'sw': {
+        const nx = clamp(start.x + dx, 0, start.x + start.w - MIN_CROP);
+        const nh = clamp(start.h + dy, MIN_CROP, H - start.y);
+        next.x = nx;
+        next.w = start.w + start.x - nx;
+        next.h = nh;
         break;
-      case 'se':
-        next.w = clamp(start.w + dx, MIN_CROP, W - start.x);
-        next.h = clamp(start.h + dy, MIN_CROP, H - start.y);
+      }
+      case 'se': {
+        const nw = clamp(start.w + dx, MIN_CROP, W - start.x);
+        const nh = clamp(start.h + dy, MIN_CROP, H - start.y);
+        next.w = nw;
+        next.h = nh;
         break;
+      }
     }
     return next;
   }
 
   // 角点 + 锁定比例：以对角为锚点等比缩放
-  // 用对角线距离比例缩放，确保 X/Y 两个方向的变化均匀，
-  // 避免 fitByWidth 只以 X 方向驱动导致 Y 方向裁切框移动比鼠标快的问题。
-  const oldDiag = Math.sqrt(start.w * start.w + start.h * start.h);
-  const scaleByDiag = (newDiagX: number, newDiagY: number, maxW: number, maxH: number) => {
-    const newDiag = Math.sqrt(newDiagX * newDiagX + newDiagY * newDiagY);
-    const rawScale = oldDiag > 0 ? newDiag / oldDiag : 1;
-    // 用统一的 scale 缩放两个方向，clamp 时取两个方向都能满足的限制
-    const maxScale = Math.min(maxW / start.w, maxH / start.h);
-    const minScale = Math.max(MIN_CROP / start.w, MIN_CROP / start.h);
-    const scale = clamp(rawScale, minScale, maxScale);
-    return { w: start.w * scale, h: start.h * scale };
-  };
-
+  // 先按 dx/dy 方向分别算原始目标宽高，再选更紧的约束维度整体缩放，
+  // 保证同一方向拖拽时宽高单调变化、不会出现反弹。
+  // dx/dy 限制在 [−start.<axis>, max.<axis>−start.<axis>] 内，防止鼠标越出图像时框无限膨胀。
+  let rawW: number, rawH: number;
   switch (type) {
-    case 'se': {
-      const { w, h } = scaleByDiag(start.w + dx, start.h + dy, W - start.x, H - start.y);
-      return { ...start, w, h };
-    }
-    case 'sw': {
-      const { w, h } = scaleByDiag(start.w - dx, start.h + dy, start.x + start.w, H - start.y);
-      return { x: start.x + start.w - w, y: start.y, w, h };
-    }
-    case 'ne': {
-      const { w, h } = scaleByDiag(start.w + dx, start.h - dy, W - start.x, start.y + start.h);
-      return { ...start, y: start.y + start.h - h, w, h };
-    }
-    case 'nw': {
-      const { w, h } = scaleByDiag(start.w - dx, start.h - dy, start.x + start.w, start.y + start.h);
-      return { x: start.x + start.w - w, y: start.y + start.h - h, w, h };
-    }
-    default:
-      return start;
+    case 'se':
+      rawW = clamp(start.w + dx, 0, W - start.x);
+      rawH = clamp(start.h + dy, 0, H - start.y);
+      break;
+    case 'sw':
+      rawW = clamp(start.w - dx, 0, start.x + start.w);
+      rawH = clamp(start.h + dy, 0, H - start.y);
+      break;
+    case 'ne':
+      rawW = clamp(start.w + dx, 0, W - start.x);
+      rawH = clamp(start.h - dy, 0, start.y + start.h);
+      break;
+    case 'nw':
+      rawW = clamp(start.w - dx, 0, start.x + start.w);
+      rawH = clamp(start.h - dy, 0, start.y + start.h);
+      break;
+    default: return start;
+  }
+  const maxW = type === 'se' || type === 'ne' ? W - start.x : start.x + start.w;
+  const maxH = type === 'se' || type === 'sw' ? H - start.y : start.y + start.h;
+  // 选更紧的约束：byW 看宽度方向能否容纳 rawW，byH 看高度方向能否容纳 rawH
+  const byW_h = rawW / ratio; // 宽度主导时的高度
+  const byH_w = rawH * ratio; // 高度主导时的宽度
+  const useW = byW_h <= maxH; // 宽度更紧或两者相近，按宽度缩放
+  const w = clamp(useW ? start.w * (rawW / start.w) : byH_w, MIN_CROP, maxW);
+  const h = clamp(useW ? byW_h : start.h * (rawH / start.h), MIN_CROP, maxH);
+  switch (type) {
+    case 'se': return { ...start, w, h };
+    case 'sw': return { x: start.x + start.w - w, y: start.y, w, h };
+    case 'ne': return { x: start.x, y: start.y + start.h - h, w, h };
+    case 'nw': return { x: start.x + start.w - w, y: start.y + start.h - h, w, h };
+    default: return start;
   }
 }

@@ -81,7 +81,7 @@
   --pea-crop-handle-hover: var(--pea-purple);
   --pea-crop-handle-active: var(--pea-purple);
   --pea-crop-grid-line: rgba(255, 255, 255, 0.65);
-  --pea-crop-vignette: rgba(0, 0, 0, 0.30);
+  --pea-crop-vignette: rgba(0, 0, 0, 0.55);
 }
 
 .dark {
@@ -142,7 +142,7 @@
   --pea-crop-handle-border: rgba(0, 0, 0, 0.5);
   --pea-crop-handle-arrow: rgba(0, 0, 0, 0.7);
   --pea-crop-grid-line: rgba(0, 0, 0, 0.65);
-  --pea-crop-vignette: rgba(0, 0, 0, 0.30);
+  --pea-crop-vignette: rgba(0, 0, 0, 0.55);
 }
 
 /* ══ 创作端表面：Runway 电影感暗色 ══
@@ -222,7 +222,7 @@
   --pea-crop-handle-border: rgba(255, 255, 255, 0.95);
   --pea-crop-handle-arrow: rgba(255, 255, 255, 0.9);
   --pea-crop-grid-line: rgba(255, 255, 255, 0.65);
-  --pea-crop-vignette: rgba(0, 0, 0, 0.30);
+  --pea-crop-vignette: rgba(0, 0, 0, 0.55);
 }
 
 /* ══ 创作端表面 #2：Figma 明亮创作 ══
@@ -303,7 +303,7 @@
   --pea-crop-handle-border: rgba(23, 23, 23, 0.95);
   --pea-crop-handle-arrow: rgba(23, 23, 23, 0.9);
   --pea-crop-grid-line: rgba(0, 0, 0, 0.65);
-  --pea-crop-vignette: rgba(0, 0, 0, 0.30);
+  --pea-crop-vignette: rgba(0, 0, 0, 0.55);
 }
 
 /* Figma：主 CTA = 纯黑药丸（白底），与 Runway 共享黑药丸语言 */
@@ -8369,16 +8369,29 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
   border-color: var(--pea-purple) !important;
 }
 
-/* 九宫格参考线：在 frame 内部，随 frame 一起移动；pointer-events:none 不抢拖拽事件 */
+/* 九宫格参考线：在 frame 内部，随 frame 一起移动；pointer-events:none 不抢拖拽事件
+   仅在拖拽时显示，避免极小裁切框下残影闪烁。
+   4 条 fixed-pixel 线（1px 宽），通过 position:absolute 精确放置在 1/3 和 2/3 位置。 */
 .pea-crop-grid {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-image:
-    linear-gradient(to right, transparent 33.33%, var(--pea-crop-grid-line) 33.33%, var(--pea-crop-grid-line) 33.67%, transparent 33.67%),
-    linear-gradient(to right, transparent 66.66%, var(--pea-crop-grid-line) 66.66%, var(--pea-crop-grid-line) 66.99%, transparent 66.99%),
-    linear-gradient(to bottom, transparent 33.33%, var(--pea-crop-grid-line) 33.33%, var(--pea-crop-grid-line) 33.67%, transparent 33.67%),
-    linear-gradient(to bottom, transparent 66.66%, var(--pea-crop-grid-line) 66.66%, var(--pea-crop-grid-line) 66.99%, transparent 66.99%);
+  opacity: 0;
+  transition: none;
+}
+.pea-crop-grid .g-v1,
+.pea-crop-grid .g-v2,
+.pea-crop-grid .g-h1,
+.pea-crop-grid .g-h2 {
+  position: absolute;
+  background: var(--pea-crop-grid-line);
+}
+.pea-crop-grid .g-v1 { left: calc(100% / 3); top: 0; width: 1px; height: 100%; }
+.pea-crop-grid .g-v2 { left: calc(200% / 3); top: 0; width: 1px; height: 100%; }
+.pea-crop-grid .g-h1 { top: calc(100% / 3); left: 0; height: 1px; width: 100%; }
+.pea-crop-grid .g-h2 { top: calc(200% / 3); left: 0; height: 1px; width: 100%; }
+.pea-crop-frame--dragging .pea-crop-grid {
+  opacity: 1;
 }
 
 /* 拖拽手柄：边缘命中区域，确保鼠标靠近边框任意位置即触发对应光标 */

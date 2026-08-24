@@ -1,3 +1,13 @@
+# ===== AI Agent / MCP 产物（session 本地，不共享） =====
+.claude/
+.playwright-mcp/
+
+# ===== WorkBuddy =====
+# 只跟踪 skills 源码，memory/artifacts/backups 均为本地运行产物不共享
+.workbuddy/memory/
+.workbuddy/artifacts/
+.workbuddy/backups/
+
 # ===== Secrets (NEVER commit) =====
 .env
 .env.local
@@ -72,7 +82,7 @@ verify/cursor*.txt
 # ===== WorkBuddy / agent working artifacts (NEVER commit) =====
 # 记忆、技能、运行产物、变更概览等均不进版本管理；只保留项目本身的源码与文档
 # ★ 约定：agent 产出的报告/概览/排查记录一律写入 .workbuddy/artifacts/，禁止落在仓库根目录。
-.workbuddy/
+#   （skills/ 和 memory/ 保留跟踪，artifacts/ 和 backups/ 忽略）
 docs/overviews/
 overview_*.md
 pea-server/*_overview.md

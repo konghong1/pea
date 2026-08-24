@@ -87,11 +87,14 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 function calcVignetteStyles(rect: Rect, W: number, H: number) {
   if (W <= 0 || H <= 0) return null;
   const { x, y, w, h } = rect;
+  // 使用百分比定位，保证 vignette 在任意缩放比例下都能精确对齐
+  // top/left 用 Math.ceil：当 crop.y 有亚像素值时，向上取整确保遮罩覆盖 frame 边界
+  // right/bottom 用 Math.floor：确保遮罩不超出图像边界
   return {
-    top:    { top: 0, left: 0, right: 0, height: `${(y / H * 100).toFixed(3)}%` },
-    bottom: { bottom: 0, left: 0, right: 0, height: `${((H - y - h) / H * 100).toFixed(3)}%` },
-    left:   { left: 0, top: `${(y / H * 100).toFixed(3)}%`, bottom: `${((H - y - h) / H * 100).toFixed(3)}%`, width: `${(x / W * 100).toFixed(3)}%` },
-    right:  { right: 0, top: `${(y / H * 100).toFixed(3)}%`, bottom: `${((H - y - h) / H * 100).toFixed(3)}%`, width: `${((W - x - w) / W * 100).toFixed(3)}%` },
+    top:    { top: 0, left: 0, right: 0, height: `${Math.ceil(y / H * 100)}%` },
+    bottom: { bottom: 0, left: 0, right: 0, height: `${Math.floor((H - y - h) / H * 100)}%` },
+    left:   { left: 0, top: `${Math.ceil(y / H * 100)}%`, bottom: `${Math.floor((H - y - h) / H * 100)}%`, width: `${Math.ceil(x / W * 100)}%` },
+    right:  { right: 0, top: `${Math.ceil(y / H * 100)}%`, bottom: `${Math.floor((H - y - h) / H * 100)}%`, width: `${Math.floor((W - x - w) / W * 100)}%` },
   };
 }
 
@@ -104,8 +107,6 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   const [isDragging, setIsDragging] = useState(false);
   const isDraggingRef = useRef(false);
   isDraggingRef.current = isDragging;
-  // grid opacity via state — no rAF delay, no flicker
-  const [gridOpacity, setGridOpacity] = useState(0);
 
   const naturalRef = useRef<{ w: number; h: number } | null>(null);
   const dispRef = useRef<{ w: number; h: number } | null>(null);
@@ -210,27 +211,31 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   };
 
   // ── Drag ──────────────────────────────────────────────────────────────────
+  // isDraggingRef 在 move 回调内同步更新，避免 React 批量更新造成的闪烁。
+  // 只在 pointerdown 时置 true（直接 DOM），pointerup 时置 false（React setState 也可接受）。
   const startDrag = (type: CropDragType, e: React.PointerEvent) => {
     e.stopPropagation();
     e.preventDefault();
     if (!crop || !W || !H) return;
     const frameEl = frameRef.current;
-    const stageEl = frameEl?.parentElement ?? null;
-    if (!frameEl || !stageEl) return;
+    if (!frameEl) return;
     const target = e.currentTarget as HTMLElement;
     try { target.setPointerCapture(e.pointerId); } catch {}
+    // 立即标记拖拽状态，用于 cursor 判断
+    isDraggingRef.current = true;
     setIsDragging(true);
-    setGridOpacity(1);
-    // 统一用 W/H（与 crop 初始化坐标空间一致）计算拖拽偏移，
-    // 避免 sRect.width / sW 因 CSS 缩放/transform 与 crop 坐标系不一致导致位置偏移。
+    // 一次性锁定 frame rect 和 start rect，后续不再重读
+    const initialFrameRect = frameEl.getBoundingClientRect();
     const startRect = { ...crop };
-    const frameRect = frameEl.getBoundingClientRect();
-    const offX = e.clientX - frameRect.left - startRect.x;
-    const offY = e.clientY - frameRect.top - startRect.y;
+    // offX/offY = 鼠标在 crop 坐标系中的位置（相对于 crop.x/y 的偏移）。
+    // 用 initialFrameRect.left/top 作为 frame 渲染位置的整数近似，
+    // 减去 startRect.x/y 得到鼠标相对 crop 起点的偏移。
+    const offX = e.clientX - initialFrameRect.left - startRect.x;
+    const offY = e.clientY - initialFrameRect.top - startRect.y;
     let lx = e.clientX, ly = e.clientY;
     const compute = (cx: number, cy: number): Rect => {
-      const fx = cx - frameRect.left;
-      const fy = cy - frameRect.top;
+      const fx = cx - initialFrameRect.left;
+      const fy = cy - initialFrameRect.top;
       if (type === 'move') {
         return {
           x: clamp(fx - offX, 0, W - startRect.w),
@@ -238,24 +243,36 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
           w: startRect.w, h: startRect.h,
         };
       }
-      return updateCrop(type, startRect, fx - (offX + startRect.x), fy - (offY + startRect.y), W, H, ratioValue);
+      // resize：dx/dy = 鼠标相对初始 frame 左上角的偏移量 - 初始 crop 起点
+      const dx = fx - offX - startRect.x;
+      const dy = fy - offY - startRect.y;
+      return updateCrop(type, startRect, dx, dy, W, H, ratioValue);
     };
     const move = (ev: PointerEvent) => {
       lx = ev.clientX; ly = ev.clientY;
       const next = compute(lx, ly);
+      // 直接操作 DOM，绕过 React 渲染循环，保证 60fps 流畅度
       frameEl.style.transform = `translate3d(${next.x}px,${next.y}px,0)`;
       frameEl.style.width = `${next.w}px`;
       frameEl.style.height = `${next.h}px`;
-      // vignette 由 useLayoutEffect([crop, W, H]) 统一管理，拖拽中无需重复计算
+      // vignette 使用 crop 坐标（含亚像素），与 frame 的 translate3d 保持一致
+      const s = calcVignetteStyles(next, W, H);
+      if (s) {
+        const { top, bottom, left, right } = vignetteRefs.current;
+        if (top)    top.style.height = s.top.height;
+        if (bottom) bottom.style.height = s.bottom.height;
+        if (left)   { left.style.top = s.left.top; left.style.bottom = s.left.bottom; left.style.width = s.left.width; }
+        if (right)  { right.style.top = s.right.top; right.style.bottom = s.right.bottom; right.style.width = s.right.width; }
+      }
     };
     const up = () => {
       try { target.releasePointerCapture(e.pointerId); } catch {}
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
+      isDraggingRef.current = false;
       setCrop(compute(lx, ly));
       setIsDragging(false);
-      setGridOpacity(0);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -266,32 +283,42 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     const frameEl = frameRef.current;
     if (!frameEl) { startDrag('move', e); return; }
     const rect = frameEl.getBoundingClientRect();
+    // 四角/四边 resize 手柄是独立的 div，点击直接走各自的 startDrag(dir, e)，不需要偏移。
+    // 直接用原始坐标判定，band=12 的命中带与 hover 光标区域完全一致。
     startDrag(resolveDragType(rect, e.clientX, e.clientY), e);
   };
 
   // 只注册一次 mousemove，用 ref 读最新 isDragging，避免每次拖拽状态变化都卸载/重装监听器
   // 卸载时（组件销毁）才清除 cursor，拖拽中途不清
-  const THRESHOLD = 12;
+  //
+  // 判定逻辑：用绝对距离判断光标距 frame 各边/角的距离，避免框缩到 MIN_CROP 时
+  // "nearLeft 和 nearRight 同时为 true" 的判定失效问题。
+  //   四角：光标距对应角 ≤ THRESHOLD_CORNER（24px）→ 对角线 resize 光标
+  //   边缘：光标距对应边 ≤ THRESHOLD_EDGE（12px）→ 单边 resize 光标
+  //   内部：在 frame 范围内 → move 光标
+  //   其他：默认光标
+  const THRESHOLD_CORNER = 24;
+  const THRESHOLD_EDGE   = 12;
   useEffect(() => {
     const applyCursor = (e: MouseEvent) => {
       const frameEl = frameRef.current;
       if (!frameEl || isDraggingRef.current) return;
       const rect = frameEl.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const w = rect.width;
-      const h = rect.height;
-      const nearLeft   = x <  THRESHOLD;
-      const nearRight  = x >  w - THRESHOLD;
-      const nearTop    = y <  THRESHOLD;
-      const nearBottom = y >  h - THRESHOLD;
-      if (nearLeft && nearTop)       frameEl.style.setProperty('cursor', 'nwse-resize', 'important');
-      else if (nearRight && nearTop) frameEl.style.setProperty('cursor', 'nesw-resize', 'important');
-      else if (nearLeft && nearBottom) frameEl.style.setProperty('cursor', 'nesw-resize', 'important');
-      else if (nearRight && nearBottom) frameEl.style.setProperty('cursor', 'nwse-resize', 'important');
-      else if (nearLeft || nearRight) frameEl.style.setProperty('cursor', 'ew-resize', 'important');
-      else if (nearTop || nearBottom) frameEl.style.setProperty('cursor', 'ns-resize', 'important');
-      else if (x >= 0 && x <= w && y >= 0 && y <= h) frameEl.style.setProperty('cursor', 'move', 'important');
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const rw = rect.width;
+      const rh = rect.height;
+      const setCursor = (c: string) => frameEl.style.setProperty('cursor', c, 'important');
+      // 四角（按距离判断，不依赖相对大小）
+      if (Math.abs(cx) <= THRESHOLD_CORNER && Math.abs(cy) <= THRESHOLD_CORNER)       setCursor('nwse-resize');
+      else if (Math.abs(cx - rw) <= THRESHOLD_CORNER && Math.abs(cy) <= THRESHOLD_CORNER) setCursor('nesw-resize');
+      else if (Math.abs(cx) <= THRESHOLD_CORNER && Math.abs(cy - rh) <= THRESHOLD_CORNER) setCursor('nesw-resize');
+      else if (Math.abs(cx - rw) <= THRESHOLD_CORNER && Math.abs(cy - rh) <= THRESHOLD_CORNER) setCursor('nwse-resize');
+      // 边缘
+      else if (Math.abs(cx) <= THRESHOLD_EDGE || Math.abs(cx - rw) <= THRESHOLD_EDGE) setCursor('ew-resize');
+      else if (Math.abs(cy) <= THRESHOLD_EDGE || Math.abs(cy - rh) <= THRESHOLD_EDGE) setCursor('ns-resize');
+      // 内部
+      else if (cx >= 0 && cx <= rw && cy >= 0 && cy <= rh) setCursor('move');
       else frameEl.style.removeProperty('cursor');
     };
     document.addEventListener('mousemove', applyCursor);
@@ -355,8 +382,14 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
               aria-label="拖动裁切区"
               tabIndex={0}
             >
-              {/* 九宫格参考线 */}
-              <div className="pea-crop-grid" style={{ opacity: gridOpacity }} />
+              {/* 九宫格参考线：dragging 时由 CSS 控制显隐，避免 opacity 状态闪烁
+                  4 条 1px 固定宽度的绝对定位线条，不随裁切框缩放而变粗/变细 */}
+              <div className="pea-crop-grid">
+                <span className="g-v1" />
+                <span className="g-v2" />
+                <span className="g-h1" />
+                <span className="g-h2" />
+              </div>
               {/* 四角拖拽区 */}
               {(['nw', 'ne', 'sw', 'se'] as const).map(dir => (
                 <div key={dir} className={`pea-crop-resize pea-crop-resize--${dir}`} onPointerDown={e => startDrag(dir, e)} role="button" aria-label={`调整 ${dir}`} tabIndex={-1} />
