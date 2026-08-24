@@ -22,10 +22,13 @@ export function resolveDragType(
   const y = clientY - rect.top;
   const w = rect.width;
   const h = rect.height;
-  const left = x <= band;
-  const right = x >= w - band;
-  const top = y <= band;
-  const bottom = y >= h - band;
+  // 将 band 限制为框尺寸的 1/3，防止小框（如缩到 MIN_CROP 时）的角落带与边缘带重叠，
+  // 导致点击边缘中部也被判定为角点拖拽（Bug 1：有时只能调整一条边）。
+  const effectiveBand = Math.min(band, w / 3, h / 3);
+  const left = x <= effectiveBand;
+  const right = x >= w - effectiveBand;
+  const top = y <= effectiveBand;
+  const bottom = y >= h - effectiveBand;
   if (top && left) return 'nw';
   if (top && right) return 'ne';
   if (bottom && left) return 'sw';

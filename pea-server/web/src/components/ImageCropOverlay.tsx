@@ -87,14 +87,15 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 function calcVignetteStyles(rect: Rect, W: number, H: number) {
   if (W <= 0 || H <= 0) return null;
   const { x, y, w, h } = rect;
-  // 使用百分比定位，保证 vignette 在任意缩放比例下都能精确对齐
-  // top/left 用 Math.ceil：当 crop.y 有亚像素值时，向上取整确保遮罩覆盖 frame 边界
-  // right/bottom 用 Math.floor：确保遮罩不超出图像边界
+  // 使用精确像素定位，并各多覆盖 1px 以遮盖 frame 的 1px 边框（边框居中于 crop 边界，
+  // 上下左右各 0.5px 超出 crop 区域，直接 ceil 会导致边框露出白条）。
+  // top / left 用 Math.ceil + 1：向上取整并额外覆盖 1px，确保边框被完全遮盖
+  // bottom / right 用 Math.floor + 1：向下取整并额外覆盖 1px
   return {
-    top:    { top: 0, left: 0, right: 0, height: `${Math.ceil(y / H * 100)}%` },
-    bottom: { bottom: 0, left: 0, right: 0, height: `${Math.floor((H - y - h) / H * 100)}%` },
-    left:   { left: 0, top: `${Math.ceil(y / H * 100)}%`, bottom: `${Math.floor((H - y - h) / H * 100)}%`, width: `${Math.ceil(x / W * 100)}%` },
-    right:  { right: 0, top: `${Math.ceil(y / H * 100)}%`, bottom: `${Math.floor((H - y - h) / H * 100)}%`, width: `${Math.floor((W - x - w) / W * 100)}%` },
+    top:    { top: 0, left: 0, right: 0, height: `${Math.ceil(y) + 1}px` },
+    bottom: { bottom: 0, left: 0, right: 0, height: `${Math.floor(H - y - h) + 1}px` },
+    left:   { left: 0, top: `${Math.ceil(y) + 1}px`, bottom: `${Math.floor(H - y - h) + 1}px`, width: `${Math.ceil(x) + 1}px` },
+    right:  { right: 0, top: `${Math.ceil(y) + 1}px`, bottom: `${Math.floor(H - y - h) + 1}px`, width: `${Math.floor(W - x - w) + 1}px` },
   };
 }
 
@@ -226,7 +227,15 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     setIsDragging(true);
     // 一次性锁定 frame rect 和 start rect，后续不再重读
     const initialFrameRect = frameEl.getBoundingClientRect();
-    const startRect = { ...crop };
+    // 将 crop 取整为 frame 的像素位置，消除 getBoundingClientRect 的 round 与 crop state 的浮点值之间的偏差（Bug 2：改变比鼠标快很多）。
+    // 若不取整，startRect 的 float 值与 initialFrameRect 的 round 值之间的 0.x 像素偏差
+    // 会传递给 offX/offY，导致 dx 计算有 0.x 误差，累积后表现为框跟随鼠标但有偏移。
+    const startRect = {
+      x: Math.round(crop.x),
+      y: Math.round(crop.y),
+      w: Math.round(crop.w),
+      h: Math.round(crop.h),
+    };
     // offX/offY = 鼠标在 crop 坐标系中的位置（相对于 crop.x/y 的偏移）。
     // 用 initialFrameRect.left/top 作为 frame 渲染位置的整数近似，
     // 减去 startRect.x/y 得到鼠标相对 crop 起点的偏移。
@@ -252,11 +261,17 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       lx = ev.clientX; ly = ev.clientY;
       const next = compute(lx, ly);
       // 直接操作 DOM，绕过 React 渲染循环，保证 60fps 流畅度
-      frameEl.style.transform = `translate3d(${next.x}px,${next.y}px,0)`;
-      frameEl.style.width = `${next.w}px`;
-      frameEl.style.height = `${next.h}px`;
-      // vignette 使用 crop 坐标（含亚像素），与 frame 的 translate3d 保持一致
-      const s = calcVignetteStyles(next, W, H);
+      // 对 x/y/w/h 取整：确保 translate3d 和 vignette 都使用同一套整数坐标，
+      // 避免 float crop state 与 round frame 之间产生亚像素偏差（导致边框露出白条）。
+      const rx = Math.round(next.x);
+      const ry = Math.round(next.y);
+      const rw = Math.round(next.w);
+      const rh = Math.round(next.h);
+      frameEl.style.transform = `translate3d(${rx}px,${ry}px,0)`;
+      frameEl.style.width = `${rw}px`;
+      frameEl.style.height = `${rh}px`;
+      // vignette 使用 round 后的坐标计算，确保与 frame 像素完全对齐
+      const s = calcVignetteStyles({ x: rx, y: ry, w: rw, h: rh }, W, H);
       if (s) {
         const { top, bottom, left, right } = vignetteRefs.current;
         if (top)    top.style.height = s.top.height;
@@ -271,21 +286,30 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
       isDraggingRef.current = false;
-      setCrop(compute(lx, ly));
+      // 用取整后的坐标计算最终 crop 状态和 frame 位置，确保完全同步
+      const finalNext = compute(lx, ly);
+      const finalX = Math.round(finalNext.x);
+      const finalY = Math.round(finalNext.y);
+      const finalW = Math.round(finalNext.w);
+      const finalH = Math.round(finalNext.h);
+      setCrop({ x: finalX, y: finalY, w: finalW, h: finalH });
+      frameEl.style.transform = `translate3d(${finalX}px,${finalY}px,0)`;
+      frameEl.style.width = `${finalW}px`;
+      frameEl.style.height = `${finalH}px`;
+      // 同步 vignette 到最终像素位置
+      const s = calcVignetteStyles({ x: finalX, y: finalY, w: finalW, h: finalH }, W, H);
+      if (s) {
+        const { top, bottom, left, right } = vignetteRefs.current;
+        if (top)    top.style.height = s.top.height;
+        if (bottom) bottom.style.height = s.bottom.height;
+        if (left)   { left.style.top = s.left.top; left.style.bottom = s.left.bottom; left.style.width = s.left.width; }
+        if (right)  { right.style.top = s.right.top; right.style.bottom = s.right.bottom; right.style.width = s.right.width; }
+      }
       setIsDragging(false);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
     window.addEventListener('pointercancel', up);
-  };
-
-  const onFramePointerDown = (e: React.PointerEvent) => {
-    const frameEl = frameRef.current;
-    if (!frameEl) { startDrag('move', e); return; }
-    const rect = frameEl.getBoundingClientRect();
-    // 四角/四边 resize 手柄是独立的 div，点击直接走各自的 startDrag(dir, e)，不需要偏移。
-    // 直接用原始坐标判定，band=12 的命中带与 hover 光标区域完全一致。
-    startDrag(resolveDragType(rect, e.clientX, e.clientY), e);
   };
 
   // 只注册一次 mousemove，用 ref 读最新 isDragging，避免每次拖拽状态变化都卸载/重装监听器
@@ -299,6 +323,15 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   //   其他：默认光标
   const THRESHOLD_CORNER = 24;
   const THRESHOLD_EDGE   = 12;
+
+  const onFramePointerDown = (e: React.PointerEvent) => {
+    const frameEl = frameRef.current;
+    if (!frameEl) { startDrag('move', e); return; }
+    const rect = frameEl.getBoundingClientRect();
+    // 使用与光标判定一致的 THRESHOLD_CORNER 作为 band，避免"光标显示对角线但实际触发单边拖拽"
+    startDrag(resolveDragType(rect, e.clientX, e.clientY, THRESHOLD_CORNER), e);
+  };
+
   useEffect(() => {
     const applyCursor = (e: MouseEvent) => {
       const frameEl = frameRef.current;
