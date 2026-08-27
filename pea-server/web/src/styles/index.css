@@ -8351,6 +8351,7 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 /* 裁切框：细边框，半透明遮罩由独立 div 覆盖 */
 .pea-crop-frame {
   position: absolute;
+  box-sizing: border-box;
   z-index: 1;
   pointer-events: auto;
   touch-action: none;
@@ -8359,7 +8360,7 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
   background: transparent;
   outline: none;
   border: 1px solid var(--pea-crop-frame-border);
-  border-radius: 1px;
+  border-radius: 0;
   cursor: move;
 }
 .pea-crop-frame--dragging {

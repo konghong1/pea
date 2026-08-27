@@ -1834,6 +1834,8 @@ function Flow() {
   useEffect(() => {
     const EXCLUDE = 'input, textarea, [contenteditable="true"], .ant-dropdown, .pea-ctx-menu, .pea-canvas-controls, .pea-canvas-header, .pea-canvas-actions, .pea-canvas-bottom-prompt, .pea-add-menu, .pea-edge-menu, .pea-canvas-dropdown, .react-flow__minimap, .react-flow__controls, .react-flow__panel';
     const onDown = (e: PointerEvent) => {
+      // Bug 5: 裁切时禁用右键平移
+      if (cropActiveRef.current) return;
       if (e.button !== 2) return; // 仅右键
       const t = e.target as HTMLElement | null;
       if (!t || !t.closest) return;

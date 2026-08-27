@@ -40,8 +40,8 @@ export const MAX_EXPORT_SCALE = 2;
  */
 export const MAX_OUTPUT_PIXELS = 16_777_216;
 
-/** 源区域小于此像素数时，无论怎么超采样放大显示都仍会糊，需诚实告警。 */
-export const LOW_RES_SOURCE_PX = 200;
+/** Bug 7: 像素比阈值（而非绝对像素数），用于判断低分辨率 */
+export const LOW_RES_RATIO_THRESHOLD = 1.5;
 
 /** 源区域小于 1px 视为无效裁剪。 */
 export const MIN_SOURCE_PX = 1;
@@ -63,6 +63,8 @@ export interface CropExportPlan {
   lowResSource: boolean;
   /** 'too-small' 表示裁剪区无效，调用方应中止导出。 */
   status: CropExportStatus;
+  /** Bug 7: 像素比（输出像素/目标物理像素） */
+  pixelRatio: number;
 }
 
 /**
@@ -106,6 +108,7 @@ export function computeCropExportPlan(params: {
   dpr?: number;
   maxScale?: number;
   maxOutputPixels?: number;
+  targetDisplayCssPx?: number; // Bug 7: 目标显示尺寸
 }): CropExportPlan {
   const {
     crop,
@@ -114,6 +117,7 @@ export function computeCropExportPlan(params: {
     dpr,
     maxScale = MAX_EXPORT_SCALE,
     maxOutputPixels = MAX_OUTPUT_PIXELS,
+    targetDisplayCssPx,
   } = params;
 
   const source = mapCropToSource(crop, disp, nat);
@@ -128,6 +132,7 @@ export function computeCropExportPlan(params: {
       downscaledForLimit: false,
       lowResSource: true,
       status: 'too-small',
+      pixelRatio: 0,
     };
   }
 
@@ -152,14 +157,30 @@ export function computeCropExportPlan(params: {
     outHeight = Math.max(1, Math.floor(sh * exportScale));
   }
 
+  // Bug 7: 基于目标显示尺寸计算像素比
+  let pixelRatio = Infinity;
+  let lowResSource = false;
+
+  if (targetDisplayCssPx && targetDisplayCssPx > 0) {
+    const safeDpr = typeof dpr === 'number' && Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+    const targetPhysicalPx = targetDisplayCssPx * safeDpr;
+    pixelRatio = outWidth / targetPhysicalPx;
+    lowResSource = pixelRatio < LOW_RES_RATIO_THRESHOLD;
+  } else {
+    // 兜底：使用旧逻辑（绝对像素数判断）
+    lowResSource = sw < 200 || sh < 200;
+    pixelRatio = Math.min(sw, sh) / 200;
+  }
+
   return {
     source,
     outWidth,
     outHeight,
     exportScale,
     downscaledForLimit,
-    lowResSource: sw < LOW_RES_SOURCE_PX || sh < LOW_RES_SOURCE_PX,
+    lowResSource,
     status: 'ok',
+    pixelRatio,
   };
 }
 

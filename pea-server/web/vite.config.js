@@ -14,6 +14,7 @@ export default defineConfig({
     },
     server: {
         port: 5173,
+        host: '127.0.0.1',
         proxy: {
             // 所有 BFF 接口统一以 /api 为前缀 (BFF main.ts 已 setGlobalPrefix('api'))。
             // 一条规则覆盖所有 controller, 以后新增接口无需改此处。

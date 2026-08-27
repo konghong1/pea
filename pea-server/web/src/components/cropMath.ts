@@ -13,6 +13,57 @@ export function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+/**
+ * 把一次拖拽计算出的浮点 rect 取整，同时保证「不动的那一角/边」像素级固定，
+ * 避免对角线角点拖拽时锚点因 x/w、y/h 被独立取整而 1px 跳动（Bug 3）。
+ *
+ * 思路：对"移动角/边"取整，再用 start 的对角坐标反推对边尺寸，
+ * 使锚点 = start 的对角坐标（恒定），拖拽过程中不漂移。
+ */
+export function snapCropToAnchor(type: CropDragType, start: Rect, next: Rect): Rect {
+  switch (type) {
+    case 'nw': {
+      const x = Math.round(next.x);
+      const y = Math.round(next.y);
+      return { x, y, w: Math.max(MIN_CROP, start.x + start.w - x), h: Math.max(MIN_CROP, start.y + start.h - y) };
+    }
+    case 'ne': {
+      const y = Math.round(next.y);
+      const w = Math.round(next.w);
+      return { x: start.x, y, w, h: Math.max(MIN_CROP, start.y + start.h - y) };
+    }
+    case 'sw': {
+      const x = Math.round(next.x);
+      const h = Math.round(next.h);
+      return { x, y: start.y, w: Math.max(MIN_CROP, start.x + start.w - x), h };
+    }
+    case 'se': {
+      const w = Math.round(next.w);
+      const h = Math.round(next.h);
+      return { x: start.x, y: start.y, w, h };
+    }
+    case 'n': {
+      const y = Math.round(next.y);
+      return { x: start.x, y, w: start.w, h: Math.max(MIN_CROP, start.y + start.h - y) };
+    }
+    case 's': {
+      const h = Math.round(next.h);
+      return { x: start.x, y: start.y, w: start.w, h: Math.max(MIN_CROP, h) };
+    }
+    case 'w': {
+      const x = Math.round(next.x);
+      return { x, y: start.y, w: Math.max(MIN_CROP, start.x + start.w - x), h: start.h };
+    }
+    case 'e': {
+      const w = Math.round(next.w);
+      return { x: start.x, y: start.y, w: Math.max(MIN_CROP, w), h: start.h };
+    }
+    case 'move':
+    default:
+      return { x: Math.round(next.x), y: Math.round(next.y), w: Math.round(next.w), h: Math.round(next.h) };
+  }
+}
+
 export function updateCrop(
   type: CropDragType,
   start: Rect,

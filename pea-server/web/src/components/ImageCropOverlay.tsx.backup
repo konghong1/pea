@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Dropdown } from 'antd';
 import { toast } from '../store/toast';
-import { updateCrop, snapCropToAnchor, clamp, MIN_CROP, type Rect, type CropDragType } from './cropMath';
+import { updateCrop, clamp, MIN_CROP, type Rect, type CropDragType } from './cropMath';
 import { resolveDragType } from '../lib/cropDrag';
 import { computeCropExportPlan } from './cropExport';
 
@@ -35,10 +35,6 @@ const RATIO_VALUES: Record<Exclude<CropRatio, 'original' | 'custom'>, number> = 
 };
 
 const INSET = 0.10;
-
-function roundRect(r: Rect): Rect {
-  return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) };
-}
 
 function measureStage(el: HTMLDivElement | null): { w: number; h: number } | null {
   if (!el) return null;
@@ -91,18 +87,14 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 function calcVignetteStyles(rect: Rect, W: number, H: number) {
   if (W <= 0 || H <= 0) return null;
   const { x, y, w, h } = rect;
-  // 边框盒模型（.pea-crop-frame 使用 box-sizing:border-box）：
-  // frame 外边界即 crop 矩形 [x, x+w] × [y, y+h]，1px 边框绘制在盒内。
-  // 遮罩只需覆盖 crop 之外，其内缘与 frame 边框外缘严丝合缝，无需 ceil/floor 或 “+1” 魔法值。
-  const topH = Math.max(0, y);
-  const botH = Math.max(0, H - y - h);
-  const leftW = Math.max(0, x);
-  const rightW = Math.max(0, W - x - w);
+  // Frame border is 1px centered on the crop edge: pixels [ceil(edge-0.5), ceil(edge+0.5)].
+  // top bar must cover up to ceil(y+0.5)+1 (extra 1px to overlap the left/right bars at the corner).
+  // Same logic applies to all four bars — this eliminates the 1px white strip at the border.
   return {
-    top:    { top: 0, left: 0, right: 0, height: `${topH}px` },
-    bottom: { bottom: 0, left: 0, right: 0, height: `${botH}px` },
-    left:   { left: 0, top: `${topH}px`, bottom: `${botH}px`, width: `${leftW}px` },
-    right:  { right: 0, top: `${topH}px`, bottom: `${botH}px`, width: `${rightW}px` },
+    top:    { top: 0, left: 0, right: 0, height: `${Math.ceil(y + 0.5) + 1}px` },
+    bottom: { bottom: 0, left: 0, right: 0, height: `${Math.floor(H - y - h + 0.5) + 1}px` },
+    left:   { left: 0, top: `${Math.ceil(y + 0.5) + 1}px`, bottom: `${Math.floor(H - y - h + 0.5) + 1}px`, width: `${Math.ceil(x + 0.5) + 1}px` },
+    right:  { right: 0, top: `${Math.ceil(y + 0.5) + 1}px`, bottom: `${Math.floor(H - y - h + 0.5) + 1}px`, width: `${Math.floor(W - x - w + 0.5) + 1}px` },
   };
 }
 
@@ -113,6 +105,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   const [customRatio, setCustomRatio] = useState<number | null>(null);
   const [originalRatio, setOriginalRatio] = useState<number | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [cachedZoom, setCachedZoom] = useState<number | null>(null); // Bug 14: 缓存进入裁切时的 zoom
   const isDraggingRef = useRef(false);
   isDraggingRef.current = isDragging;
 
@@ -153,7 +146,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
 
   useEffect(() => {
     if (!disp || crop) return;
-    setCrop(roundRect(initialCropRect(disp.w, disp.h, originalRatio ?? null)));
+    setCrop(initialCropRect(disp.w, disp.h, originalRatio ?? null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [disp, originalRatio]);
 
@@ -177,7 +170,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     dispRef.current = next;
     setDisp(next);
     if (prev && prev.w > 0 && prev.h > 0) {
-      setCrop(c => c ? roundRect({ x: c.x * next.w / prev.w, y: c.y * next.h / prev.h, w: c.w * next.w / prev.w, h: c.h * next.h / prev.h }) : c);
+      setCrop(c => c ? { x: c.x * next.w / prev.w, y: c.y * next.h / prev.h, w: c.w * next.w / prev.w, h: c.h * next.h / prev.h } : c);
     }
   }, [containerRef]);
   useLayoutEffect(() => {
@@ -205,17 +198,17 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
 
   const applyRatio = (r: CropRatio) => {
     if (!crop || !W || !H) return;
-    if (r === 'original') { setRatioKey('original'); setCrop(roundRect(initialCropRect(W, H, originalRatio ?? null))); return; }
-    if (r === 'custom') { setRatioKey('custom'); const v = customRatio ?? clamp(crop.w / crop.h, 0.01, 100); setCustomRatio(v); setCrop(roundRect(centerFitRect(W, H, v))); return; }
+    if (r === 'original') { setRatioKey('original'); setCrop(initialCropRect(W, H, originalRatio ?? null)); return; }
+    if (r === 'custom') { setRatioKey('custom'); const v = customRatio ?? clamp(crop.w / crop.h, 0.01, 100); setCustomRatio(v); setCrop(centerFitRect(W, H, v)); return; }
     setRatioKey(r);
-    setCrop(roundRect(centerFitRect(W, H, RATIO_VALUES[r])));
+    setCrop(centerFitRect(W, H, RATIO_VALUES[r]));
   };
 
   const applyCustomSize = (wVal: number, hVal: number) => {
     if (!W || !H) return;
     if (wVal <= 0 || hVal <= 0) { toast.error('宽高必须大于 0'); return; }
     const r = wVal / hVal;
-    setCustomRatio(r); setRatioKey('custom'); setCrop(roundRect(centerFitRect(W, H, r)));
+    setCustomRatio(r); setRatioKey('custom'); setCrop(centerFitRect(W, H, r));
   };
 
   // ── Drag ──────────────────────────────────────────────────────────────────
@@ -234,18 +227,29 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     setIsDragging(true);
     // 一次性锁定 frame rect 和 start rect，后续不再重读
     const initialFrameRect = frameEl.getBoundingClientRect();
-    // 将 crop 取整为 frame 的像素位置，消除 getBoundingClientRect 的 round 与 crop state 的浮点值之间的偏差（Bug 2：改变比鼠标快很多）。
-    // 若不取整，startRect 的 float 值与 initialFrameRect 的 round 值之间的 0.x 像素偏差
-    // 会传递给 offX/offY，导致 dx 计算有 0.x 误差，累积后表现为框跟随鼠标但有偏移。
+    // zoom = frame screen width / disp flow width.  When canvas is zoomed (ReactFlow zoom ≠ 1),
+    // the frame is scaled by `zoom`, so screen pixel displacement must be divided by zoom
+    // to get the correct flow-pixel displacement for updateCrop.
+    const zoom = W > 0 ? initialFrameRect.width / W : 1;
+    // startRect: the frame's current rendered position in screen pixels, read directly from DOM.
+    // Using getBoundingClientRect() (not Math.round(crop)) eliminates the subpixel gap that occurs
+    // when crop state and actual DOM position differ by ±0.5px (rounding mismatch).
     const startRect = {
-      x: Math.round(crop.x),
-      y: Math.round(crop.y),
-      w: Math.round(crop.w),
-      h: Math.round(crop.h),
+      x: Math.round(initialFrameRect.left),
+      y: Math.round(initialFrameRect.top),
+      w: Math.round(initialFrameRect.width),
+      h: Math.round(initialFrameRect.height),
     };
-    // offX/offY = 鼠标在 crop 坐标系中的位置（相对于 crop.x/y 的偏移）。
-    // 用 initialFrameRect.left/top 作为 frame 渲染位置的整数近似，
-    // 减去 startRect.x/y 得到鼠标相对 crop 起点的偏移。
+    // startFlow: the same position converted to flow coordinates (÷ zoom).
+    // All updateCrop calls use flow-space, so we work with startFlow for drag math.
+    const startFlow = {
+      x: startRect.x / zoom,
+      y: startRect.y / zoom,
+      w: startRect.w / zoom,
+      h: startRect.h / zoom,
+    };
+    // offX/offY = mouse offset inside the frame, in screen pixels.
+    // Both offX and startRect come from the same initialFrameRect, so there is no initial drift.
     const offX = e.clientX - initialFrameRect.left - startRect.x;
     const offY = e.clientY - initialFrameRect.top - startRect.y;
     let lx = e.clientX, ly = e.clientY;
@@ -253,28 +257,36 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       const fx = cx - initialFrameRect.left;
       const fy = cy - initialFrameRect.top;
       if (type === 'move') {
+        // Convert screen displacement to flow displacement (÷ zoom)
+        const flowDx = (fx - offX - startRect.x) / zoom;
+        const flowDy = (fy - offY - startRect.y) / zoom;
         return {
-          x: clamp(fx - offX, 0, W - startRect.w),
-          y: clamp(fy - offY, 0, H - startRect.h),
-          w: startRect.w, h: startRect.h,
+          x: clamp(Math.round(startFlow.x + flowDx), 0, W - Math.round(startFlow.w)),
+          y: clamp(Math.round(startFlow.y + flowDy), 0, H - Math.round(startFlow.h)),
+          w: Math.round(startFlow.w),
+          h: Math.round(startFlow.h),
         };
       }
-      // resize：dx/dy = 鼠标相对初始 frame 左上角的偏移量 - 初始 crop 起点
-      const dx = fx - offX - startRect.x;
-      const dy = fy - offY - startRect.y;
-      return updateCrop(type, startRect, dx, dy, W, H, ratioValue);
+      // resize: dx/dy in flow pixels = screen displacement / zoom
+      const dx = (fx - offX - startRect.x) / zoom;
+      const dy = (fy - offY - startRect.y) / zoom;
+      return updateCrop(type, startFlow, dx, dy, W, H, ratioValue);
     };
     const move = (ev: PointerEvent) => {
       lx = ev.clientX; ly = ev.clientY;
       const next = compute(lx, ly);
-      // 锚点保持像素级固定：对“移动角/边”取整，再用 start 的对角坐标反推对边尺寸，
-      // 避免对角线角点拖拽时锚点因 x/w、y/h 被独立取整而 1px 跳动（Bug 3）；
-      // 同时 frame 与 vignette 共用同一套整数坐标，彻底消除亚像素白条/缝隙。
-      const r = snapCropToAnchor(type, startRect, next);
-      frameEl.style.transform = `translate3d(${r.x}px,${r.y}px,0)`;
-      frameEl.style.width = `${r.w}px`;
-      frameEl.style.height = `${r.h}px`;
-      const s = calcVignetteStyles(r, W, H);
+      // 直接操作 DOM，绕过 React 渲染循环，保证 60fps 流畅度
+      // 对 x/y/w/h 取整：确保 translate3d 和 vignette 都使用同一套整数坐标，
+      // 避免 float crop state 与 round frame 之间产生亚像素偏差（导致边框露出白条）。
+      const rx = Math.round(next.x);
+      const ry = Math.round(next.y);
+      const rw = Math.round(next.w);
+      const rh = Math.round(next.h);
+      frameEl.style.transform = `translate3d(${rx}px,${ry}px,0)`;
+      frameEl.style.width = `${rw}px`;
+      frameEl.style.height = `${rh}px`;
+      // vignette 使用 round 后的坐标计算，确保与 frame 像素完全对齐
+      const s = calcVignetteStyles({ x: rx, y: ry, w: rw, h: rh }, W, H);
       if (s) {
         const { top, bottom, left, right } = vignetteRefs.current;
         if (top)    top.style.height = s.top.height;
@@ -289,15 +301,18 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
       isDraggingRef.current = false;
-      // 用同一套锚点对齐的取整坐标收尾，确保最终 crop 与 frame/vignette 完全同步
+      // 用取整后的坐标计算最终 crop 状态和 frame 位置，确保完全同步
       const finalNext = compute(lx, ly);
-      const r = snapCropToAnchor(type, startRect, finalNext);
-      setCrop({ x: r.x, y: r.y, w: r.w, h: r.h });
-      frameEl.style.transform = `translate3d(${r.x}px,${r.y}px,0)`;
-      frameEl.style.width = `${r.w}px`;
-      frameEl.style.height = `${r.h}px`;
+      const finalX = Math.round(finalNext.x);
+      const finalY = Math.round(finalNext.y);
+      const finalW = Math.round(finalNext.w);
+      const finalH = Math.round(finalNext.h);
+      setCrop({ x: finalX, y: finalY, w: finalW, h: finalH });
+      frameEl.style.transform = `translate3d(${finalX}px,${finalY}px,0)`;
+      frameEl.style.width = `${finalW}px`;
+      frameEl.style.height = `${finalH}px`;
       // 同步 vignette 到最终像素位置
-      const s = calcVignetteStyles(r, W, H);
+      const s = calcVignetteStyles({ x: finalX, y: finalY, w: finalW, h: finalH }, W, H);
       if (s) {
         const { top, bottom, left, right } = vignetteRefs.current;
         if (top)    top.style.height = s.top.height;
@@ -315,9 +330,14 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   // 只注册一次 mousemove，用 ref 读最新 isDragging，避免每次拖拽状态变化都卸载/重装监听器
   // 卸载时（组件销毁）才清除 cursor，拖拽中途不清
   //
-  // 光标判定与拖拽判定（resolveDragType）完全一致：同一份 rect + 同一份 band，
-  // 光标样式 == 实际触发的拖拽类型，杜绝“光标显示对角线、点击却只移动一条边”的错位（Bug 2）。
+  // 判定逻辑：用绝对距离判断光标距 frame 各边/角的距离，避免框缩到 MIN_CROP 时
+  // "nearLeft 和 nearRight 同时为 true" 的判定失效问题。
+  //   四角：光标距对应角 ≤ THRESHOLD_CORNER（24px）→ 对角线 resize 光标
+  //   边缘：光标距对应边 ≤ THRESHOLD_EDGE（12px）→ 单边 resize 光标
+  //   内部：在 frame 范围内 → move 光标
+  //   其他：默认光标
   const THRESHOLD_CORNER = 24;
+  const THRESHOLD_EDGE   = 12;
 
   const onFramePointerDown = (e: React.PointerEvent) => {
     const frameEl = frameRef.current;
@@ -336,21 +356,18 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
       const cy = e.clientY - rect.top;
       const rw = rect.width;
       const rh = rect.height;
-      // 框外（含角点把手延伸到框外的半区）交给元素自身 cursor，不在此强设
-      if (cx < 0 || cx > rw || cy < 0 || cy > rh) {
-        frameEl.style.removeProperty('cursor');
-        return;
-      }
-      // 复用同一判定函数：光标样式与实际拖拽类型 100% 一致（Bug 2 根因修复）
-      const type = resolveDragType(rect, e.clientX, e.clientY, THRESHOLD_CORNER);
-      const cursorMap: Record<CropDragType, string> = {
-        nw: 'nwse-resize', se: 'nwse-resize',
-        ne: 'nesw-resize', sw: 'nesw-resize',
-        n: 'ns-resize', s: 'ns-resize',
-        e: 'ew-resize', w: 'ew-resize',
-        move: 'move',
-      };
-      frameEl.style.setProperty('cursor', cursorMap[type], 'important');
+      const setCursor = (c: string) => frameEl.style.setProperty('cursor', c, 'important');
+      // 四角（按距离判断，不依赖相对大小）
+      if (Math.abs(cx) <= THRESHOLD_CORNER && Math.abs(cy) <= THRESHOLD_CORNER)       setCursor('nwse-resize');
+      else if (Math.abs(cx - rw) <= THRESHOLD_CORNER && Math.abs(cy) <= THRESHOLD_CORNER) setCursor('nesw-resize');
+      else if (Math.abs(cx) <= THRESHOLD_CORNER && Math.abs(cy - rh) <= THRESHOLD_CORNER) setCursor('nesw-resize');
+      else if (Math.abs(cx - rw) <= THRESHOLD_CORNER && Math.abs(cy - rh) <= THRESHOLD_CORNER) setCursor('nwse-resize');
+      // 边缘
+      else if (Math.abs(cx) <= THRESHOLD_EDGE || Math.abs(cx - rw) <= THRESHOLD_EDGE) setCursor('ew-resize');
+      else if (Math.abs(cy) <= THRESHOLD_EDGE || Math.abs(cy - rh) <= THRESHOLD_EDGE) setCursor('ns-resize');
+      // 内部
+      else if (cx >= 0 && cx <= rw && cy >= 0 && cy <= rh) setCursor('move');
+      else frameEl.style.removeProperty('cursor');
     };
     document.addEventListener('mousemove', applyCursor);
     return () => {

@@ -806,20 +806,30 @@ function ResultMediaView({
   };
 
   const handleCropConfirm = async (croppedDataUrl: string, size: { width: number; height: number }) => {
-    setCropOpen(false);
+    // Bug 1: 修复 - 成功后再关闭浮层
     let payload: Partial<PeaNodeData>;
-    let cropMeta: Record<string, unknown> = { fileName: 'clipping.png' };
+    const timestamp = Date.now();
+    // Bug 17: 添加时间戳文件名
+    let cropMeta: Record<string, unknown> = {
+      fileName: `裁剪_${timestamp}.png`,
+      fileSize: 0,
+      croppedFrom: id,
+      croppedAt: new Date().toISOString(),
+    };
+
     try {
       const blob = await (await fetch(croppedDataUrl)).blob();
       const form = new FormData();
-      form.append('file', blob, 'clipping.png');
+      form.append('file', blob, `裁剪_${timestamp}.png`);
       const { data: resp } = await api.post('/files/upload', form);
       payload = { fileKey: resp.key as string };
       // 截图产物记录原始文件大小，lightbox 信息面板才能正确显示「文件大小」
       cropMeta = { ...cropMeta, fileSize: blob.size };
-    } catch {
+    } catch (err) {
       payload = { url: croppedDataUrl };
       toast.warning('裁剪结果已使用本地预览保存（刷新后可能丢失）');
+      // Bug 1: 不关闭浮层，让用户可以重试
+      return;
     }
 
     const g = useCanvas.getState();
@@ -829,9 +839,12 @@ function ResultMediaView({
     const newSize = getNodeSize(aspectRatio, 'image');
     const srcSize = getNodeSize(src?.data.aspectRatio, src?.data.kind ?? 'image');
 
-    // 裁切结果作为源节点的【独立下游】：每次截图都新建一个并列节点，从源节点右侧连出，
-    // 不把新节点串进「源 → 旧下游」之间（旧逻辑会把第一次截图节点连到新节点下游，造成误解）。
-    const siblingCount = g.edges.filter((e) => e.source === id).length;
+    // Bug 4: 修复 - 只统计直接作为裁切产物的下游节点
+    const siblingCount = g.nodes.filter(n =>
+      n.data.clipped &&
+      g.edges.some(e => e.source === id && e.target === n.id)
+    ).length;
+
     const srcRight = (src?.position.x ?? 0) + srcSize.width;
     const pos: { x: number; y: number } = {
       // 多次截图沿源节点右侧横向错开排列，避免重叠
@@ -851,6 +864,7 @@ function ResultMediaView({
     if (newId) {
       // 直接建立 source → 新节点的连线，保留源节点已有的其他下游边（并列而非串链）。
       g.addEdges([{ id: `e-${id}-${newId}`, source: id, target: newId, sourceHandle: 'out', targetHandle: 'in', type: 'pea' }]);
+      setCropOpen(false); // Bug 1: 成功后再关闭
       toast.success('已生成裁剪节点');
     }
   };
