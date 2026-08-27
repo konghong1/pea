@@ -8413,6 +8413,15 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 .pea-crop-resize--e  { right: -8px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
 .pea-crop-resize--w  { left: -8px;  top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
 
+/* 角点把手必须压在边线把手之上：边线把手(left:0;right:0 等)铺满整条边，
+   与角点把手在四角重叠；DOM 中边线在后、z-index 同级，会抢走角点点击，
+   导致“点角却只移动一条边”。角点 z-index 更高 → 角点 9 宫格命中区在四角优先，
+   点角即对角缩放，与光标样式(diag)完全一致。 */
+.pea-crop-resize--nw,
+.pea-crop-resize--ne,
+.pea-crop-resize--sw,
+.pea-crop-resize--se { z-index: 4; }
+
 /* 工具栏 */
 .pea-crop-toolbar {
   position: absolute;

@@ -234,24 +234,32 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     setIsDragging(true);
     // 一次性锁定 frame rect 和 start rect，后续不再重读
     const initialFrameRect = frameEl.getBoundingClientRect();
-    // 将 crop 取整为 frame 的像素位置，消除 getBoundingClientRect 的 round 与 crop state 的浮点值之间的偏差（Bug 2：改变比鼠标快很多）。
-    // 若不取整，startRect 的 float 值与 initialFrameRect 的 round 值之间的 0.x 像素偏差
-    // 会传递给 offX/offY，导致 dx 计算有 0.x 误差，累积后表现为框跟随鼠标但有偏移。
     const startRect = {
       x: Math.round(crop.x),
       y: Math.round(crop.y),
       w: Math.round(crop.w),
       h: Math.round(crop.h),
     };
-    // offX/offY = 鼠标在 crop 坐标系中的位置（相对于 crop.x/y 的偏移）。
-    // 用 initialFrameRect.left/top 作为 frame 渲染位置的整数近似，
-    // 减去 startRect.x/y 得到鼠标相对 crop 起点的偏移。
-    const offX = e.clientX - initialFrameRect.left - startRect.x;
-    const offY = e.clientY - initialFrameRect.top - startRect.y;
+
+    // ── 关键：屏幕坐标 → 图片坐标系(flow) 的缩放修正 ──
+    // 裁切浮层渲染在 ReactFlow 节点内部，节点会被画布视口缩放（zoom ≠ 1）。
+    // 此时 frame 的 getBoundingClientRect() 是【缩放后】的屏幕尺寸，而 crop 的 x/y/w/h 是【未缩放】的 flow 坐标。
+    // 若把屏幕 px 直接当 flow px 用，框会以 zoom 倍速跟随鼠标 → 鼠标与框不同步（用户报的 bug）。
+    // scale = 屏幕宽 / flow 宽，用 frame 自身 rect 推导（box-sizing:border-box，宽已含边框，
+    // getBoundingClientRect 与 style.width 同为 border-box，比值即真实缩放）；zoom=1 时恒为 1，无回归。
+    const scale = startRect.w > 0 ? initialFrameRect.width / startRect.w : 1;
+    // 屏幕坐标 → flow 坐标
+    const toFlowX = (cx: number) => (cx - initialFrameRect.left) / scale;
+    const toFlowY = (cy: number) => (cy - initialFrameRect.top) / scale;
+    // offX/offY = 鼠标在「crop 坐标系」中的抓取点（相对 crop 起点的偏移，flow 单位）。
+    // 保持抓取点不变 → 拖拽时鼠标抓的那一点始终钉在光标下，框与鼠标 1:1 同步（任意 zoom 下都严丝合缝）。
+    const offX = toFlowX(e.clientX) - startRect.x;
+    const offY = toFlowY(e.clientY) - startRect.y;
+
     let lx = e.clientX, ly = e.clientY;
     const compute = (cx: number, cy: number): Rect => {
-      const fx = cx - initialFrameRect.left;
-      const fy = cy - initialFrameRect.top;
+      const fx = toFlowX(cx);
+      const fy = toFlowY(cy);
       if (type === 'move') {
         return {
           x: clamp(fx - offX, 0, W - startRect.w),
@@ -259,7 +267,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
           w: startRect.w, h: startRect.h,
         };
       }
-      // resize：dx/dy = 鼠标相对初始 frame 左上角的偏移量 - 初始 crop 起点
+      // resize：dx/dy = 鼠标相对初始 crop 起点的 flow 位移（已含 zoom 修正，保证缩放与鼠标同步）
       const dx = fx - offX - startRect.x;
       const dy = fy - offY - startRect.y;
       return updateCrop(type, startRect, dx, dy, W, H, ratioValue);
