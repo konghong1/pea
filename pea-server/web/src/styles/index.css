@@ -8362,6 +8362,10 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
   border: 1px solid var(--pea-crop-frame-border);
   border-radius: 0;
   cursor: move;
+  /* 暗化遮罩用 box-shadow 实现（与浅色主题一致）：阴影由 frame 自身图层绘制，
+     与边框外缘严丝合缝，彻底消除 frame（独立合成层）与 4 块 vignette div
+     之间的 1px 亚像素缝隙（用户报的“第一次点击时上下细白条”根因）。 */
+  box-shadow: 0 0 0 3000px var(--pea-crop-vignette);
 }
 .pea-crop-frame--dragging {
   transition: none !important;
@@ -8421,6 +8425,25 @@ html:not(.dark) .pea-angle-cube-send:hover:not(:disabled) {
 .pea-crop-resize--ne,
 .pea-crop-resize--sw,
 .pea-crop-resize--se { z-index: 4; }
+
+/* 裁切浮层必须脱离节点默认光标继承链：
+   .pea-node * { cursor: inherit !important }（约 607 行）会强制所有子元素继承节点的 grab 光标，
+   覆盖 .pea-crop-frame 的 move 与四角/四边把手的 resize 光标，
+   且拖拽中 applyCursor 提前 return，鼠标移出裁切框后光标回退为 normal（用户报的 Issue 2）。
+   以下规则以更高特异性(0,2,0 > 0,1,1) + !important 覆盖，恢复浮层自身的精确光标。 */
+.pea-crop-overlay .pea-crop-frame { cursor: move !important; }
+.pea-crop-overlay .pea-crop-frame--dragging { cursor: grabbing !important; }
+.pea-crop-overlay .pea-crop-resize--nw,
+.pea-crop-overlay .pea-crop-resize--se { cursor: nwse-resize !important; }
+.pea-crop-overlay .pea-crop-resize--ne,
+.pea-crop-overlay .pea-crop-resize--sw { cursor: nesw-resize !important; }
+.pea-crop-overlay .pea-crop-resize--n,
+.pea-crop-overlay .pea-crop-resize--s { cursor: ns-resize !important; }
+.pea-crop-overlay .pea-crop-resize--e,
+.pea-crop-overlay .pea-crop-resize--w { cursor: ew-resize !important; }
+/* 拖拽进行中：锁定整层光标为 grabbing，鼠标移出裁切图也不回退为 normal */
+.pea-crop-overlay.is-dragging,
+.pea-crop-overlay.is-dragging * { cursor: grabbing !important; }
 
 /* 工具栏 */
 .pea-crop-toolbar {
@@ -8629,9 +8652,6 @@ html:not(.dark) .pea-crop-confirm:hover {
 }
 /* 浅色主题：同样用暗色 vignette，保持与目标样张一致的"框外压暗"效果；
    白色 vignette 会在画布上产生不和谐的白雾，因此弃用。 */
-html:not(.dark) .pea-crop-frame {
-  box-shadow: 0 0 0 3000px rgba(0, 0, 0, 0.45);
-}
 /* 浅色主题：把手 hover 状态背景加深（浅色底用深色背景） */
 html:not(.dark) .pea-crop-handle:hover {
   background: rgba(255, 255, 255, 0.95);

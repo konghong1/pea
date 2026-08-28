@@ -232,6 +232,9 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
     // 立即标记拖拽状态，用于 cursor 判断
     isDraggingRef.current = true;
     setIsDragging(true);
+    // 锁定拖拽光标为 grabbing：即使指针移出裁切框/裁切图（窗口级 pointermove 仍持续触发，
+    // 裁切框继续按边界 clamp 跟踪），光标也不回退为 normal（Issue 2）。
+    frameEl.style.cursor = 'grabbing';
     // 一次性锁定 frame rect 和 start rect，后续不再重读
     const initialFrameRect = frameEl.getBoundingClientRect();
     const startRect = {
@@ -313,6 +316,8 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
         if (left)   { left.style.top = s.left.top; left.style.bottom = s.left.bottom; left.style.width = s.left.width; }
         if (right)  { right.style.top = s.right.top; right.style.bottom = s.right.bottom; right.style.width = s.right.width; }
       }
+      // 释放拖拽光标锁，交还 hover 光标逻辑（applyCursor 会在下次 mousemove 重设）
+      frameEl.style.cursor = '';
       setIsDragging(false);
     };
     window.addEventListener('pointermove', move);
@@ -395,7 +400,7 @@ export default function ImageCropOverlay({ url, containerRef, onClose, onConfirm
   const onCtxMenu = useCallback((e: React.MouseEvent) => { e.stopPropagation(); e.preventDefault(); }, []);
 
   return (
-    <div className="pea-crop-overlay" data-cropping-overlay="true" role="dialog" aria-label="图片裁剪" onWheel={onWheel} onContextMenu={onCtxMenu}>
+    <div className={`pea-crop-overlay${isDragging ? ' is-dragging' : ''}`} data-cropping-overlay="true" role="dialog" aria-label="图片裁剪" onWheel={onWheel} onContextMenu={onCtxMenu}>
       <div className="pea-crop-stage" onClick={stop} onWheel={onWheel}>
         {!isReady ? (
           <div className="pea-crop-loading"><span className="pea-crop-loading-text">准备裁剪…</span></div>
