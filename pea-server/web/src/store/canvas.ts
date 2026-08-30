@@ -306,6 +306,19 @@ let dragSnapshotTaken = false;
  * 这些 select change 不可信，必须忽略——否则会清掉 selectedIds → 节点 .selected 类丢失
  * → 功能条(opacity:0)消失。框选(box-selection)的 select change 不带 dragging，照常回写。 */
 let draggingActive = false;
+/**
+ * 选择框拖拽中标志：由 SelectionBoundsBox 在 pointerdown 命中选择框时设为 true，
+ * pointerup 时清除。
+ * 目的：拖拽期间 onNodesChange 收到 ReactFlow 的 position 变更通知时，
+ * 跳过 applyNodeChanges，避免与 SelectionBoundsBox 手动更新 position 冲突导致节点跳动。
+ * 框选(box-selection)的 select change 不带 dragging，照常回写。
+ */
+let selBoxDragging = false;
+
+/** 外部（SelectionBoundsBox）设置 selBoxDragging 的标志。 */
+export function setSelBoxDragging(val: boolean) {
+  selBoxDragging = val;
+}
 
 /* ────────────────────────────────────────────────────────────────────────────
  * 断线回收（detached reference GC）
@@ -569,7 +582,13 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   setCanvasMeta: (id, version, title) =>
     set({ canvasId: id, version, ...(title !== undefined ? { title } : {}) }),
   onNodesChange: (changes) => {
-    const next = applyNodeChanges(changes, get().nodes) as any;
+    // 选择框拖拽中：跳过 position 变更处理，避免与 SelectionBoundsBox 手动更新冲突导致跳动
+    // 但 select 变更仍正常处理（框选补选等）
+    const hasSelBoxDrag = selBoxDragging;
+    const filteredChanges = hasSelBoxDrag
+      ? changes.filter((c: any) => c.type !== 'position')
+      : changes;
+    const next = applyNodeChanges(filteredChanges, get().nodes) as any;
     let ids = get().selectedIds;
 
     // 拖拽快照：首次产生位移时记录「拖拽前」状态（一次拖拽 = 单条撤销项）。
@@ -577,7 +596,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     //（纯点击也会触发），放在那里会为每次点击产生一条无意义的撤销项。
     // 此时 get().nodes 仍是拖拽前的状态，takeSnapshot 能正确捕获。
     const dragPos = changes.find((c: any) => c.type === 'position') as any;
-    if (dragPos) {
+    if (dragPos && !hasSelBoxDrag) {
       if (dragPos.dragging === true && !dragSnapshotTaken) {
         dragSnapshotTaken = true;
         get().takeSnapshot();

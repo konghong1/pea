@@ -2112,7 +2112,11 @@ function Flow() {
             }
           }}
           onPaneClick={() => {
-            clearSelection();
+            // 若刚刚发生了「选择框拖拽」（SelectionBoundsBox mousedown 拦截并标记）
+            // 则不清除选中，否则框消失后无法继续拖拽。
+            if (!(window as any).__peaSelDragActive) {
+              clearSelection();
+            }
             setMenu(null);
           }}
           onNodeContextMenu={onNodeCtx}
