@@ -35,6 +35,25 @@ export default function MultiSelectToolbar() {
 
   const isMultiSelect = selectedIds.length > 1;
 
+  // 延迟显示：让 SelectionOverlay 先完成淡出（120ms），再展示打组工具栏
+  const [visible, setVisible] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (isMultiSelect) {
+      timerRef.current = setTimeout(() => setVisible(true), 150);
+    } else {
+      setVisible(false);
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [isMultiSelect]);
+
   // 计算选中节点的包围盒（用于定位）
   const [bounds, setBounds] = useState<{
     /** 工具栏位置（选择区域下方居中） */
@@ -161,8 +180,8 @@ export default function MultiSelectToolbar() {
     console.log('[MultiSelectToolbar] download selected:', selectedIds);
   }, [selectedIds]);
 
-  // 渲染守卫
-  if (!isMultiSelect || !bounds || !bounds.bar || !bounds.plus) return null;
+  // 渲染守卫：必须是多选且延迟已到期才渲染
+  if (!isMultiSelect || !visible || !bounds || !bounds.bar || !bounds.plus) return null;
   const { bar, plus } = bounds;
 
   const toolbar = (

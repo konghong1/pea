@@ -952,7 +952,20 @@ function SelectionOverlay() {
       const last = w.__lastSelRect as
         | { screenLeft: number; screenTop: number; screenRight: number; screenBottom: number; timestamp: number }
         | null;
-      console.log("tick",!!w.__selDragging,!!w.__lastSelRect); const flag = !!w.__selDragging;
+      const selDragging = !!w.__selDragging;
+      const rect = rectRef.current;
+      console.log("[SelDebug] tick:", {
+        selDragging,
+        hasLast: !!last,
+        lastL: last?.screenLeft,
+        lastR: last?.screenRight,
+        lastT: last?.screenTop,
+        lastB: last?.screenBottom,
+        rectActive: rect?.active,
+        rectL: rect?.l,
+        rectT: rect?.t,
+      });
+      const flag = selDragging;
       const currentRect = rectRef.current;
 
       if (flag && last) {
@@ -1102,17 +1115,33 @@ function Flow() {
 
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
+      const inPane = t?.closest('.react-flow__pane') ?? false;
+      const notNode = !t?.closest('.react-flow__node, .react-flow__handle');
+      console.log("[SelDebug] onDown:", {
+        target: t?.tagName,
+        targetClass: t?.className,
+        inPane,
+        notNode,
+        button: e.button,
+        clientX: e.clientX,
+        clientY: e.clientY,
+      });
       // 仅在画布 pane 内启动框选；点节点或边由各自处理。
-      // 用 closest 而非 classList.contains：ReactFlow 的 .react-flow__renderer 层可能
-      // 拦截 pointerdown 事件，使 e.target 不是 .react-flow__pane 本身，但仍在 pane 内。
-      if (t && !t.closest('.react-flow__node, .react-flow__handle') && t.closest('.react-flow__pane')) {
+      // 注意：不再调用 preventDefault()，否则 ReactFlow Pane.onMouseDown 不会执行，
+      // 导致 userSelectionRect 不被设置、selection overlay 不渲染、selectedIds 不更新。
+      // 改用 capture 阶段监听鼠标坐标（仅记录屏幕坐标用于视觉 overlay），
+      // RF 自身的 onMouseDown/onMouseMove 负责实际的节点选中逻辑。
+      if (t && notNode && inPane) {
         dragging = true;
-        console.log("onDown: pane mousedown"); w.__selDragging = true;
+        console.log("[SelDebug] STARTING selection drag, __selDragging=true");
+        w.__selDragging = true;
         moved = false;
         startX = e.clientX; startY = e.clientY;
         curX = e.clientX; curY = e.clientY;
         // 下一次按下清空上一帧的"残留 rect"，让 overlay 不被旧 rect 重影。
         w.__lastSelRect = null;
+      } else {
+        console.log("[SelDebug] NOT starting selection drag");
       }
     };
     const onMove = (e: MouseEvent) => {
@@ -1120,7 +1149,8 @@ function Flow() {
       curX = e.clientX; curY = e.clientY;
       moved = true;
       // 用屏幕坐标算 rect（不动 RF DOM，overlay 渲染直接用 screenLeft/Top/...）。
-      toCanvasRect(startX, startY, curX, curY); console.log("onMove: rect set");
+      toCanvasRect(startX, startY, curX, curY);
+      console.log("[SelDebug] onMove, __lastSelRect set:", w.__lastSelRect ? { l: w.__lastSelRect.screenLeft, r: w.__lastSelRect.screenRight, t: w.__lastSelRect.screenTop, b: w.__lastSelRect.screenBottom } : null);
     };
     const onUp = (e?: MouseEvent) => {
       if (!dragging) return;
