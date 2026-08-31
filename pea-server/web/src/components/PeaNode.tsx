@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Handle, Position, NodeProps } from 'reactflow';
-import { useCanvas, PeaNodeData } from '../store/canvas';
+import { useCanvas, PeaNodeData, getGroupingActive } from '../store/canvas';
 import { toast } from '../store/toast';
 import { useAuth } from '../store/auth';
 import { api } from '../api/client';
@@ -478,8 +478,16 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
                 } else if (isText) {
                   // 文本节点：单击文本区直接进编辑态（而非发起拖动），
                   // 这样功能条(H1/粗体等)和直接输入都能用；节点拖动改由标题徽章发起。
+                  // 打组进行中：抑制节点编辑态，防止子节点功能条/编辑框闪现。
+                  // 用 setTimeout 延迟 setEditing：让 ReactFlow 的 onNodeClick 先完成选中，
+                  // 再检查是否真的选中了本节点，避免选中过程中提前触发编辑框。
                   e.stopPropagation();
-                  if (!editing) setEditing(true);
+                  if (!editing && !getGroupingActive()) {
+                    window.setTimeout(() => {
+                      if (!useCanvas.getState().selectedIds.includes(id) || getGroupingActive()) return;
+                      setEditing(true);
+                    }, 0);
+                  }
                 } else {
                   // 非文本节点非编辑态：阻止 contentEditable 自动获取焦点，但允许冒泡给 ReactFlow 拖动
                   e.preventDefault();
@@ -707,6 +715,8 @@ function ResultMediaView({
   const cubeOpen = cubeOpenNodeId === id;
   // 面板可见性随节点选中态联动：点空白取消选中即隐藏，点节点选中即显示
   const selected = useCanvas((s) => s.selectedIds.includes(id));
+  // 多选时抑制魔方面板，避免框选多个节点时误显
+  const isMulti = useCanvas((s) => s.selectedIds.length > 1);
   const imageWrapRef = useRef<HTMLDivElement>(null);  // 图片容器 ref，裁切组件用它测量尺寸并原地覆盖
   // 角度魔方锚点：与 NodeChatPrompt 同一机制，确保 DOM 挂载后才 portal
   const [cubeAnchorEl, setCubeAnchorEl] = useState<HTMLElement | null>(null);
@@ -873,6 +883,8 @@ function ResultMediaView({
     e.stopPropagation();
     window.dispatchEvent(new CustomEvent('pea:center-node', { detail: { id, mode: 'cube' } }));
     setCubeOpenNodeId(id);
+    // 同时选中节点，确保魔方面板可见（面板需要 selected 条件）
+    useCanvas.getState().select(id);
   };
 
   const handleCubeClose = () => {
@@ -1153,7 +1165,7 @@ function ResultMediaView({
           - 点该节点选中 → 面板显示
           - 刷新后 openCanvas 自动恢复选中 + cubeOpenNodeId → 面板显示
           - 仅点面板右上角 × 才清空 cubeOpenNodeId 关闭 */}
-      {cubeOpen && selected && currentUrl && cubeAnchorEl && createPortal(
+      {cubeOpen && selected && !isMulti && currentUrl && cubeAnchorEl && createPortal(
         <AngleCubeOverlay
           nodeId={id}
           url={currentUrl}

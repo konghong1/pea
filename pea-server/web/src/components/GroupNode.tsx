@@ -8,7 +8,7 @@ import {
   GroupOutlined,
 } from '@ant-design/icons';
 import type { NodeProps } from 'reactflow';
-import { useCanvas } from '../store/canvas';
+import { useCanvas, getGroupingActive } from '../store/canvas';
 
 /** 组内布局类型 */
 export type GroupLayout = 'grid' | 'horizontal';
@@ -291,7 +291,7 @@ export default function GroupNode({ id, data, selected }: NodeProps) {
 
       {/* Portal 浮层 header：createPortal 到 body，浮在 group 框外顶部。
           选中 group 时才显示；不选中立即消失，避免和单节点工具条/多选工具条堆叠。 */}
-      {selected && portalReady && typeof document !== 'undefined'
+      {selected && portalReady && !getGroupingActive() && typeof document !== 'undefined'
         ? createPortal(headerNode, document.body)
         : null}
     </>

@@ -314,10 +314,20 @@ let draggingActive = false;
  * 框选(box-selection)的 select change 不带 dragging，照常回写。
  */
 let selBoxDragging = false;
+/** 打组进行中标记：打组时 ReactFlow 会发出 select 噪声，抑制回写防止子节点工具条/编辑框闪现。 */
+let groupingActive = false;
 
 /** 外部（SelectionBoundsBox）设置 selBoxDragging 的标志。 */
 export function setSelBoxDragging(val: boolean) {
   selBoxDragging = val;
+}
+
+export function setGroupingActive(val: boolean) {
+  groupingActive = val;
+}
+
+export function getGroupingActive(): boolean {
+  return groupingActive;
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -616,7 +626,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     // 拖拽进行中 ReactFlow 会发出 select 噪声(拖拽前先 deselect 等)，这些 select change
     // 不可信：回写会清掉 selectedIds → 节点 .selected 类丢失 → 功能条(opacity:0)消失。
     // 仅当非拖拽(draggingActive=false)时才回写；框选(box-selection)的 select change 照常生效。
-    if (hasSelectChanges && !draggingActive) {
+    if (hasSelectChanges && !draggingActive && !groupingActive) {
       ids = next.filter((n: any) => n.selected).map((n: any) => n.id);
       // 注：框选「覆盖即选中」的二次校正已从这里移除——
       // ReactFlow 的 box-selection 仅在拖拽过程中（选中集合变化时）发出 select change，
@@ -627,8 +637,13 @@ export const useCanvas = create<CanvasState>((set, get) => ({
 
     // 受控选中：强制 node.selected 与 selectedIds 一致，
     // 避免 ReactFlow 内部选中（如拖动节点）制造"选中但没弹框/弹错框"的错乱。
+    // 关键修复：reconciliation 始终使用 store 当前 selectedIds，
+    // 而非可能因 groupingActive 保护而未更新的 ids 局部变量。
+    // 否则分组期间 ReactFlow 检测到 node.selected 与 selectedIds 不一致
+    // 会反复发出 select 变更，导致连线高亮等副作用。
+    const curSelectedIds = get().selectedIds;
     const reconciled = next.map((n: any) =>
-      n.selected === ids.includes(n.id) ? n : { ...n, selected: ids.includes(n.id) },
+      n.selected === curSelectedIds.includes(n.id) ? n : { ...n, selected: curSelectedIds.includes(n.id) },
     );
     // 仅用户实质变更（拖动 position / 增删 / replace）才标脏。
     // dimensions(ReactFlow 加载时尺寸测量) 与 select(受控选中/框选) 是内部事件，
@@ -640,12 +655,12 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       nodes: reconciled,
       dirty: isUserChange ? true : get().dirty,
       // 框选时同步更新 selectedIds / selectedId
-      ...(hasSelectChanges ? {
+      ...(hasSelectChanges && !groupingActive ? {
         selectedIds: ids,
         selectedId: ids.length ? ids[ids.length - 1] : null,
       } : {}),
     });
-    if (hasSelectChanges) persistSelectedIds(ids);
+    if (hasSelectChanges && !groupingActive) persistSelectedIds(ids);
   },
   onEdgesChange: (changes) => {
     // 同上：select(受控选中) 不标脏，仅 remove/add/position 等实质变更标脏。
@@ -802,8 +817,8 @@ export const useCanvas = create<CanvasState>((set, get) => ({
       selectedId: null,
       nodes: s.nodes.map((n) => ({ ...n, selected: false })),
     }));
-    persistSelectedIds([]);
   },
+
   markSaved: (version) => set({ version, dirty: false, lastSavedAt: Date.now(), saveCount: get().saveCount + 1 }),
   loadGraph: (nodes, edges, version) => {
     lastHistoryLabel = null;
@@ -1328,6 +1343,8 @@ export const useCanvas = create<CanvasState>((set, get) => ({
   groupNodes: (nodeIds) => {
     const s = get();
     if (nodeIds.length < 2) return null;
+    // 不干扰 SelectionOverlay 的自然 fade-out，让选择框先淡出再出现打组框
+    setGroupingActive(true);
     get().takeSnapshot();
     const ids = [...new Set(nodeIds)];
 
@@ -1399,6 +1416,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
     // 同时配合 CSS「非多选时隐藏 nodesselection-rect」，避免旧选区框残留
     // 与 group 容器边框叠加形成"两个框"。
     get().select(gid);
+    setGroupingActive(false);
     return gid;
   },
 

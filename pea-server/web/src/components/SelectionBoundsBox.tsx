@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { createPortal, flushSync } from 'react-dom';
 import { useViewport } from 'reactflow';
 import { useCanvas } from '../store/canvas';
+
+/** 多选时若选中集合含组节点，不渲染包围框（避免与组框视觉上冲突）。 */
+function selectedIncludesGroup(selectedIds: string[], nodes: any[]): boolean {
+  for (const id of selectedIds) {
+    const n = nodes.find((x) => x.id === id);
+    if (n && n.type === 'group') return true;
+  }
+  return false;
+}
 
 declare global {
   interface Window {
@@ -24,6 +33,7 @@ export default function SelectionBoundsBox() {
   const selectedIds = useCanvas((s) => s.selectedIds);
   const nodes = useCanvas((s) => s.nodes);
   const { x: vx, y: vy, zoom } = useViewport();
+  const _containsGroup = selectedIncludesGroup(selectedIds, nodes);
 
   const [bounds, setBounds] = useState<{
     left: number; top: number; width: number; height: number;
@@ -140,17 +150,21 @@ export default function SelectionBoundsBox() {
 
         // ── 更新节点位置（触发 ReactFlow 重新计算 nodeInternals，边自动跟随）──
         // 注意：这里会触发 ReactFlow 重渲，但 rAF 已暂停，所以没有竞争
-        useCanvas.setState((s) => ({
-          nodes: s.nodes.map((n) => {
-            if (!idSet.has(n.id)) return n;
-            const orig = origPositionsRef.current.get(n.id);
-            if (!orig) return n;
-            return {
-              ...n,
-              position: { x: orig.x + curOffsetRef.current.x, y: orig.y + curOffsetRef.current.y },
-            };
-          }),
-        }));
+        // 【修复】使用 flushSync 强制同步渲染，确保 DOM 已更新后再读取位置
+        // 否则批量更新机制下读到的还是旧 DOM，导致选择框位置跳动/晃动
+        flushSync(() => {
+          useCanvas.setState((s) => ({
+            nodes: s.nodes.map((n) => {
+              if (!idSet.has(n.id)) return n;
+              const orig = origPositionsRef.current.get(n.id);
+              if (!orig) return n;
+              return {
+                ...n,
+                position: { x: orig.x + curOffsetRef.current.x, y: orig.y + curOffsetRef.current.y },
+              };
+            }),
+          }));
+        });
 
         // ── 直接更新选择框位置（不调 setBounds，避免 React 重渲）──
         // 从当前节点状态计算（此时节点位置已更新）
@@ -194,7 +208,7 @@ export default function SelectionBoundsBox() {
     return () => window.removeEventListener('pointerdown', onDown, true);
   }, [selectedIds.length]);
 
-  if (!bounds || selectedIds.length < 2) return null;
+  if (!bounds || selectedIds.length < 2 || _containsGroup) return null;
   if (typeof document === 'undefined') return null;
 
   return createPortal(
@@ -214,3 +228,4 @@ export default function SelectionBoundsBox() {
     document.body,
   );
 }
+

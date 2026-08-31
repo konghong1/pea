@@ -10,7 +10,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait: number) {
     t = setTimeout(() => fn(...args), wait);
   };
 }
-import { useCanvas, PeaNodeData, stripRefTokens } from '../store/canvas';
+import { useCanvas, PeaNodeData, stripRefTokens, getGroupingActive } from '../store/canvas';
 import { useAgent } from '../store/agent';
 import { toast } from '../store/toast';
 import { listAvailableModels, estimateCost, acceptNodeGenerationJob } from '../api/catalog';
@@ -1231,7 +1231,7 @@ useEffect(() => {
   // 该状态来自 store.cubeOpenNodeId（单一数据源），不读 meta，避免关闭后误恢复。
   const cubeOpenNodeId = useCanvas((s) => s.cubeOpenNodeId);
   const cubeOpen = !!(sel && cubeOpenNodeId === sel.id);
-  if (!sel || !single || !anchorEl || hideEditor || cubeOpen) return null;
+  if (!sel || !single || !anchorEl || hideEditor || cubeOpen || getGroupingActive()) return null;
   const cfg = KIND_CFG[kind] ?? KIND_CFG.text;
 
   const hasImageRefs = refImageNodes.length > 0;

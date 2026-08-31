@@ -34,7 +34,7 @@ import {
 } from '@ant-design/icons';
 import { toast } from '../store/toast';
 import { api } from '../api/client';
-import { useCanvas, PeaNodeData, cleanGraph } from '../store/canvas';
+import { useCanvas, PeaNodeData, cleanGraph, getGroupingActive } from '../store/canvas';
 import { getNodeSize } from '../lib/nodeSize';
 import { useUi } from '../store/ui';
 import { useAuth } from '../store/auth';
@@ -952,7 +952,7 @@ function SelectionOverlay() {
       const last = w.__lastSelRect as
         | { screenLeft: number; screenTop: number; screenRight: number; screenBottom: number; timestamp: number }
         | null;
-      const flag = !!w.__selDragging;
+      console.log("tick",!!w.__selDragging,!!w.__lastSelRect); const flag = !!w.__selDragging;
       const currentRect = rectRef.current;
 
       if (flag && last) {
@@ -981,7 +981,6 @@ function SelectionOverlay() {
           }, 120);
         }
       }
-      raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => {
@@ -1103,10 +1102,12 @@ function Flow() {
 
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
-      // 仅在画布 pane / renderer 上启动框选；点节点或边由各自处理。
-      if (t && (t.classList.contains('react-flow__pane') || t.classList.contains('react-flow__renderer'))) {
+      // 仅在画布 pane 内启动框选；点节点或边由各自处理。
+      // 用 closest 而非 classList.contains：ReactFlow 的 .react-flow__renderer 层可能
+      // 拦截 pointerdown 事件，使 e.target 不是 .react-flow__pane 本身，但仍在 pane 内。
+      if (t && !t.closest('.react-flow__node, .react-flow__handle') && t.closest('.react-flow__pane')) {
         dragging = true;
-        w.__selDragging = true;
+        console.log("onDown: pane mousedown"); w.__selDragging = true;
         moved = false;
         startX = e.clientX; startY = e.clientY;
         curX = e.clientX; curY = e.clientY;
@@ -1119,12 +1120,13 @@ function Flow() {
       curX = e.clientX; curY = e.clientY;
       moved = true;
       // 用屏幕坐标算 rect（不动 RF DOM，overlay 渲染直接用 screenLeft/Top/...）。
-      toCanvasRect(startX, startY, curX, curY);
+      toCanvasRect(startX, startY, curX, curY); console.log("onMove: rect set");
     };
     const onUp = (e?: MouseEvent) => {
       if (!dragging) return;
       dragging = false;
-      w.__selDragging = false; // overlay 转入 fade-out 模式
+      // defer clearing: let overlay render final frame before fade-out
+      console.log("onUp: drag ended"); requestAnimationFrame(() => { w.__selDragging = false; });
       // 用 mouseup 事件自身的 clientX/Y 作为终点（不依赖 curX/curY — 真实浏览器里
       // 最后一次 mousemove 可能晚于 mouseup 到达，导致 curX/curY 滞后于鼠标指针）。
       const endX = e ? e.clientX : curX;
@@ -2086,6 +2088,8 @@ function Flow() {
             // onNodesChange 的 hasSelectChanges 分支互相覆盖，导致 selectedIds=[]。
             // 所以 Shift 时直接放行，让 ReactFlow 负责多选取并同步到 selectedIds。
             if (e.shiftKey) return;
+            // 打组进行中：抑制节点选中，防止子节点工具条/编辑框闪现
+            if (getGroupingActive()) return;
             select(n.id);
           }}
           onNodeDragStart={(e) => {

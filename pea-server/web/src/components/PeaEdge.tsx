@@ -129,10 +129,11 @@ export default function PeaEdge({
     if (!selected) setClickT(null);
   }, [selected]);
 
-  // ── active：本边被选中，或它连接的任一端点节点被选中 / 正在被拖动 ──────────
+  // ── active：本边被选中，或它连接的任一端点节点正在被拖动 ──────────
+  // 注意：不检查 selectedIds。单击选中节点时不应连带高亮连线，只有边自身被选中
+  // 或节点正在拖动时才高亮，避免选择节点时触发连线的高亮效果。
   // 返回布尔基元 → zustand 浅比较，拖动过程中值不翻转就不会重渲染。
   const endpointActive = useCanvas((s) => {
-    if (s.selectedIds.includes(source) || s.selectedIds.includes(target)) return true;
     const ns = s.nodes as any[];
     for (let i = 0; i < ns.length; i++) {
       const n = ns[i];
@@ -140,7 +141,7 @@ export default function PeaEdge({
     }
     return false;
   });
-  const active = !!selected || endpointActive;
+  const active = endpointActive;
 
   // ReactFlow 的边端点取手柄"外缘"（远离节点框的一侧）。
   // 该 sourceX/targetX 在边创建时由 ReactFlow 根据当前 zoom 下手柄的 DOM 位置计算，
