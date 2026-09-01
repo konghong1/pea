@@ -156,7 +156,7 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
   // - ⚠️ 关键改动：移除 hasMediaContent 守卫 → 无论空态/有内容，框尺寸永远由比例锁定，
   //   媒体用 object-fit:cover 填满锁定框，杜绝"有图后框被素材比例撑变形"导致的画布比例混乱
   //   （用户反馈"不同比例之间没有标准"）。整张画布上每个 kind 只对应 1~2 种可预期尺寸。
-  const nodeSize = useMemo(() => getNodeSize(data.aspectRatio, kind), [data.aspectRatio, kind]);
+  const nodeSize = useMemo(() => getNodeSize(data.aspectRatio, kind), [kind, data.aspectRatio]);
 
   const outerStyle = { '--pea-node-width': `${nodeSize.width}px` } as React.CSSProperties;
   const bodyStyle: React.CSSProperties = { height: nodeSize.height };
@@ -744,6 +744,11 @@ function ResultMediaView({
     setFallbackUrl(null);
   }, [urls[index]]);
 
+  // 生成参数徽章：在结果生成后才展示比例/画质
+  const _gp = (data.meta?.genParams ?? {}) as Record<string, unknown>;
+  const _hasGenParams = Boolean(data.resultUrl || data.resultUrls?.length) && (_gp.aspectRatio || _gp.resolution);
+  const _displayRatio = _hasGenParams ? (String(_gp.aspectRatio) || undefined) : undefined;
+  const _displayResolution = _hasGenParams ? (String(_gp.resolution) || undefined) : undefined;
   const objectKeyForImport = useMemo(() => extractObjectKey(data, currentUrl), [data, currentUrl]);
   const defaultAssetName = useMemo(() => {
     const fileName = (data.meta?.fileName as string) || data.label || '未命名';
@@ -1011,6 +1016,10 @@ function ResultMediaView({
   return (
     <>
       <div className={wrapClass} ref={imageWrapRef}>
+        {!cropOpen && _displayRatio && (
+          <span className="pea-node-gen-params-badge">{_displayRatio}{_displayResolution ? " · " + _displayResolution : ""}</span>
+        )}
+
         {showMediaLabel && (
           <span className="pea-node-media-label">
             <NodeIcon kind={kind} size={12} /> {tagLabelOf(kind)}

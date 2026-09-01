@@ -874,6 +874,8 @@ body {
   color: var(--pea-accent-soft, var(--pea-accent-soft));
 }
 /* 空媒体节点的安静上传区（取代原先悬浮的大黑“上传”药丸，与结果态标签风格统一） */
+.pea-node-gen-params-badge { position: absolute; top: 6px; left: 8px; background: rgba(0,0,0,0.65); color: #e0e0e8; font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 4px; pointer-events: none; z-index: 2; letter-spacing: 0.3px; backdrop-filter: blur(4px); border: 1px solid rgba(255,255,255,0.08); }
+
 .pea-node-media-placeholder-icon {
   display: inline-flex;
   color: rgba(255, 255, 255, 0.42);

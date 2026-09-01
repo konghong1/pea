@@ -727,6 +727,8 @@ export default function NodeChatPrompt() {
           resultUrl: urls?.[0] ?? url,
           resultUrls: urls,
           resultIndex: 0,
+          // 保留节点画幅比例，避免生成完成后节点尺寸回退到默认值
+          aspectRatio: useCanvas.getState().nodes.find((n) => n.id === nodeId)?.data.aspectRatio,
         });
         useCanvas.getState().removeJob(ev.jobId);
         const count = urls?.length ?? 1;
@@ -741,6 +743,8 @@ export default function NodeChatPrompt() {
           resultIndex: 0,
           savedToLibrary: false,
           isFavorite: false,
+          // 保留节点画幅比例，避免生成失败后节点尺寸回退到默认值
+          aspectRatio: useCanvas.getState().nodes.find((n) => n.id === nodeId)?.data.aspectRatio,
         });
         useCanvas.getState().removeJob(ev.jobId);
         toast.error(ev.error || '生成失败，已退款');
@@ -781,13 +785,18 @@ export default function NodeChatPrompt() {
       const memDraft = draftRef.current[single];
       const memDraftNonEmpty = memDraft && memDraft.trim().length > 0 ? memDraft : '';
       const lsDraftNonEmpty = lsDraft && lsDraft.trim().length > 0 ? lsDraft : '';
+      // 当存在上游文本节点时，优先使用 data.prompt（已包含合并后的上游文本）作为编辑框内容
+      // 注：data.prompt 在 submit 时已写入，包含上游文本节点的合并内容
+      const upstreamTextContent = upstream.length > 0
+        ? (node?.data.prompt as string | undefined)
+        : undefined;
       const restored =
         memDraftNonEmpty ||
         lsDraftNonEmpty ||
         (node?.data.meta?.editorText as string | undefined) ||
-        // 兜底：本地草稿/editorText 都丢失，但节点本身有持久化 prompt，且无上游输入
-        // （避免合并 prompt 含上游文本导致二次提交重复拼接）时，用 data.prompt 还原，
-        // 确保生成中/刷新后编辑框绝不出现空框（提示词丢失幻觉）。
+        upstreamTextContent ||
+        // 兜底：本地草稿/editorText/上游文本都丢失，但节点本身有持久化 prompt 时还原
+        // （避免合并 prompt 含上游文本导致二次提交重复拼接）
         (upstream.length === 0 ? (node?.data.prompt as string | undefined) : undefined) ||
         '';
       // 仅当 restored 是纯文本时才需要 escape；包含 <span data-pea-ref> 等 HTML 标签时直接作为 HTML 写入
@@ -1414,7 +1423,8 @@ useEffect(() => {
             update(single, { html: acc });
           },
           onDone: () => {
-            update(single, { generating: false });
+            // 同步更新 data.prompt，确保下游图片/视频节点通过 extractNodeText 能读到文本节点内容
+            update(single, { generating: false, prompt: acc });
             toast.success('提示词已生成');
           },
           onError: (e) => {

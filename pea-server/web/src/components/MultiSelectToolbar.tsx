@@ -35,25 +35,19 @@ export default function MultiSelectToolbar() {
 
   const isMultiSelect = selectedIds.length > 1;
 
-  // 延迟显示：让 SelectionOverlay 先完成淡出（120ms），再展示打组工具栏
+  // 拖拽选择结束时立刻显示（由 SelectionOverlay 派发 pea:selection-end 事件触发）
+  // 而不是等待 idle timeout，避免用户点选第二个节点时过早出现
   const [visible, setVisible] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (isMultiSelect) {
-      timerRef.current = setTimeout(() => setVisible(true), 150);
-    } else {
+    if (!isMultiSelect) {
       setVisible(false);
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
+      return;
     }
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
+    const onSelEnd = () => setVisible(true);
+    window.addEventListener('pea:selection-end', onSelEnd);
+    return () => window.removeEventListener('pea:selection-end', onSelEnd);
   }, [isMultiSelect]);
-
   // 计算选中节点的包围盒（用于定位）
   const [bounds, setBounds] = useState<{
     /** 工具栏位置（选择区域下方居中） */

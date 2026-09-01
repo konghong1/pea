@@ -1106,7 +1106,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
             set((s) => ({
               nodes: s.nodes.map((n) =>
                 n.id === nodeId
-                  ? { ...n, data: { ...n.data, generating: false, error: data?.error || '生成失败' } }
+                  ? { ...n, data: { ...n.data, generating: false, error: data?.error || '生成失败', aspectRatio: n.data.aspectRatio } }
                   : n
               ),
               dirty: true,
@@ -1122,7 +1122,7 @@ export const useCanvas = create<CanvasState>((set, get) => ({
           set((s) => ({
             nodes: s.nodes.map((n) =>
               n.id === nodeId
-                ? { ...n, data: { ...n.data, generating: false, error: '任务记录已过期，请重新发起' } }
+                ? { ...n, data: { ...n.data, generating: false, error: '任务记录已过期，请重新发起', aspectRatio: n.data.aspectRatio } }
                 : n
             ),
             dirty: true,

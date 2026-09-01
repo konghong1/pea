@@ -1155,8 +1155,8 @@ function Flow() {
     const onUp = (e?: MouseEvent) => {
       if (!dragging) return;
       dragging = false;
-      // defer clearing: let overlay render final frame before fade-out
-      console.log("onUp: drag ended"); requestAnimationFrame(() => { w.__selDragging = false; });
+      // 立即清除 __selDragging：让 SelectionOverlay 的 RAF 循环在下一帧检测到 false 后自然淡出
+      w.__selDragging = false;
       // 用 mouseup 事件自身的 clientX/Y 作为终点（不依赖 curX/curY — 真实浏览器里
       // 最后一次 mousemove 可能晚于 mouseup 到达，导致 curX/curY 滞后于鼠标指针）。
       const endX = e ? e.clientX : curX;
@@ -1164,6 +1164,8 @@ function Flow() {
       curX = endX; curY = endY;
       toCanvasRect(startX, startY, endX, endY); // 最终一次
       if (moved) {
+        // 派发 selection-end 事件，让 MultiSelectToolbar 显示打组框
+        window.dispatchEvent(new CustomEvent("pea:selection-end"));
         // 触发「覆盖即选中」二次校正：setTimeout(0) 让 RF 先完成 mouseup 定稿（选中集合已确定），
         // 此刻 window.__lastSelRect 是完整选区矩形 → 把被覆盖但 RF 漏选的节点补进 selectedIds。
         setTimeout(() => {

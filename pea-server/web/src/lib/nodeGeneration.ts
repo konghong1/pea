@@ -21,7 +21,9 @@ export function pollNodeJobResult(jobId: string) {
     // 事件已处理 -> jobNodeMap 已无此 job -> 终止轮询（避免重复回填）
     if (!useCanvas.getState().jobNodeMap[jobId]) return;
     if (attempt++ >= MAX_ATTEMPTS) {
-      useCanvas.getState().applyJobResult(jobId, { generating: false, error: '生成超时，请重试' });
+      // 保留节点画幅比例，避免超时后节点尺寸回退到默认值
+      const node_for_timeout = useCanvas.getState().nodes.find((n) => n.id === jobId);
+      useCanvas.getState().applyJobResult(jobId, { generating: false, error: '生成超时，请重试', aspectRatio: node_for_timeout?.data.aspectRatio });
       useCanvas.getState().removeJob(jobId);
       toast.error('生成超时，请稍后重试');
       // 超时后服务端可能已结算或退款，拉一次权威值兜底
@@ -43,6 +45,8 @@ export function pollNodeJobResult(jobId: string) {
           resultIndex: 0,
           savedToLibrary: false,
           isFavorite: false,
+          // 保留节点画幅比例，避免生成完成后节点尺寸回退到默认值
+          aspectRatio: useCanvas.getState().nodes.find((n) => n.id === jobId)?.data.aspectRatio,
         });
         useCanvas.getState().removeJob(jobId);
         const count = urls?.length ?? 1;
@@ -61,6 +65,8 @@ export function pollNodeJobResult(jobId: string) {
           resultIndex: 0,
           savedToLibrary: false,
           isFavorite: false,
+          // 保留节点画幅比例，避免生成失败后节点尺寸回退到默认值
+          aspectRatio: useCanvas.getState().nodes.find((n) => n.id === jobId)?.data.aspectRatio,
         });
         useCanvas.getState().removeJob(jobId);
         toast.error(data?.error || '生成失败，已退款');
