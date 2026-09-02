@@ -169,7 +169,7 @@ class AgnesAdapter(BaseProviderAdapter):
             provider=self.provider_name,
             completion_mode=CompletionMode.POLL,
             provider_task_id=str(sub["task_id"]) if sub.get("task_id") else "",
-            provider_video_id=str(sub["video_id"]) if sub.get("video_id") else None,
+            provider_video_id=(str(sub["video_id"]) if sub.get("video_id") else None)[:128],
             status_query=sub["status_query"],
         )
         return SubmitOutcome(sync=False, handle=h)

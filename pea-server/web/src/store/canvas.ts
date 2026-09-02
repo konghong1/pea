@@ -1094,11 +1094,15 @@ export const useCanvas = create<CanvasState>((set, get) => ({
           if (st === 'done') {
             const url = data?.resultUrl ?? undefined;
             const urls = data?.resultUrls ?? (url ? [url] : undefined);
+            // 恢复目标比例（生成动画期间为 4:3，完成后回应用所选比例）
+            const current = get().nodes.find((node) => node.id === nodeId);
+            const m = (current?.data.meta ?? {}) as Record<string, unknown>;
+            const targetRatio = (m._genTargetRatio as string) || (m.genParams as Record<string, unknown>)?.aspectRatio as string || undefined;
             set((s) => ({
-              nodes: s.nodes.map((n) =>
-                n.id === nodeId
-                  ? { ...n, data: { ...n.data, generating: false, error: undefined, resultUrl: urls?.[0] ?? url, resultUrls: urls, resultIndex: 0 } }
-                  : n
+              nodes: s.nodes.map((node) =>
+                node.id === nodeId
+                  ? { ...node, data: { ...node.data, generating: false, error: undefined, resultUrl: urls?.[0] ?? url, resultUrls: urls, resultIndex: 0, aspectRatio: targetRatio } }
+                  : node
               ),
               dirty: true,
             }));

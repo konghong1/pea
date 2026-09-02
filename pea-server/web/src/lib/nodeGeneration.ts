@@ -11,6 +11,12 @@ import { syncBalance } from './balanceSync';
  * 这里用轮询兜底：事件若先到，会从 jobNodeMap 移除 job，本函数随即终止；否则轮询负责回填。
  * 失败态会把 error 写回节点，供节点内失败卡展示与重试。
  */
+function resolveAspectRatio(nodeId: string): string | undefined {
+  const node = useCanvas.getState().nodes.find((n) => n.id === nodeId);
+  const meta = (node?.data.meta ?? {}) as Record<string, unknown>;
+  // 优先读 _genTargetRatio（提交时写入），其次 genParams.aspectRatio
+  return (meta._genTargetRatio as string) || (meta.genParams as Record<string, unknown>)?.aspectRatio as string | undefined;
+}
 export function pollNodeJobResult(jobId: string) {
   // 2026-07-28 修正: 视频出片真实耗时 5–10 分钟 (见 orchestrator config.video_poll_max_s=900s)。
   // 旧 MAX_ATTEMPTS=120 (3s 间隔 = 6min) 比视频出片还短 -> 后端仍在轮询时前端已判"超时"重置节点,
@@ -21,9 +27,9 @@ export function pollNodeJobResult(jobId: string) {
     // 事件已处理 -> jobNodeMap 已无此 job -> 终止轮询（避免重复回填）
     if (!useCanvas.getState().jobNodeMap[jobId]) return;
     if (attempt++ >= MAX_ATTEMPTS) {
-      // 保留节点画幅比例，避免超时后节点尺寸回退到默认值
       const node_for_timeout = useCanvas.getState().nodes.find((n) => n.id === jobId);
-      useCanvas.getState().applyJobResult(jobId, { generating: false, error: '生成超时，请重试', aspectRatio: node_for_timeout?.data.aspectRatio });
+      const ratio = resolveAspectRatio(jobId) || undefined;
+      useCanvas.getState().applyJobResult(jobId, { generating: false, error: '生成超时，请重试', aspectRatio: ratio });
       useCanvas.getState().removeJob(jobId);
       toast.error('生成超时，请稍后重试');
       // 超时后服务端可能已结算或退款，拉一次权威值兜底
@@ -45,8 +51,8 @@ export function pollNodeJobResult(jobId: string) {
           resultIndex: 0,
           savedToLibrary: false,
           isFavorite: false,
-          // 保留节点画幅比例，避免生成完成后节点尺寸回退到默认值
-          aspectRatio: useCanvas.getState().nodes.find((n) => n.id === jobId)?.data.aspectRatio,
+          // 恢复用户选择的比例（生成动画期间为 4:3）
+          aspectRatio: resolveAspectRatio(jobId),
         });
         useCanvas.getState().removeJob(jobId);
         const count = urls?.length ?? 1;
@@ -65,8 +71,8 @@ export function pollNodeJobResult(jobId: string) {
           resultIndex: 0,
           savedToLibrary: false,
           isFavorite: false,
-          // 保留节点画幅比例，避免生成失败后节点尺寸回退到默认值
-          aspectRatio: useCanvas.getState().nodes.find((n) => n.id === jobId)?.data.aspectRatio,
+          // 恢复用户选择的比例（生成动画期间为 4:3）
+          aspectRatio: resolveAspectRatio(jobId),
         });
         useCanvas.getState().removeJob(jobId);
         toast.error(data?.error || '生成失败，已退款');
@@ -124,6 +130,8 @@ export async function retryNodeGeneration(nodeId: string) {
     useCanvas.getState().updateNodeData(nodeId, {
       generating: true,
       error: undefined,
+      aspectRatio: '4:3',
+      meta: { ...(meta ?? {}), _genTargetRatio: (meta?.genParams as Record<string, unknown>)?.aspectRatio as string },
       resultUrl: undefined,
       resultUrls: undefined,
       resultIndex: 0,

@@ -535,8 +535,8 @@ body {
  */
 .pea-node {
   position: relative;
-  /* 宽度默认 340px；空白节点通过 inline style 注入 --pea-node-width 实现比例自适应，
-     既保证横/竖屏节点按真实比例呈现，又避免内层预览框窄于外壳产生白边。
+  /* 宽度由节点比例决定：横屏(16:9,21:9)保持 340px，竖屏(9:16,3:4)缩为 191px 以保持
+     视觉面积协调。通过 PeaNode.tsx 注入的 --pea-node-width inline style 动态控制。
      !important 保留，防止 audio/video 等 UA 默认宽度反向撑大/撑小节点。 */
   width: var(--pea-node-width, 340px) !important;
   font-size: 12px;
@@ -549,7 +549,10 @@ body {
      `transform: translate3d(x, y, 0)`，CSS 过渡会强行插值这个 transform，
      导致节点明显滞后于鼠标、画布整体观感"卡顿"，用户会把这种抖动误判为
      "工具栏/缩放条在乱跑"。hover 反馈只用 box-shadow，与拖拽 transform 互不冲突。 */
-  transition: box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  /* 比例变化时的平滑过渡：横/竖屏切换时宽度和高度均有动画过渡 */
+  transition:
+    width 350ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -643,7 +646,8 @@ body {
      视觉上感觉"咔"一下生硬；退出选中才有过渡。 */
   transition:
     border-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    height 350ms cubic-bezier(0.16, 1, 0.3, 1);
   overflow: hidden; /* 图片节点需要让图片完全贴合 body-card 圆角 */
 }
 .pea-node-body-card:hover {
@@ -681,11 +685,10 @@ body {
    - 魔方模式(.is-cube-mode)同样用 box-shadow 紫环（已去掉 clip-path，不再有裁切问题）。
    - 不用 color-mix 辉光 → 视频纯黑底压暗半透明紫、各节点底色不一致导致表现不统一。 */
 /* 节点框比例（所有节点统一标准，详见 PeaNode.tsx 的 nodeSize）：
-   - 框尺寸由 PeaNode.tsx 锁定：最长边恒 340px，按 kind 默认比例
-     （image 9:16 / video·audio 16:9 / 其余 1:1）+ data.aspectRatio 覆盖；
+   - 最长边恒 340px：横屏(16:9/21:9/4:3/3:2)宽340，竖屏(9:16/3:4)高340，正方形(1:1) 340×340。
      通过 --pea-node-width 设外壳宽、inline height 设 body-card 高。
    - 无论空态/有内容，框尺寸永远锁定，媒体用 object-fit:cover 填满锁定框，
-     整张画布每个 kind 只对应 1~2 种可预期尺寸（"不同比例没标准"已修复）。
+     整张画布每个 kind 只对应 1 种可预期尺寸（"不同比例没标准"已修复）。
    - 文本：始终 1:1 正方形
    - 下方 .pea-node-has-media 的规则仅调整内边距/裁切，不再改变框尺寸 */
 .pea-node-text .pea-node-body-card {
@@ -901,13 +904,12 @@ body {
   border-color: rgba(255, 255, 255, 0.35);
   color: #fff;
 }
-/* 节点宽度统一由 PeaNode.tsx 注入的 --pea-node-width 锁定（见 nodeSize）：
-   image 9:16 → 宽 191px、video 16:9 → 宽 340px，整张画布每个 kind 只对应 1~2 种标准尺寸，
-   不再在此硬编码 340px 导致有图后框被撑乱。 */
-/* 图片节点 body-card：锁定框尺寸（由 PeaNode.tsx 的 inline bodyStyle.height +
-   --pea-node-width 决定），媒体用 object-fit:cover 填满锁定框——
+/* 节点宽度由 PeaNode.tsx 的 nodeSize 决定：
+   横屏(16:9/21:9/4:3/3:2) → 宽 340px，竖屏(9:16/3:4) → 宽 191px，正方形(1:1) → 340px。
+   这样不同比例节点在视觉上面积接近但形状明显不同，一眼可辨。 */
+/* 图片节点 body-card：锁定框尺寸（由 PeaNode.tsx 的 inline bodyStyle.height + --pea-node-width 决定），媒体用 object-fit:cover 填满锁定框——
    解决"有图后框被素材比例撑变形、不同节点比例没标准"的痛点。
-   功能条 ResultToolbar 已 portal 到 chrome 层（节点框外），不在卡片内，
+   宽度由比例决定（横屏340/竖屏191），功能条 ResultToolbar 已 portal 到 chrome 层（节点框外），不在卡片内，
    故可放心用 overflow:hidden 让圆角干净裁切媒体。 */
 .pea-node-image.pea-node-has-media .pea-node-body-card {
   padding: 0;
@@ -939,8 +941,8 @@ body {
   display: none;
 }
 /* 图片填满锁定框：cover 裁切，杜绝白边；圆角由 body-card 承担
-   image-rendering: -webkit-optimize-contrast 确保缩放/拖拽时图片保持锐利，
-   避免浏览器默认双线性滤波导致的模糊感（尤其画布 zoom ≠ 100% 时） */
+   使用 !important 确保高优先级，防止低特异性规则（.pea-node-media-preview, .pea-node-result-preview）
+   的 max-height/object-fit 属性覆盖此规则导致图片被缩小后再放大（模糊）。 */
 .pea-node-image.pea-node-has-media .pea-node-media-preview,
 .pea-node-image.pea-node-has-media .pea-node-result-image-wrap .pea-node-media-preview {
   display: block;
@@ -949,12 +951,10 @@ body {
   width: 100%;
   height: 100%;
   max-width: 100%;
-  max-height: none;
-  object-fit: cover;
+  max-height: none !important;
+  object-fit: cover !important;
   border-radius: 0;
   background: #000;
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: crisp-edges;
 }
 
 /* 有图时媒体卡片与图片容器回到正常文档流：节点尺寸由图片原始比例决定（完整包裹，不裁切）。
@@ -1020,9 +1020,9 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
-  max-height: none;
+  max-height: none !important;
   min-height: 0;
-  object-fit: cover;
+  object-fit: cover !important;
   border-radius: 0;
   cursor: default;
   opacity: 1;
@@ -1096,7 +1096,6 @@ body {
   object-fit: contain;
   border-radius: 10px;
   background: #000;
-  image-rendering: -webkit-optimize-contrast;
 }
 .pea-node-audio {
   width: 100%;
@@ -7464,20 +7463,6 @@ html.dark .pea-canvas-theme-dropdown .ant-select-item-option-selected {
   background: transparent;
   border: none;
   box-shadow: none;
-}
-.pea-node-result-image-wrap .pea-node-media-preview {
-  display: block;
-  width: 100%;
-  max-height: 420px;
-  height: auto;
-  min-height: 120px;
-  object-fit: cover;
-  border-radius: 0;
-  cursor: default;
-  opacity: 1;
-  background: #000;
-  /* 图片未加载时保持占位，避免高度骤降 */
-  aspect-ratio: auto;
 }
 
 /* 结果图加载失败占位：避免浏览器默认裂图，提示可点击重新生成 */

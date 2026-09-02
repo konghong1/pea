@@ -718,17 +718,21 @@ export default function NodeChatPrompt() {
       if (!ev || ev.kind !== 'job.updated') return;
       const nodeId = useCanvas.getState().jobNodeMap[ev.jobId];
       if (!nodeId) return;
+      // 恢复目标比例：优先读 _genTargetRatio（提交时写入），否则从 genParams 或默认值回退
+      const nodeForRatio = useCanvas.getState().nodes.find((n) => n.id === nodeId);
+      const meta = (nodeForRatio?.data.meta ?? {}) as Record<string, unknown>;
+      const targetRatio = (meta._genTargetRatio as string) || (meta.genParams as Record<string, unknown>)?.aspectRatio as string || undefined;
+      const resolvedRatio = targetRatio || (genType === 'video' ? '16:9' : (useCanvas.getState().defaultAspectRatio || '9:16'));
       if (ev.status === 'done') {
         const url = ev.resultUrl ?? undefined;
-        // 优先使用多图数组，兼容单图
         const urls = ev.resultUrls ?? (url ? [url] : undefined);
         useCanvas.getState().applyJobResult(ev.jobId, {
           generating: false,
           resultUrl: urls?.[0] ?? url,
           resultUrls: urls,
           resultIndex: 0,
-          // 保留节点画幅比例，避免生成完成后节点尺寸回退到默认值
-          aspectRatio: useCanvas.getState().nodes.find((n) => n.id === nodeId)?.data.aspectRatio,
+          // 恢复用户选择的比例，节点框从 4:3 动画过渡到目标比例
+          aspectRatio: resolvedRatio,
         });
         useCanvas.getState().removeJob(ev.jobId);
         const count = urls?.length ?? 1;
@@ -737,14 +741,12 @@ export default function NodeChatPrompt() {
         useCanvas.getState().applyJobResult(ev.jobId, {
           generating: false,
           error: ev.error || '生成失败',
-          // 失败时清理旧结果，避免旧 resultUrl 导致 broken image 覆盖失败卡
           resultUrl: undefined,
           resultUrls: undefined,
           resultIndex: 0,
           savedToLibrary: false,
           isFavorite: false,
-          // 保留节点画幅比例，避免生成失败后节点尺寸回退到默认值
-          aspectRatio: useCanvas.getState().nodes.find((n) => n.id === nodeId)?.data.aspectRatio,
+          aspectRatio: resolvedRatio,
         });
         useCanvas.getState().removeJob(ev.jobId);
         toast.error(ev.error || '生成失败，已退款');
@@ -1072,20 +1074,18 @@ export default function NodeChatPrompt() {
   }, [models]);
 
   // 比例/分辨率变更时立即持久化到节点 meta（修复 #26：重新选中节点不回退默认值）
+  // 注意：不立即更新 data.aspectRatio —— 节点框在生成前保持原尺寸，
+  // 点击生成后才临时改为 4:3 显示动画，生成完成再恢复为所选比例。
   const persistAspect = useCallback((ar: string) => {
     setAspectRatio(ar);
     // 同步到 store：新建节点时读取此值作为默认画幅比例
     useCanvas.getState().setDefaultAspectRatio(ar);
-    // 同步到当前选中节点：① 写 data.aspectRatio 让空白节点框实时按新比例变化
-    //                      ② 写 meta.genParams 供重新选中时还原
     if (single && (genType === 'image' || genType === 'video')) {
       const meta = { ...(sel?.data.meta ?? {}) } as Record<string, unknown>;
       const gp = { ...(meta.genParams as Record<string, unknown> ?? {}) };
       gp.aspectRatio = ar;
-      update(single, { aspectRatio: ar, meta: { ...meta, genParams: gp } });
+      update(single, { meta: { ...meta, genParams: gp } });
     }
-    // 选中比例后【不】自动关闭浮层：让用户继续选分辨率/时长/音频，
-    // 浮层由再次点击按钮 / 点击空白处 / Esc 关闭（修复：选尺寸后配置未完成浮层就退出）。
   }, [single, sel?.data.meta, genType, update]);
 
   const persistResolution = useCallback((res: string) => {
@@ -1455,9 +1455,14 @@ useEffect(() => {
         idempotencyKey: `gen-${single}-${Date.now()}`,
       });
       useCanvas.getState().registerJob(res.jobId, single);
+      // 保存目标比例，供失败/取消路径恢复用
+      const targetRatio = genType === 'video' ? '16:9' : (useCanvas.getState().defaultAspectRatio || '9:16');
       update(single, {
         generating: true,
         error: undefined,
+        // 生成动画期间临时固定 4:3 比例，让加载动画统一以 4:3 框展示
+        aspectRatio: '4:3',
+        meta: { ...(sel.data.meta ?? {}), _genTargetRatio: targetRatio },
         // 新请求发起时清理旧结果，避免重试/二次生成时仍显示上次失败的图片
         resultUrl: undefined,
         resultUrls: undefined,
@@ -1474,7 +1479,10 @@ useEffect(() => {
       // 受理失败 (HTTP 4xx/5xx/网络) —— 节点不能卡在 generating=true,
       // 否则 HUD 4 角 + 中心 TechLoader 一直转. 同时写 error 给失败卡显示.
       const msg = e?.response?.data?.message || e?.message || '受理失败，请重试';
-      update(single, { generating: false, error: msg });
+      const meta = (sel?.data.meta ?? {}) as Record<string, unknown>;
+      const targetRatio = (meta._genTargetRatio as string) || (meta.genParams as Record<string, unknown>)?.aspectRatio as string || undefined;
+      const resolvedRatio = targetRatio || (genType === 'video' ? '16:9' : (useCanvas.getState().defaultAspectRatio || '9:16'));
+      update(single, { generating: false, error: msg, aspectRatio: resolvedRatio });
       toast.error(msg);
     } finally {
       setSubmitting(false);
@@ -1494,7 +1502,10 @@ useEffect(() => {
   // 该处理器刻意不依赖 submitting / canSend / genType，确保生成中按钮始终可点击、始终有效。
   const cancelGeneration = () => {
     if (!single) return;
-    update(single, { generating: false, error: undefined });
+    const meta = (sel?.data.meta ?? {}) as Record<string, unknown>;
+    const targetRatio = (meta._genTargetRatio as string) || (meta.genParams as Record<string, unknown>)?.aspectRatio as string || undefined;
+    const resolvedRatio = targetRatio || (genType === 'video' ? '16:9' : (useCanvas.getState().defaultAspectRatio || '9:16'));
+    update(single, { generating: false, error: undefined, aspectRatio: resolvedRatio });
   };
 
   const onInputChange = (html: string, plainText: string) => {

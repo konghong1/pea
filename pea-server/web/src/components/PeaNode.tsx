@@ -151,11 +151,11 @@ export default function PeaNode({ id, data }: NodeProps<PeaNodeData>) {
 
   // 节点框尺寸标准（锁定，不再随内容跳变）：
   // - 每个 kind 都有「标准比例」，data.aspectRatio 可覆盖（用户在比例选择器里改）。
-  // - 最长边恒为 LONG_EDGE（340px）：横屏时长边=宽、竖屏时长边=高，
-  //   保证同数字物理尺寸一致（9:16 的"16"=高340、16:9 的"16"=宽340）。
-  // - ⚠️ 关键改动：移除 hasMediaContent 守卫 → 无论空态/有内容，框尺寸永远由比例锁定，
-  //   媒体用 object-fit:cover 填满锁定框，杜绝"有图后框被素材比例撑变形"导致的画布比例混乱
-  //   （用户反馈"不同比例之间没有标准"）。整张画布上每个 kind 只对应 1~2 种可预期尺寸。
+  // - 横屏(w>=h)：宽度恒为 FIXED_EDGE（340px），高度按比例缩小；
+  //   竖屏(w<h)：高度恒为 FIXED_EDGE（340px），宽度按比例缩小；
+  //   正方形：340×340。
+  // - 这样不同比例节点视觉面积接近（~68k px²），但形状明显不同，一眼可辨。
+  // - 无论空态/有内容，框尺寸永远锁定，媒体用 object-fit:cover 填满锁定框。
   const nodeSize = useMemo(() => getNodeSize(data.aspectRatio, kind), [kind, data.aspectRatio]);
 
   const outerStyle = { '--pea-node-width': `${nodeSize.width}px` } as React.CSSProperties;
@@ -1131,11 +1131,11 @@ function ResultMediaView({
         ) : (
           // 裁切时保留原图占位（visibility:hidden）以维持节点高度，裁切浮层叠在其上；
           // 视觉上只有裁切浮层的图片，不会出现"多张图"感，也不会因高度塌陷导致裁切框尺寸错乱
+          // 注意：移除 loading="lazy" 避免图片延迟加载导致的模糊问题（点击节点才变清晰）
           <img
             src={currentUrl}
             alt={data.prompt || '生成结果'}
             className="pea-node-media-preview pea-node-result-preview"
-            loading="lazy"
             draggable={false}
             onError={() => handleMediaError(currentUrl)}
             style={cropOpen ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}

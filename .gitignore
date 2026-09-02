@@ -120,3 +120,7 @@ verify/cursors*.txt
 /canvas_*.json
 # 说明：一次性生成/调试脚本请放 verify/（验证脚本）或 .workbuddy/artifacts/（临时产物），
 #      不要留在仓库根目录。
+
+# Agent 临时产物
+*.bak
+*_edit.*
