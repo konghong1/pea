@@ -745,10 +745,14 @@ function ResultMediaView({
   }, [urls[index]]);
 
   // 生成参数徽章：在结果生成后才展示比例/画质
+  // 读取策略：优先 genParams（image 节点写入位置），其次 meta.resolution（video 节点写入位置），
+  // 两者取第一个有值的字段，避免视频节点显示 undefined。
   const _gp = (data.meta?.genParams ?? {}) as Record<string, unknown>;
-  const _hasGenParams = Boolean(data.resultUrl || data.resultUrls?.length) && (_gp.aspectRatio || _gp.resolution);
+  const _directMeta = (data.meta ?? {}) as Record<string, unknown>;
+  const _resFromMeta = String(_directMeta.resolution ?? _gp.resolution);
+  const _hasGenParams = Boolean(data.resultUrl || data.resultUrls?.length) && (_gp.aspectRatio || _resFromMeta && _resFromMeta !== 'undefined');
   const _displayRatio = _hasGenParams ? (String(_gp.aspectRatio) || undefined) : undefined;
-  const _displayResolution = _hasGenParams ? (String(_gp.resolution) || undefined) : undefined;
+  const _displayResolution = _hasGenParams ? (_resFromMeta && _resFromMeta !== 'undefined' ? _resFromMeta : undefined) : undefined;
   const objectKeyForImport = useMemo(() => extractObjectKey(data, currentUrl), [data, currentUrl]);
   const defaultAssetName = useMemo(() => {
     const fileName = (data.meta?.fileName as string) || data.label || '未命名';

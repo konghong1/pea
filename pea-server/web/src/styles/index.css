@@ -1096,6 +1096,9 @@ body {
   object-fit: contain;
   border-radius: 10px;
   background: #000;
+  /* 防止画布缩放时浏览器对媒体做双线性插值导致模糊：
+     crisp-edges 在缩放时保持硬像素边界，避免亚像素模糊。 */
+  image-rendering: crisp-edges;
 }
 .pea-node-audio {
   width: 100%;
@@ -1631,6 +1634,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
   object-fit: contain;
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.3);
+  /* 防止画布缩放时媒体模糊。 */
+  image-rendering: crisp-edges;
 }
 
 /* text 节点可编辑正文：占位"双击开始编辑…" */
@@ -3539,17 +3544,17 @@ html:not(.dark) .pea-node-prompt-echo-params {
 }
 
 /* ===== 画布点阵背景 (pea-canvas-v12 .canvas-viewport) =====
-   点的 fill 由 ReactFlow <Background color="var(--pea-edge-idle)" /> 控制（surface-aware：
-   cinematic=cool-slate 半透、figma=深墨半透）。这里只兜底默认色，避免被旧硬编码白色 fill 覆盖。 */
-.react-flow__background {
-  background-color: var(--pea-bg-deep);
-}
-.react-flow__background-pattern.dots {
-  fill: var(--pea-edge-idle);
-}
+   正常缩放：ReactFlow 内置 Background（透明，不显示）
+   最大缩放：自定义 canvas（88px 间距，紫色系，更明显） */
+/* 背景色只设在 react-flow 容器层，不在 pane 或 background SVG 上设，避免盖住点阵 */
 .react-flow__container { background-color: var(--pea-bg-deep); }
 .react-flow { background: var(--pea-bg-deep); }
-.react-flow__pane { background: var(--pea-bg-deep); }
+/* pane 自身不设背景：Background SVG 在 pane 内部渲染，pane 实心背景会盖住 SVG */
+.react-flow__pane { background: transparent; }
+/* background SVG 也不设背景：由 react-flow__container 提供底色 */
+.react-flow__background { background-color: transparent; }
+/* 隐藏小点阵（正常缩放时不显示） */
+.react-flow__background { display: none !important; }
 
 /* 右键拖拽平移画布时的抓取光标（与左键框选的 crosshair 区分） */
 .pea-canvas-flow.pea-panning,
@@ -3601,6 +3606,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
 /* 确保节点始终在手柄和连接线之上 */
 .react-flow__node {
   z-index: 10;
+  /* 强制 GPU 加速，确保子像素渲染精确，避免非选中节点模糊 */
+  transform: translateZ(0);
 }
 /* 选中节点层级适度提升：足够高于普通节点/边，但不过高，避免遮挡多选选择框
    （需求：单机/框选时选择框要完整展示）。 */
@@ -6961,7 +6968,7 @@ html:not(.dark) .text-node-toolbar {
   height: 100%;
   background: var(--pea-bg-deep);
   color: var(--pea-text-primary);
-  overflow: hidden;
+  overflow: visible;
 }
 
 /* 裁切模式锁定：禁用画布所有交互（缩放/平移/拖拽/框选） */
@@ -6982,6 +6989,13 @@ html:not(.dark) .text-node-toolbar {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+/* 连线预览 SVG（react-flow__connectionline）有实心背景色 + z=1001 全屏覆盖，
+   导致连线时所有节点被"同色遮挡"消失。根治：去背景 + 降层级到节点之下。 */
+.react-flow__connectionline {
+  background: transparent !important;
+  z-index: 5 !important;
 }
 
 /* ---- 画布左上角标题块（pea logo + 标题 + 上次修改） ---- */

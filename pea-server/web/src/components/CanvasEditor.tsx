@@ -1986,7 +1986,7 @@ function Flow() {
         />
       )}
 
-      <div
+        <div
         ref={flowRef}
         className={`pea-canvas-flow${selecting ? ' pea-selecting' : ''}${isMultiSelect ? ' pea-multi-select' : ''}`}
         onPointerDown={onFlowPointerDown}
@@ -2194,7 +2194,7 @@ function Flow() {
               variant={BackgroundVariant.Dots}
               gap={22}
               size={1.2}
-              color="var(--pea-edge-idle)"
+              color="transparent"
             />
           )}
           {showMinimap && (

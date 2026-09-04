@@ -733,6 +733,8 @@ export default function NodeChatPrompt() {
           resultIndex: 0,
           // 恢复用户选择的比例，节点框从 4:3 动画过渡到目标比例
           aspectRatio: resolvedRatio,
+          // 同步回写分辨率，确保 ResultMediaView 的画质徽章能正确读取（兼容旧数据）
+          meta: { ...((nodeForRatio?.data.meta ?? {}) as Record<string, unknown>), resolution },
         });
         useCanvas.getState().removeJob(ev.jobId);
         const count = urls?.length ?? 1;

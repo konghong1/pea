@@ -124,3 +124,7 @@ verify/cursors*.txt
 # Agent 临时产物
 *.bak
 *_edit.*
+
+# Agent/开发者临时截图（根目录）
+canvas-*.png
+before-fix.png
