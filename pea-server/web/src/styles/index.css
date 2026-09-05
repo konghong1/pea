@@ -553,6 +553,8 @@ body {
   transition:
     width 350ms cubic-bezier(0.16, 1, 0.3, 1),
     box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  /* GPU 合成：确保节点内所有子元素（包括图片）在任何缩放级别下都清晰渲染 */
+  transform: translateZ(0);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -646,9 +648,10 @@ body {
      视觉上感觉"咔"一下生硬；退出选中才有过渡。 */
   transition:
     border-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
-    box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1),
-    height 350ms cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow 200ms cubic-bezier(0.16, 1, 0.3, 1);
   overflow: hidden; /* 图片节点需要让图片完全贴合 body-card 圆角 */
+  /* GPU 合成：确保选中态切换时 body-card 独立合成，不触发子元素重绘模糊 */
+  transform: translateZ(0);
 }
 .pea-node-body-card:hover {
   /* hover 仅做边框提亮（框级状态反馈），不动图片、不加发光/外影，
@@ -676,6 +679,8 @@ body {
   box-shadow:
     0 0 0 1px var(--pea-purple, #8b5cf6),
     var(--pea-node-shadow-selected, 0 8px 24px rgba(0, 0, 0, 0.35));
+  /* 取消高度过渡，防止选中时 box-shadow 变化触发重排导致图片模糊 */
+  transition: border-color 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* 选中指示 = 单层 1px box-shadow 紫环 + 柔和投影，不叠底边框、不叠半透明辉光。
@@ -1099,6 +1104,8 @@ body {
   /* 防止画布缩放时浏览器对媒体做双线性插值导致模糊：
      crisp-edges 在缩放时保持硬像素边界，避免亚像素模糊。 */
   image-rendering: crisp-edges;
+  /* 强制 GPU 合成层，确保图片在所有状态下都清晰渲染 */
+  transform: translateZ(0);
 }
 .pea-node-audio {
   width: 100%;
@@ -1636,6 +1643,8 @@ html:not(.dark) .pea-node-prompt-echo-params {
   background: rgba(0, 0, 0, 0.3);
   /* 防止画布缩放时媒体模糊。 */
   image-rendering: crisp-edges;
+  /* 强制 GPU 合成层，确保图片在所有状态下都清晰渲染 */
+  transform: translateZ(0);
 }
 
 /* text 节点可编辑正文：占位"双击开始编辑…" */
@@ -8615,6 +8624,8 @@ html:not(.dark) .pea-crop-custom-colon { color: var(--pea-text-secondary); }
   box-shadow:
     0 0 0 1px var(--pea-purple, #8b5cf6),
     var(--pea-node-shadow-selected, 0 8px 24px rgba(0, 0, 0, 0.35));
+  /* 取消高度过渡，防止选中时触发重排导致图片模糊 */
+  transition: border-color 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* 浅色主题：stage 同样保持透明无背景，不画额外色块 */
